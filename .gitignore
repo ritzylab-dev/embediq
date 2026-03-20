@@ -1,0 +1,52 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.make
+*.cmake
+!CMakeLists.txt
+
+# Generated source files (generated/ dir itself is tracked via .gitkeep)
+generated/*.h
+generated/*.c
+
+# Compiled object files and libraries
+*.o
+*.a
+*.so
+*.dylib
+*.elf
+*.bin
+*.hex
+*.map
+
+# Test/coverage artifacts
+*.gcov
+*.gcda
+*.gcno
+Testing/
+CTestTestfile.cmake
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Editor and OS artifacts
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clangd/
+compile_commands.json
