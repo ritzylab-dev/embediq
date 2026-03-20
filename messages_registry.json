@@ -1,0 +1,82 @@
+{
+  "_comment": "EmbedIQ Global Message ID Registry",
+  "_rules": [
+    "Message IDs are never reused. Retired IDs are tombstoned, not recycled.",
+    "Community FBs must reserve a range here before publishing.",
+    "A PR reserving a community range requires: name, range, owner, contact.",
+    "CI lint verifies no two messages.iq files in the repo define the same ID.",
+    "Ranges are first-come, first-served within the community namespace."
+  ],
+
+  "namespaces": {
+    "core": {
+      "range": [0, 1023],
+      "range_hex": ["0x0000", "0x03FF"],
+      "owner": "embediq/embediq",
+      "description": "Framework internals: lifecycle, fault, Observatory, watchdog, boot phases. Never use in application or community FBs."
+    },
+    "official": {
+      "range": [1024, 5119],
+      "range_hex": ["0x0400", "0x13FF"],
+      "owner": "embediq/embediq",
+      "description": "Official EmbedIQ component FBs. Assigned by embediq/embediq repository maintainers."
+    },
+    "community": {
+      "range": [5120, 65535],
+      "range_hex": ["0x1400", "0xFFFF"],
+      "description": "Community and third-party FBs. Reserve a range here before publishing."
+    }
+  },
+
+  "core_allocations": {
+    "system_lifecycle":   { "range": [0, 49],    "description": "FB lifecycle: init, start, stop, fault, boot phase events" },
+    "bus_control":        { "range": [50, 99],   "description": "Bus control: subscribe, unsubscribe, registry events" },
+    "observatory":        { "range": [100, 149], "description": "Observatory internal events: session start/stop, level change" },
+    "fault":              { "range": [150, 199], "description": "Fault and error codes: FAULT_*, ERROR_*" },
+    "boot":               { "range": [200, 249], "description": "Boot phase events: phase_start, phase_complete, phase_fault" },
+    "watchdog_core":      { "range": [250, 299], "description": "Watchdog internal messages: kick, miss_detected, reset_reason" },
+    "reserved_core":      { "range": [300, 1023], "description": "Reserved for future core system use" }
+  },
+
+  "official_allocations": {
+    "fb_uart":            { "range": [1024, 1099], "description": "UART platform FB: frame_rx, tx_request, overflow_event" },
+    "fb_nvm":             { "range": [1100, 1149], "description": "NVM platform FB: get, set, delete, schema_migration" },
+    "fb_watchdog":        { "range": [1150, 1199], "description": "Watchdog FB: register, checkin, unregister, reset_reason" },
+    "fb_timer":           { "range": [1200, 1249], "description": "Timer FB: tick_1ms, tick_10ms, tick_100ms, tick_1sec" },
+    "fb_gpio":            { "range": [1250, 1299], "description": "GPIO platform FB: pin_event, pin_set_request" },
+    "fb_i2c":             { "range": [1300, 1349], "description": "I2C platform FB: transfer_request, transfer_complete, error" },
+    "fb_spi":             { "range": [1350, 1399], "description": "SPI platform FB: transfer_request, transfer_complete, error" },
+    "fb_cloud_mqtt":      { "range": [1400, 1499], "description": "MQTT cloud FB: publish, subscribe, connect, disconnect, error" },
+    "fb_ota":             { "range": [1500, 1599], "description": "OTA FB: download_start, chunk, complete, verify, rollback" },
+    "fb_telemetry":       { "range": [1600, 1649], "description": "Telemetry FB: batch_ready, publish_request, flush" },
+    "fb_provisioning":    { "range": [1650, 1699], "description": "Provisioning FB: identity_ready, config_received, factory_reset" },
+    "fb_bridge":          { "range": [1700, 1749], "description": "Bridge FB: external_fb_connect, external_fb_message, disconnect" },
+    "fb_logger":          { "range": [1750, 1799], "description": "Logger FB: log_entry, log_flush, level_change" },
+    "reserved_official":  { "range": [1800, 5119], "description": "Reserved for future official EmbedIQ components" }
+  },
+
+  "community_allocations": {
+    "_instructions": "Add your entry here in a PR. Format: name, range (within 5120–65535), owner (GitHub URL), contact (email or GitHub handle).",
+    "_example": {
+      "fb_modbus_rtu_example": {
+        "range": [5120, 5179],
+        "owner": "github.com/example/fb_modbus_rtu",
+        "contact": "maintainer@example.com",
+        "description": "Modbus RTU over fb_uart. Reads/writes coils and registers.",
+        "license": "Apache-2.0"
+      }
+    }
+  },
+
+  "tombstoned": {
+    "_description": "Retired message IDs. These are never recycled. If you encounter these IDs in old firmware, they are no longer valid.",
+    "_entries": []
+  },
+
+  "_meta": {
+    "version": "1.0.0",
+    "created": "2026-03",
+    "maintained_by": "embediq/embediq",
+    "schema_url": "github.com/embediq/embediq/blob/main/messages_registry.json"
+  }
+}
