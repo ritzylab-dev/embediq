@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (host platform)
+        run: |
+          cmake -B build -DEMBEDIQ_PLATFORM=host
+          cmake --build build
+
+      - name: Validate — no hardcoded sizing constants (Invariant I-08)
+        run: python3 tools/validator.py
+
+      - name: Compat — v1 API surface (Invariant I-14, only if file exists)
+        run: |
+          if [ -f tests/compat/fb_v1_compat.c ]; then
+            gcc -I core/include -std=c11 -Wall -Werror \
+              -c tests/compat/fb_v1_compat.c
+          fi
