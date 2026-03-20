@@ -14,6 +14,9 @@ Exit 1  → violations found; file:line details printed to stderr.
 
 Usage:
     python3 tools/validator.py [--root <repo_root>]
+
+@author  Ritesh Anand
+@company embediq.com | ritzylab.com
 """
 
 import argparse
