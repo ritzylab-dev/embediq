@@ -22,7 +22,7 @@ A PR that breaks any invariant will not merge. No exceptions.
 | I-08 | All sizing parameters in `embediq_config.h` | `validator.py` fails build if hardcoded |
 | I-09 | Native bus compiles without bridge code when flag undefined | CI build without bridge flag |
 | I-10 | Sub-fn registrations only inside FB `init_fn` | Code review + static analysis |
-| I-11 | `osal_signal` non-NULL only in Platform FB sub-functions | Code review: only in `bsp/` + `shell2/` |
+| I-11 | `osal_signal` non-NULL only in Platform FB sub-functions | Code review: only in `platform/` |
 | I-12 | Developer First Hour test passes before Phase 1 launch | Manual gate — 3 naive engineer sessions |
 | I-13 | `sequence` is canonical event ordering — never use `timestamp_us` for ordering or gap detection | Code review + static analysis on Observatory consumers |
 | I-14 | Core header v1 API surface unchanged after v1 release — CI v1 compatibility shim enforces no breaking changes | `tests/compat/fb_v1_compat.c` compile on every PR |
@@ -201,7 +201,7 @@ typedef struct EmbedIQ_Task_s EmbedIQ_Task_t;
 
 ```c
 // ✓ CORRECT — ISR-driven Platform FB sub-function
-.osal_signal = uart_rx_signal   // in shell2/fb_uart/ only
+.osal_signal = uart_rx_signal   // in platform/posix/fb_uart/ only
 
 // ✗ WRONG — application FB sub-function with osal_signal
 .osal_signal = some_signal      // in any application FB
@@ -341,7 +341,7 @@ as a comment on their own PR.
 
 ## 7. Promotion Checklist (contrib/ → main)
 
-For a contribution in `contrib/` to be promoted to `bsp/` or `shell2/`:
+For a contribution in `contrib/` to be promoted to `platform/`:
 
 ```
 [ ] CI passes on host (all invariant checks green)

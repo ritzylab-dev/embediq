@@ -146,36 +146,29 @@ embediq-core/
 ├── CMakeLists.txt
 ├── embediq_config.h        ← all sizing parameters live here
 │
-├── core/                   ← LOCKED after v0.1.0 freeze
-│   ├── LAYER.md
-│   └── include/            ← 13 header contracts
+├── core/                   ← LOCKED after v1.0 freeze
+│   ├── include/            ← 13 header contracts (never change)
+│   └── src/                ← engine implementation
+│       ├── bus/
+│       ├── registry/
+│       ├── fsm/
+│       ├── dispatcher/
+│       └── observatory/
 │
-├── shell1/                 ← framework engine
-│   ├── LAYER.md
-│   ├── bus/
-│   ├── registry/
-│   ├── fsm/
-│   ├── dispatcher/
-│   └── observatory/
+├── osal/                   ← threading model only (RTOS-specific, no hardware)
+│   ├── posix/              ← macOS + Linux + WSL (any POSIX-compatible OS)
+│   └── freertos/           ← FreeRTOS bare-metal (Phase 2)
 │
-├── shell2/                 ← platform FBs
-│   ├── LAYER.md
-│   └── fb_*/
+├── platform/               ← hardware peripheral FBs + per-target implementations
+│   ├── posix/              ← fb_uart, fb_nvm, fb_timer (POSIX implementations)
+│   └── esp32/              ← fb_uart, fb_nvm, fb_timer (ESP32 — Phase 2)
 │
-├── osal/
-│   ├── freertos/
-│   ├── posix/              ← host simulation (v1)
-│   └── OSAL_GUIDE.md
-│
-├── bsp/
-│   ├── esp32/
-│   ├── host/
-│   ├── raspberrypi/
-│   └── BSP_GUIDE.md
+├── components/             ← reusable application FBs (RTOS-agnostic)
+│   └── fb_*/               ← fb_cloud_mqtt, fb_ota, fb_telemetry, fb_provisioning
 │
 ├── contrib/                ← community contributions
-│   ├── bsp/
-│   ├── fb/
+│   ├── platform/
+│   ├── components/
 │   └── CONTRIB_GUIDE.md
 │
 ├── examples/
@@ -208,22 +201,21 @@ embediq-core/
 |-------|--------|--------|-------|
 | Core | All 13 headers | NOT_STARTED | v1 spec complete in Architecture v4 |
 | Core | messages.iq v0 generator | NOT_STARTED | prereq for all Platform FBs |
-| OSAL | posix/host | NOT_STARTED | Phase 1 first target |
+| OSAL | posix (macOS + Linux + WSL) | NOT_STARTED | Phase 1 first target |
 | OSAL | freertos | NOT_STARTED | Phase 2 |
-| Shell 1 | FB Registry | NOT_STARTED | |
-| Shell 1 | Message Bus | NOT_STARTED | |
-| Shell 1 | Sub-fn Dispatcher | NOT_STARTED | |
-| Shell 1 | FSM Engine | NOT_STARTED | |
-| Shell 1 | Observatory | NOT_STARTED | |
-| Shell 1 | Test Runner | NOT_STARTED | |
-| Shell 2 | fb_timer (host) | NOT_STARTED | |
-| Shell 2 | fb_uart (host) | NOT_STARTED | |
-| Shell 2 | fb_gpio (host) | NOT_STARTED | |
-| Shell 2 | fb_watchdog | NOT_STARTED | |
-| Shell 2 | fb_logger | NOT_STARTED | |
-| BSP | host/Linux | NOT_STARTED | |
-| BSP | esp32 | NOT_STARTED | Phase 2 |
-| BSP | raspberrypi | NOT_STARTED | Phase 2 |
+| Core / Engine | FB Registry | NOT_STARTED | |
+| Core / Engine | Message Bus | NOT_STARTED | |
+| Core / Engine | Sub-fn Dispatcher | NOT_STARTED | |
+| Core / Engine | FSM Engine | NOT_STARTED | |
+| Core / Engine | Observatory | NOT_STARTED | |
+| Core / Engine | Test Runner | NOT_STARTED | |
+| Platform | fb_timer (posix) | NOT_STARTED | |
+| Platform | fb_uart (posix) | NOT_STARTED | |
+| Platform | fb_gpio (posix) | NOT_STARTED | |
+| Platform | fb_watchdog | NOT_STARTED | |
+| Platform | fb_logger | NOT_STARTED | |
+| Platform | esp32 | NOT_STARTED | Phase 2 |
+| Platform | raspberrypi | NOT_STARTED | Phase 2 |
 | Examples | thermostat | NOT_STARTED | freeze-gate demo |
 | Examples | industrial_gateway | NOT_STARTED | freeze-gate demo |
 
@@ -247,7 +239,7 @@ REGISTRY:    Runtime FB discovery. v1 = static registry only.
 ROUTING:     Sub-fn consume/stop propagation. v1 = fan-out to all matching sub-fns.
 ROUTING:     Dynamic subscription changes at runtime. v1 = set at init only.
 OSAL:        Zephyr OSAL. v1 = FreeRTOS + POSIX/host only.
-BSP:         STM32, nRF52, bare-metal Cortex-M0. v1 = Pi/Linux (primary) + FreeRTOS host mock only.
+BSP:         STM32, nRF52, bare-metal Cortex-M0. v1 = posix (primary) + FreeRTOS host mock only.
 PLATFORM FB: fb_i2c, fb_spi, fb_usb. v1 = fb_uart, fb_timer, fb_gpio only.
 TIMESTAMP:   64-bit timestamps on MCU. v1 = uint32_t microseconds, modulo 2³².
 ```
@@ -302,10 +294,10 @@ the Core header is correct. Update MODULE.md to match.
 | Module-specific contract, tests, dependencies | `{layer}/{module}/MODULE.md` |
 | Complete header contracts with examples | `core/include/*.h` |
 | Style reference for application FBs | `examples/thermostat/` |
-| Style reference for Platform FBs | `shell2/fb_uart/` |
+| Style reference for Platform FBs | `platform/posix/fb_uart/` |
 | How to add a new OSAL | `osal/OSAL_GUIDE.md` |
-| How to add a new BSP | `bsp/BSP_GUIDE.md` |
-| How to contribute a new FB or BSP | `contrib/CONTRIB_GUIDE.md` |
+| How to add a new Platform target | `platform/PLATFORM_GUIDE.md` |
+| How to contribute a new FB | `contrib/CONTRIB_GUIDE.md` |
 | Run invariant checks locally | `tools/check_invariants.sh` |
 
 ---

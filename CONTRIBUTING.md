@@ -19,7 +19,7 @@ Welcome. Contributions are what make EmbedIQ better for everyone.
 | Contribution type | Where it goes | Notes |
 |-------------------|---------------|-------|
 | Bug fixes | Anywhere | Always welcome. Small and focused. |
-| New Platform FBs | `shell2/platform/` | Must follow the five-layer pattern below |
+| New Platform FBs | `platform/posix/` | Must follow the five-layer pattern below |
 | New Component FBs | `components/` | Must have full host test coverage |
 | OSAL implementations | `osal/` | For new RTOS targets (Zephyr, bare-metal, RISC-V) |
 | BSP implementations | `platform/bsp/` | For new hardware targets |
@@ -92,7 +92,7 @@ AI-assisted contributions are welcome and expected. The framework is designed to
 EmbedIQ has a clear public/private boundary. Contributions must respect it.
 
 **In scope for community contributions:**
-- Everything in `core/`, `osal/`, `shell2/`, `components/`, `examples/`, `tools/`, `docs/`
+- Everything in `core/`, `osal/`, `platform/`, `components/`, `examples/`, `tools/`, `docs/`
 
 **Not in scope for community contributions:**
 - EmbedIQ Studio codebase (commercial product, closed source)
