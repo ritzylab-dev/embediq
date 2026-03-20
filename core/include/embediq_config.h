@@ -5,6 +5,9 @@
  * No numeric literals for these values may appear anywhere else in the
  * codebase; tools/validator.py enforces this at build time (Invariant I-08).
  *
+ * @author  Ritesh Anand
+ * @company embediq.com | ritzylab.com
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
