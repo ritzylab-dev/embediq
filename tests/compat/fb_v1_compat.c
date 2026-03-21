@@ -6,7 +6,8 @@
  * has not broken. MUST NOT be included in any production binary.
  *
  * CI command:
- *   gcc -I core/include -std=c11 -Wall -Werror -c tests/compat/fb_v1_compat.c
+ *   gcc -I core/include -I generated -std=c11 -Wall -Werror \
+ *       -DEMBEDIQ_MSG_MAX_PAYLOAD=64 -c tests/compat/fb_v1_compat.c
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -21,6 +22,7 @@
 #include "embediq_msg.h"
 #include "embediq_bus.h"
 #include "embediq_obs.h"
+#include "embediq_msg_catalog.h"
 
 /* ---------------------------------------------------------------------------
  * FB callbacks — referenced by my_fb_config initialiser
@@ -170,6 +172,12 @@ int main(void)
     msg.msg_id   = 0x0401u;
     msg.priority = (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL;
     (void)msg;
+
+    /* --- embediq_msg_catalog.h: generated message IDs and payload types --- */
+    uint16_t tick_id = MSG_TIMER_TICK;
+    MSG_TIMER_TICK_Payload_t tick_payload = { .tick_count = 0u };
+    (void)tick_id;
+    (void)tick_payload;
 
     /* --- embediq_obs.h: event record, event type macros, transport enum --- */
     EmbedIQ_Event_t evt = {0};

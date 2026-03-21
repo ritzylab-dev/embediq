@@ -14,6 +14,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Generate message catalog (messages.iq → embediq_msg_catalog.h)
+        run: python3 tools/messages_iq/generate.py messages/core.iq --out generated/
+
       - name: Build (host platform)
         run: |
           cmake -B build -DEMBEDIQ_PLATFORM=host
@@ -25,6 +28,7 @@ jobs:
       - name: Compat — v1 API surface (Invariant I-14, only if file exists)
         run: |
           if [ -f tests/compat/fb_v1_compat.c ]; then
-            gcc -I core/include -std=c11 -Wall -Werror \
+            gcc -I core/include -I generated -std=c11 -Wall -Werror \
+              -DEMBEDIQ_MSG_MAX_PAYLOAD=64 \
               -c tests/compat/fb_v1_compat.c
           fi
