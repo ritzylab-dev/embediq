@@ -5,9 +5,12 @@
  * seven Core headers. Compiled on every CI run to verify the v1 API surface
  * has not broken. MUST NOT be included in any production binary.
  *
- * CI command:
- *   gcc -I core/include -I generated -std=c11 -Wall -Werror \
- *       -DEMBEDIQ_MSG_MAX_PAYLOAD=64 -c tests/compat/fb_v1_compat.c
+ * CI commands:
+ *   Step 3 (core headers only):
+ *     gcc -I core/include -std=c11 -Wall -Werror tests/compat/fb_v1_compat.c -o /dev/null
+ *   Step 5 (core + generated catalog):
+ *     gcc -I core/include -I generated -std=c11 -Wall -Werror \
+ *         -DEMBEDIQ_MSG_MAX_PAYLOAD=64 tests/compat/fb_v1_compat.c -o /dev/null
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -22,7 +25,12 @@
 #include "embediq_msg.h"
 #include "embediq_bus.h"
 #include "embediq_obs.h"
+
+/* Generated catalog — present only when -I generated/ is on the compile line. */
+#if __has_include("embediq_msg_catalog.h")
 #include "embediq_msg_catalog.h"
+#define EMBEDIQ_COMPAT_HAS_CATALOG 1
+#endif
 
 /* ---------------------------------------------------------------------------
  * FB callbacks — referenced by my_fb_config initialiser
@@ -174,10 +182,12 @@ int main(void)
     (void)msg;
 
     /* --- embediq_msg_catalog.h: generated message IDs and payload types --- */
+#ifdef EMBEDIQ_COMPAT_HAS_CATALOG
     uint16_t tick_id = MSG_TIMER_TICK;
     MSG_TIMER_TICK_Payload_t tick_payload = { .tick_count = 0u };
     (void)tick_id;
     (void)tick_payload;
+#endif
 
     /* --- embediq_obs.h: event record, event type macros, transport enum --- */
     EmbedIQ_Event_t evt = {0};
