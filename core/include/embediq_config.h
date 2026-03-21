@@ -80,10 +80,12 @@ extern "C" {
  *  2 = verbose — debug builds only.
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
-#   define EMBEDIQ_OBS_LEVEL            1
-#else
-#   define EMBEDIQ_OBS_LEVEL            0
+#ifndef EMBEDIQ_OBS_LEVEL
+#   ifdef EMBEDIQ_PLATFORM_HOST
+#       define EMBEDIQ_OBS_LEVEL        1
+#   else
+#       define EMBEDIQ_OBS_LEVEL        0
+#   endif
 #endif
 
 #ifdef __cplusplus
