@@ -1,0 +1,55 @@
+// messages/core.iq — EmbedIQ Core system messages
+//
+// Schema version 1. Namespace: com.embediq.core
+// Message IDs in the core namespace: 0x0000 – 0x03FF (framework internal).
+//
+// Rules:
+//   - Message IDs are never reused. A retired ID is tombstoned here.
+//   - Fields are append-only. Never remove or reorder an existing field.
+//   - Increment schema_id in any EmbedIQ_Msg_t that carries this message
+//     when any field is added.
+//
+// @author  Ritesh Anand
+// @company embediq.com | ritzylab.com
+//
+// SPDX-License-Identifier: Apache-2.0
+
+version 1
+namespace "com.embediq.core"
+
+// --- FB lifecycle -----------------------------------------------------------
+
+// Emitted by the framework whenever an FB transitions between lifecycle states.
+message MSG_FB_STATE_CHANGE id=0x0001 {
+    fb_id      : u8
+    new_state  : u8
+    prev_state : u8
+    reason     : u8
+}
+
+// Emitted when an FB calls embediq_fb_report_fault().
+message MSG_FB_FAULT id=0x0002 {
+    fb_id      : u8
+    fault_code : u32
+    _reserved  : u8
+}
+
+// --- Timer ------------------------------------------------------------------
+
+// Emitted by fb_timer on every scheduler tick.
+message MSG_TIMER_TICK id=0x0010 {
+    tick_count : u32
+}
+
+// Emitted by fb_timer every 100 ms. Application FBs subscribe to this
+// for periodic work rather than creating their own timers.
+message MSG_TIMER_100MS id=0x0011 {
+    tick_count : u32
+}
+
+// --- Boot -------------------------------------------------------------------
+
+// Emitted once per boot phase when all FBs in that phase have initialised.
+message MSG_SYSTEM_READY id=0x0020 {
+    boot_phase : u8
+}
