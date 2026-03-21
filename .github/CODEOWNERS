@@ -1,0 +1,5 @@
+# EmbedIQ CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+/core/include/   @ritzylab-dev
+/core/           @ritzylab-dev

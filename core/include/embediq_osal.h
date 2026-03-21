@@ -1,0 +1,134 @@
+/*
+ * embediq_osal.h — OS Abstraction Layer contract
+ *
+ * Core Layer contract for threading, queues, signals, mutexes, and time.
+ * All OS handles are opaque — zero RTOS or platform headers exposed here.
+ * Declarations only — zero implementation in this file.
+ *
+ * I-01: Compiles standalone with zero OSAL or BSP dependencies.
+ * R-03: C11. Fixed-width types from <stdint.h> / <stdbool.h> only.
+ *
+ * @author  Ritesh Anand
+ * @company embediq.com | ritzylab.com
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef EMBEDIQ_OSAL_H
+#define EMBEDIQ_OSAL_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Opaque OS primitive handles
+ *
+ * Callers hold pointers only. Struct definitions live in osal/<target>/.
+ * Core code must never dereference or size these types (R-sub-10).
+ * ------------------------------------------------------------------------- */
+
+/** Opaque OS task / thread handle. */
+typedef struct EmbedIQ_Task_s    EmbedIQ_Task_t;
+
+/** Opaque OS message queue handle. */
+typedef struct EmbedIQ_Queue_s   EmbedIQ_Queue_t;
+
+/** Opaque binary signal (counting semaphore / event flag).
+ *  Platform FB sub-functions only — app FBs must set osal_signal = NULL. */
+typedef struct EmbedIQ_Signal_s  EmbedIQ_Signal_t;
+
+/** Opaque mutual-exclusion lock. */
+typedef struct EmbedIQ_Mutex_s   EmbedIQ_Mutex_t;
+
+/** Opaque software timer handle. */
+typedef struct EmbedIQ_Timer_s   EmbedIQ_Timer_t;
+
+/* ---------------------------------------------------------------------------
+ * Task / thread API
+ * ------------------------------------------------------------------------- */
+
+/** Create and immediately start an OS task. Returns NULL on failure. */
+EmbedIQ_Task_t *embediq_osal_task_create(const char *name,
+                                          void (*fn)(void *), void *arg,
+                                          uint8_t priority,
+                                          uint16_t stack_bytes);
+
+/** Delete a task created by embediq_osal_task_create(). */
+void embediq_osal_task_delete(EmbedIQ_Task_t *task);
+
+/** Block the calling task for at least ms milliseconds. */
+void embediq_osal_delay_ms(uint32_t ms);
+
+/* ---------------------------------------------------------------------------
+ * Queue API — copy-by-value semantics (v1 constraint: no zero-copy)
+ * ------------------------------------------------------------------------- */
+
+/** Create a queue holding depth items of item_size bytes each. */
+EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
+
+/** Copy item into the back of the queue. Blocks up to timeout_ms. */
+bool embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
+                              uint32_t timeout_ms);
+
+/** Copy the front item out of the queue. Blocks up to timeout_ms. */
+bool embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
+                              uint32_t timeout_ms);
+
+/** Return the number of items currently in the queue. */
+uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q);
+
+/* ---------------------------------------------------------------------------
+ * Signal API — used by Platform FB sub-functions to wake on hardware events
+ *
+ * Application FBs must NOT use signals directly (R-sub-11).
+ * embediq_osal_signal_from_isr() is ISR-safe; exits in < 10 cycles.
+ * ------------------------------------------------------------------------- */
+
+/** Create a binary signal initialised to the unsignalled state. */
+EmbedIQ_Signal_t *embediq_osal_signal_create(void);
+
+/** Block until the signal is raised. */
+void embediq_osal_signal_wait(EmbedIQ_Signal_t *sig);
+
+/** Block up to ms milliseconds for the signal. Returns true if signalled. */
+bool embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t ms);
+
+/** Raise the signal from an ISR context. Must exit in < 10 cycles. */
+void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig);
+
+/* ---------------------------------------------------------------------------
+ * Mutex API
+ * ------------------------------------------------------------------------- */
+
+/** Create an unlocked mutex. */
+EmbedIQ_Mutex_t *embediq_osal_mutex_create(void);
+
+/** Lock the mutex, blocking up to timeout_ms. Returns true if acquired. */
+bool embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
+
+/** Unlock a mutex held by the calling task. */
+void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
+
+/* ---------------------------------------------------------------------------
+ * Time API
+ *
+ * timestamp_us wraps at ~71 minutes. Use sequence for ordering (I-13).
+ * These functions are INFORMATIONAL ONLY — never use for gap detection.
+ * ------------------------------------------------------------------------- */
+
+/** Monotonic microsecond clock. Wraps at 2^32 (~71 min). Informational only. */
+uint32_t embediq_osal_time_us(void);
+
+/** Monotonic millisecond clock. Wraps at 2^32 (~49 days). Informational only. */
+uint32_t embediq_osal_time_ms(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* EMBEDIQ_OSAL_H */

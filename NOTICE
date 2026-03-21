@@ -1,0 +1,52 @@
+EmbedIQ
+Copyright 2026 Ritesh Anand / Ritzy Lab (ritzylab.com)
+
+=========================================================================
+ORIGIN AND AUTHORSHIP
+=========================================================================
+
+EmbedIQ was conceived, designed, and created by Ritesh Anand
+(https://www.linkedin.com/in/riteshanand101), Founder of Ritzy Lab
+(https://ritzylab.com), Fremont, California, United States.
+
+The architecture, design decisions, Functional Block model,
+OSAL abstraction, Observatory system, and all associated
+intellectual property were originated by Ritesh Anand in 2026.
+
+This project is maintained by Ritzy Lab and the EmbedIQ
+open source community.
+
+=========================================================================
+APACHE 2.0 ATTRIBUTION REQUIREMENT
+=========================================================================
+
+This software is licensed under the Apache License, Version 2.0
+(the "License"). You may not use this file except in compliance
+with the License. You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+This NOTICE file must be preserved in all copies or substantial
+portions of the Software, as required by the Apache License 2.0,
+Section 4(d).
+
+=========================================================================
+CONTRIBUTOR LICENSE AGREEMENT
+=========================================================================
+
+All contributors to EmbedIQ have signed the Contributor License
+Agreement (CLA), which grants Ritzy Lab the right to include
+contributions in commercial products (EmbedIQ Studio, EmbedIQ Cloud)
+while preserving the contributor's rights to their own code.
+
+The Apache 2.0 license on the core framework is permanent and
+irrevocable. Contributors do not transfer copyright — they grant
+a license.
+
+=========================================================================
+CONTACT
+=========================================================================
+
+Ritesh Anand
+ritzylab.com
+embediq.com
