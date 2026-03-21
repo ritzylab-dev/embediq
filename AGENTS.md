@@ -194,13 +194,13 @@ embediq-core/
 
 ## 5. Current Build Status
 
-> **Last updated:** project inception — all modules NOT_STARTED
+> **Last updated:** Phase 0 complete (March 2026)
 > This table is updated at milestone boundaries only.
 
 | Layer | Module | Status | Notes |
 |-------|--------|--------|-------|
-| Core | All 13 headers | NOT_STARTED | v1 spec complete in Architecture v4 |
-| Core | messages.iq v0 generator | NOT_STARTED | prereq for all Platform FBs |
+| Core | All 13 headers | IN_PROGRESS | 7 of 13 done in Phase 0. Remaining in Phase 1. |
+| Core | messages.iq v0 generator | STABLE | Python generator, zero deps, core.iq live |
 | OSAL | posix (macOS + Linux + WSL) | NOT_STARTED | Phase 1 first target |
 | OSAL | freertos | NOT_STARTED | Phase 2 |
 | Core / Engine | FB Registry | NOT_STARTED | |
