@@ -2,7 +2,7 @@
  * tests/compat/fb_v1_compat.c — v1 Core API compatibility shim (Invariant I-14)
  *
  * Exercises every type, macro, enum value, and function declaration in the
- * three Core headers. Compiled on every CI run to verify the v1 API surface
+ * seven Core headers. Compiled on every CI run to verify the v1 API surface
  * has not broken. MUST NOT be included in any production binary.
  *
  * CI command:
@@ -17,6 +17,10 @@
 #include "embediq_fb.h"
 #include "embediq_subfn.h"
 #include "embediq_sm.h"
+#include "embediq_osal.h"
+#include "embediq_msg.h"
+#include "embediq_bus.h"
+#include "embediq_obs.h"
 
 /* ---------------------------------------------------------------------------
  * FB callbacks — referenced by my_fb_config initialiser
@@ -160,5 +164,28 @@ int main(void)
     (void)my_fb_config;
     (void)my_subfn_config;
     (void)my_sm;
+
+    /* --- embediq_msg.h: message envelope and priority enum --- */
+    EmbedIQ_Msg_t msg = {0};
+    msg.msg_id   = 0x0401u;
+    msg.priority = (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL;
+    (void)msg;
+
+    /* --- embediq_obs.h: event record, event type macros, transport enum --- */
+    EmbedIQ_Event_t evt = {0};
+    evt.event_type = EMBEDIQ_OBS_EVT_LIFECYCLE;
+    evt.sequence   = 0u;   /* sequence is canonical ordering (I-13) */
+    (void)evt;
+
+    EmbedIQ_Obs_Transport_t tr = EMBEDIQ_OBS_TRANSPORT_STDOUT;
+    (void)tr;
+
+    /* --- embediq_osal.h: opaque pointer types reachable via headers --- */
+    EmbedIQ_Task_t   *task  = NULL;
+    EmbedIQ_Queue_t  *queue = NULL;
+    EmbedIQ_Mutex_t  *mutex = NULL;
+    EmbedIQ_Timer_t  *timer = NULL;
+    (void)task; (void)queue; (void)mutex; (void)timer;
+
     return 0;
 }
