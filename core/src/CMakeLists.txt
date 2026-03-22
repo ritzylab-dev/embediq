@@ -8,6 +8,7 @@ add_library(embediq_fb_engine STATIC
     registry/fb_engine.c
     bus/message_bus.c
     fsm/fsm_engine.c
+    observatory/obs.c
 )
 
 target_include_directories(embediq_fb_engine PUBLIC
