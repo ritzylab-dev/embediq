@@ -1,4 +1,8 @@
-# tests/unit/CMakeLists.txt — OSAL POSIX unit test binary
+# tests/unit/CMakeLists.txt — unit test binaries
+
+# ---------------------------------------------------------------------------
+# OSAL POSIX unit tests (P1-T1)
+# ---------------------------------------------------------------------------
 
 add_executable(test_osal_posix test_osal_posix.c)
 
@@ -15,3 +19,23 @@ target_compile_options(test_osal_posix PRIVATE
 )
 
 add_test(NAME unit_osal_posix COMMAND test_osal_posix)
+
+# ---------------------------------------------------------------------------
+# FB engine unit tests (P1-T2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_engine test_fb_engine.c)
+
+target_include_directories(test_fb_engine PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_fb_engine PRIVATE embediq_fb_engine)
+
+target_compile_options(test_fb_engine PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_engine COMMAND test_fb_engine)

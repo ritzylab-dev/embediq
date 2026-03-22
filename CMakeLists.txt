@@ -68,5 +68,6 @@ add_subdirectory(examples/thermostat)
 
 if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     add_subdirectory(osal/posix)
+    add_subdirectory(core/src)
     add_subdirectory(tests/unit)
 endif()

@@ -139,6 +139,17 @@ EmbedIQ_FB_State_t embediq_fb_get_state(EmbedIQ_FB_Handle_t fb);
 /** Resolve an FB name to its endpoint index. Test harness use only. */
 uint8_t embediq_bus_resolve_name(const char *name);
 
+/**
+ * Boot the framework: sort all registered FBs by phase (1→2→3→4), resolve
+ * depends_on order within each phase via topological sort, then call each
+ * FB's init_fn in the computed order.
+ *
+ * Must be called exactly once, after all embediq_fb_register() calls are done.
+ * Returns 0 on success. Returns -1 and emits an Observatory FAULT event if a
+ * dependency cycle or missing dependency is detected.
+ */
+int embediq_engine_boot(void);
+
 #ifdef __cplusplus
 }
 #endif
