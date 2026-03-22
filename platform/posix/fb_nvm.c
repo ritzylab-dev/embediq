@@ -58,6 +58,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>     /* getenv */
+#include <limits.h>     /* PATH_MAX */
 #include <sys/stat.h>   /* mkdir */
 
 /* ---------------------------------------------------------------------------
@@ -69,10 +70,10 @@
 #define NVM_MAX_KEYS      EMBEDIQ_MAX_ENDPOINTS         /* 64: max entries     */
 
 /*
- * Path buffer: NVM_KEY_SIZE * 3 = 192 bytes — plenty for
- * /home/<username>/.embediq/nvm_store.json (longest reasonable path ≪ 192).
+ * Path buffer: PATH_MAX (typically 4096 on Linux) guarantees the full path
+ * fits without truncation — required to silence -Werror=format-truncation.
  */
-#define NVM_PATH_BUF      (NVM_KEY_SIZE * 3u)
+#define NVM_PATH_BUF      PATH_MAX
 
 /*
  * Per-entry JSON string: key (≤63) + 2*val hex (≤128) + field names/brackets.
