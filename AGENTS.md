@@ -192,7 +192,31 @@ embediq-core/
 
 ---
 
-## 5. Current Build Status
+## 5. File Placement Rules — Where Every File Lives
+
+This table is binding. When implementing any module, use EXACTLY these paths.
+Never place .c files flat in core/src/ — they belong in their subdirectory.
+
+| Module              | File path                                     |
+|---------------------|-----------------------------------------------|
+| FB engine           | core/src/registry/fb_engine.c                 |
+| Message bus         | core/src/bus/message_bus.c                    |
+| FSM engine          | core/src/fsm/fsm_engine.c                     |
+| Dispatcher          | core/src/dispatcher/dispatcher.c              |
+| Observatory         | core/src/observatory/obs.c                    |
+| OSAL POSIX          | osal/posix/embediq_osal_posix.c               |
+| OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
+| Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
+| Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
+| Components          | components/<fb_name>/<fb_name>.c              |
+| Unit tests          | tests/unit/test_<module>.c                    |
+
+Rule: if you are about to create a .c file directly in core/src/ (not in a
+subdirectory), STOP — wrong location. Check this table first.
+
+---
+
+## 6. Current Build Status
 
 > **Last updated:** Phase 0 complete (March 2026)
 > This table is updated at milestone boundaries only.
@@ -223,7 +247,7 @@ embediq-core/
 
 ---
 
-## 6. What v1 Will NOT Build (Non-Goals)
+## 7. What v1 Will NOT Build (Non-Goals)
 
 Agents: **do not generate code for any item on this list for v1.**
 These are named future work, not omissions. If you think something is missing,
@@ -252,7 +276,7 @@ TIMESTAMP:   64-bit timestamps on MCU. v1 = uint32_t microseconds, modulo 2³².
 
 ---
 
-## 7. Truth Hierarchy — Which File Wins Conflicts
+## 8. Truth Hierarchy — Which File Wins Conflicts
 
 When you see a conflict between documents, this order decides:
 
@@ -269,7 +293,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 8. Build System & Key Decisions
+## 9. Build System & Key Decisions
 
 | Decision | Choice | Do Not Change |
 |----------|--------|---------------|
@@ -285,7 +309,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 9. Where to Go Next
+## 10. Where to Go Next
 
 | What you need | Where to find it |
 |---------------|-----------------|
@@ -302,7 +326,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 10. The Developer First Hour Test
+## 11. The Developer First Hour Test
 
 Before any Phase 1 launch, this test must pass with 3 engineers
 who have never seen EmbedIQ before:

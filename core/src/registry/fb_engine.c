@@ -378,6 +378,33 @@ int embediq_engine_boot(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Package-internal accessors — used by message_bus.c to read the registry.
+ * Not declared in any public header; message_bus.c uses extern declarations.
+ * These are required at runtime (not test-only) so no EMBEDIQ_PLATFORM_HOST guard.
+ * ------------------------------------------------------------------------- */
+
+/** Return the number of FBs currently registered. */
+uint8_t fb_engine__reg_count(void)
+{
+    return g_reg_count;
+}
+
+/** Return a pointer to the config for registry index idx, or NULL if out of range. */
+const EmbedIQ_FB_Config_t *fb_engine__reg_config(uint8_t idx)
+{
+    if (idx >= g_reg_count) return NULL;
+    return &g_registry[idx].config;
+}
+
+/** Return the endpoint index for a given FB handle, or 0xFF on NULL. */
+uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle)
+{
+    const EmbedIQ_FB_t *fb = (const EmbedIQ_FB_t *)handle;
+    if (!fb) return 0xFFu;
+    return fb->ep_idx;
+}
+
+/* ---------------------------------------------------------------------------
  * Host / test-only API
  *
  * Guarded by EMBEDIQ_PLATFORM_HOST so these symbols are absent from MCU

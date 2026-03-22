@@ -66,6 +66,15 @@ extern "C" {
 #define EMBEDIQ_OBS_RING_DEPTH          256
 
 /* ---------------------------------------------------------------------------
+ * Message bus subscription table
+ * ------------------------------------------------------------------------- */
+
+/** Maximum total subscription entries across all registered Functional Blocks.
+ *  Limits the flat (msg_id, ep_id) table built at message_bus_boot().
+ *  512 supports 64 FBs × ~8 subscriptions each — sufficient for v1. */
+#define EMBEDIQ_MAX_SUBSCRIPTIONS       512
+
+/* ---------------------------------------------------------------------------
  * Boot dependency resolution
  * ------------------------------------------------------------------------- */
 
