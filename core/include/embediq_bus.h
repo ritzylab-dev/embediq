@@ -39,6 +39,13 @@ extern "C" {
  *   LOW    full → new message dropped; observable event emitted
  * ------------------------------------------------------------------------- */
 
+/**
+ * Build the subscription routing table and create per-FB priority queues.
+ * Must be called once, after embediq_engine_boot() completes.
+ * Idempotent: safe to call multiple times, only first call has effect.
+ */
+void message_bus_boot(void);
+
 /** Publish a message from fb onto the bus. msg is copied by value. */
 void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg);
 
