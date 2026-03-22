@@ -218,30 +218,26 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ## 6. Current Build Status
 
-> **Last updated:** Phase 0 complete (March 2026)
+> **Last updated:** Phase 1 complete (March 2026)
 > This table is updated at milestone boundaries only.
 
 | Layer | Module | Status | Notes |
 |-------|--------|--------|-------|
-| Core | All 13 headers | IN_PROGRESS | 7 of 13 done in Phase 0. Remaining in Phase 1. |
-| Core | messages.iq v0 generator | STABLE | Python generator, zero deps, core.iq live |
-| OSAL | posix (macOS + Linux + WSL) | NOT_STARTED | Phase 1 first target |
+| Core | All 13 headers | STABLE | Contracts frozen. Never change. |
+| Core | messages.iq generator | STABLE | Python, zero deps. core.iq + thermostat.iq live. |
+| Core | embediq_config.h | STABLE | All sizing constants. Use named constants only. |
+| OSAL | posix (macOS + Linux + WSL) | STABLE | pthreads + POSIX. Phase 1 complete. |
 | OSAL | freertos | NOT_STARTED | Phase 2 |
-| Core / Engine | FB Registry | NOT_STARTED | |
-| Core / Engine | Message Bus | NOT_STARTED | |
-| Core / Engine | Sub-fn Dispatcher | NOT_STARTED | |
-| Core / Engine | FSM Engine | NOT_STARTED | |
-| Core / Engine | Observatory | NOT_STARTED | |
-| Core / Engine | Test Runner | NOT_STARTED | |
-| Platform | fb_timer (posix) | NOT_STARTED | |
-| Platform | fb_uart (posix) | NOT_STARTED | |
-| Platform | fb_gpio (posix) | NOT_STARTED | |
-| Platform | fb_watchdog | NOT_STARTED | |
-| Platform | fb_logger | NOT_STARTED | |
-| Platform | esp32 | NOT_STARTED | Phase 2 |
-| Platform | raspberrypi | NOT_STARTED | Phase 2 |
-| Examples | thermostat | NOT_STARTED | freeze-gate demo |
-| Examples | industrial_gateway | NOT_STARTED | freeze-gate demo |
+| Core / Engine | FB Registry + Dispatch | STABLE | embediq_engine_boot() + embediq_engine_dispatch_boot() |
+| Core / Engine | Message Bus | STABLE | 3-queue routing, overflow policy, observatory drops |
+| Core / Engine | FSM Engine | STABLE | Table-driven, guard/action, observatory events |
+| Core / Engine | Observatory | STABLE | Ring buffer, stdout transport, level 0/1/2 filtering |
+| Platform | fb_timer (posix) | STABLE | Drift-corrected, MSG_TIMER_1SEC/100MS/10MS/1MS |
+| Platform | fb_watchdog | STABLE | Health-token model, 100ms check interval |
+| Platform | fb_nvm | STABLE | Atomic JSON key-value store, ~/.embediq/ |
+| Platform | fb_cloud_mqtt | NOT_STARTED | Phase 2 |
+| Platform | fb_ota | NOT_STARTED | Phase 2 |
+| Examples | thermostat | STABLE | 5 FBs, FSM cycles, Observatory output, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 

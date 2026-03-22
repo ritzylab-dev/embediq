@@ -1,18 +1,35 @@
 PHASE_COMPLETE: Phase 1
-NEXT_SESSION: P2-T1 — Replace 1 ms polling dispatch loop with blocking OSAL semaphore
-STATUS: All Phase 1 checks green. Thermostat demo runs end-to-end. All 9 tests pass.
+NEXT_SESSION: P2-T0 — Replace polling dispatch loop with blocking OSAL semaphore
 
-## PHASE 2 MUST-DO BEFORE FREERTOS
+PHASE 1 SUMMARY:
+  All core engine modules implemented and tested on macOS/Linux.
+  Thermostat demo runs end-to-end with Observatory output.
+  ctest passes 100%. CI green.
 
-- Replace 1 ms polling in `fb_dispatch_loop` (core/src/registry/fb_engine.c) with a
-  blocking OSAL semaphore: `embediq_osal_sem_wait()` posted by `embediq_publish()` on
-  each queue write.  The current `embediq_osal_delay_ms(1u)` spin loop burns CPU and
-  is incompatible with FreeRTOS tickless idle.
+PHASE 1 WHAT WAS BUILT:
+  ✓ OSAL POSIX          — osal/posix/embediq_osal_posix.c
+  ✓ FB Engine           — core/src/registry/fb_engine.c
+  ✓ Message Bus         — core/src/bus/message_bus.c
+  ✓ FSM Engine          — core/src/fsm/fsm_engine.c
+  ✓ Observatory         — core/src/observatory/obs.c
+  ✓ Platform FBs        — platform/posix/fb_timer.c, fb_watchdog.c, fb_nvm.c
+  ✓ Thermostat demo     — examples/thermostat/
 
-- Implement `embediq_engine_dispatch_shutdown()`: signal `g_dispatch_running = false`,
-  post a dummy semaphore to unblock each dispatch thread, then join all pthreads before
-  returning.  Required for clean teardown in tests and before FreeRTOS port.
+PHASE 1 KNOWN LIMITATIONS (fix before Phase 2 ships to hardware):
+  ! fb_dispatch_loop uses 1ms polling — must be replaced with blocking OSAL semaphore
+    before FreeRTOS port. Polling is acceptable for host demo only.
+  ! embediq_engine_dispatch_boot() spawns threads but no shutdown API exists.
+    embediq_engine_dispatch_shutdown() must be added in Phase 2 for OTA support.
+  ! embediq_bus.h header comment says "call message_bus_boot() after engine_boot"
+    but it is now called inside engine_boot automatically — fix the comment.
 
-- `fb_cloud_mqtt` (MQTT 3.1.1 client FB) and `fb_ota` (OTA FSM FB) were deferred from
-  Phase 1.  Both are Phase 2 deliverables and must be implemented before the FreeRTOS
-  port begins.
+PHASE 2 MUST DO (in order):
+  1. P2-T0: Fix dispatch loop — replace 1ms polling with blocking OSAL semaphore (CRITICAL)
+  2. P2-T1: FreeRTOS OSAL — osal/freertos/embediq_osal_freertos.c
+  3. P2-T2: ESP32 platform target
+  4. P2-T3: fb_cloud_mqtt — MQTT 3.1.1 pure C
+  5. P2-T4: fb_ota — OTA FSM, dual-bank atomic write
+  6. P2-T5: Industrial gateway example
+
+DEFERRED FROM PHASE 1:
+  fb_cloud_mqtt, fb_ota — not needed for thermostat demo, deferred to Phase 2
