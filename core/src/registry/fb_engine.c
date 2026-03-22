@@ -14,8 +14,6 @@
  *                                cycle/missing-dep detection, init_fn dispatch
  *   3. embediq_fb_report_fault() — FAULT state + Observatory event + fault_fn
  *   4. embediq_subfn_register() — stored sorted by init_order (I-10 enforced)
- *   5. embediq_obs_emit()       — minimal Observatory (host: stdout + counter)
- *
  * R-02: no malloc/free. All storage is static.
  * I-10: sub-fn registration is gated by the registering flag, which is true
  *       only during the parent FB's init_fn call.
@@ -42,10 +40,6 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
-
-#ifdef EMBEDIQ_PLATFORM_HOST
-#  include <stdio.h>
-#endif
 
 /* ---------------------------------------------------------------------------
  * Private struct definitions
@@ -74,42 +68,6 @@ static bool          g_booted     = false;
 /* Computed by embediq_engine_boot(): global indices in init sequence order. */
 static uint8_t       g_boot_order[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t       g_boot_count = 0;
-
-/* ---------------------------------------------------------------------------
- * Observatory — minimal implementation
- *
- * On host: increments an event counter and prints when OBS_LEVEL >= 1.
- * On MCU:  no-op (all paths compile to zero overhead via dead-code elimination).
- * ------------------------------------------------------------------------- */
-
-static uint32_t g_obs_seq = 0;
-
-#ifdef EMBEDIQ_PLATFORM_HOST
-static uint32_t g_obs_evt_count = 0;
-#endif
-
-void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
-                      uint8_t state, uint16_t msg_id)
-{
-    /* Silence unused-parameter warnings on all build configurations. */
-    (void)event_type; (void)source; (void)target;
-    (void)state;      (void)msg_id;
-
-    g_obs_seq++;
-
-#ifdef EMBEDIQ_PLATFORM_HOST
-    g_obs_evt_count++;
-#  if EMBEDIQ_OBS_LEVEL >= 1
-    printf("[OBS] type=0x%02x src=%u tgt=%u state=%u msg=0x%04x seq=%u\n",
-           event_type, source, target, state, msg_id, g_obs_seq - 1u);
-#  endif
-#endif
-}
-
-void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport)
-{
-    (void)transport;  /* stub — transport selection not implemented in P1-T2 */
-}
 
 /* ---------------------------------------------------------------------------
  * Public: embediq_fb_register()
@@ -413,22 +371,25 @@ uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle)
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 
+/* Observatory package-internal API — implemented in observatory/obs.c */
+extern void     obs__reset(void);
+extern uint32_t obs__event_count(void);
+
 /** Reset all engine state — must be called between test cases. */
 void fb_engine__reset(void)
 {
     memset(g_registry,   0, sizeof(g_registry));
     memset(g_boot_order, 0, sizeof(g_boot_order));
-    g_reg_count     = 0;
-    g_boot_count    = 0;
-    g_booted        = false;
-    g_obs_seq       = 0;
-    g_obs_evt_count = 0;
+    g_reg_count  = 0;
+    g_boot_count = 0;
+    g_booted     = false;
+    obs__reset();
 }
 
 /** Return the total number of Observatory events emitted since last reset. */
 uint32_t fb_engine__obs_event_count(void)
 {
-    return g_obs_evt_count;
+    return obs__event_count();
 }
 
 /** Directly dispatch a message to an FB's sub-fns, bypassing the queue.

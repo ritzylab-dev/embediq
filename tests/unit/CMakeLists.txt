@@ -79,3 +79,23 @@ target_compile_options(test_fsm_engine PRIVATE
 )
 
 add_test(NAME unit_fsm_engine COMMAND test_fsm_engine)
+
+# ---------------------------------------------------------------------------
+# Observatory unit tests (P1-T5)
+# ---------------------------------------------------------------------------
+
+add_executable(test_observatory test_observatory.c)
+
+target_include_directories(test_observatory PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_observatory PRIVATE embediq_fb_engine)
+
+target_compile_options(test_observatory PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_observatory COMMAND test_observatory)

@@ -31,6 +31,7 @@
 
 extern void     fb_engine__reset(void);
 extern uint32_t fb_engine__obs_event_count(void);
+extern void     obs__set_level(uint8_t level);
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -276,6 +277,7 @@ static void test_null_guard_fn_always_matches(void)
 static void test_observatory_event_emitted_on_every_transition(void)
 {
     reset_obs();
+    obs__set_level(2u);   /* FSM_TRANS events require level 2 */
     EmbedIQ_SM_t sm = { STATE_NORMAL, s_thermo_table, "thermo" };
     TempMsg_t msg   = { 80.0f };
 
