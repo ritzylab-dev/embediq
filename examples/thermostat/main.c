@@ -54,8 +54,9 @@ int main(void)
     printf("EmbedIQ Smart Thermostat Demo — Phase 1\n");
     printf("========================================\n\n");
 
-    /* Route Observatory output to stdout (host default). */
+    /* Verbose Observatory output: show FSM transitions and all events. */
     embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_STDOUT);
+    embediq_obs_set_level(2u);
 
     /* -----------------------------------------------------------------------
      * Register FBs in boot-phase order.
@@ -75,6 +76,8 @@ int main(void)
 
     /* -----------------------------------------------------------------------
      * Boot the framework.
+     * embediq_engine_boot() also calls message_bus_boot() internally so that
+     * per-FB queues exist before the Phase-1 timer thread starts publishing.
      * Returns 0 on success; -1 if a dependency cycle or missing dep is found.
      * --------------------------------------------------------------------- */
 
@@ -84,12 +87,22 @@ int main(void)
         return 1;
     }
 
+    /* -----------------------------------------------------------------------
+     * Start per-FB dispatch threads.
+     * Creates one pthread per FB that has subscriptions (fb_temp_sensor and
+     * fb_temp_controller).  Each thread reads from its FB's priority queues
+     * and calls the matching sub-function — completing the end-to-end chain:
+     *   fb_timer (thread) → MSG_TIMER_1SEC → fb_temp_sensor (dispatch thread)
+     *     → sensor_tick → embediq_publish(MSG_TEMP_READING)
+     *     → fb_temp_controller (dispatch thread) → ctrl_run → FSM + wdg_checkin
+     * --------------------------------------------------------------------- */
+
+    embediq_engine_dispatch_boot();
+
     printf("\n[MAIN] All FBs initialised. Running demo (30 s)...\n\n");
 
     /* -----------------------------------------------------------------------
      * Let the demo run for 30 seconds.
-     * The timer thread drives the FB message loop:
-     *   every 1 s: sensor reads → controller evaluates FSM → watchdog kicks
      * Temperature reaches WARNING (> 75 °C) at ≈ 12 s,
      * CRITICAL (> 85 °C) at ≈ 14 s, back to NORMAL at ≈ 24 s.
      * --------------------------------------------------------------------- */

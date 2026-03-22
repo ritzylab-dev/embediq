@@ -105,6 +105,15 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
 /** Set the active transport for all subsequent events. */
 void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport);
 
+/**
+ * Set the Observatory verbosity level at runtime.
+ *   0 — LIFECYCLE and FAULT events only.
+ *   1 — Level 0 + MSG_TX events.
+ *   2 — All events (FSM_TRANS, MSG_RX, QUEUE_DROP, ...).
+ * No-op on MCU production builds (EMBEDIQ_OBS_LEVEL is compile-time only).
+ */
+void embediq_obs_set_level(uint8_t level);
+
 #ifdef __cplusplus
 }
 #endif

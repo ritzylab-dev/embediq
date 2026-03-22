@@ -268,6 +268,21 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
 }
 
 /* ---------------------------------------------------------------------------
+ * Public: message_bus_recv_ep()
+ *
+ * Non-blocking receive used by the per-FB dispatch loop.
+ * Returns true if a message was available; false if the queue was empty.
+ * ------------------------------------------------------------------------- */
+
+bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
+{
+    if (ep_id >= g_ep_count || priority > 2u || !out) return false;
+    EmbedIQ_Queue_t *q = g_ep[ep_id].q[priority];
+    if (!q) return false;
+    return embediq_osal_queue_recv(q, out, 0u);
+}
+
+/* ---------------------------------------------------------------------------
  * Host / test-only API
  * ------------------------------------------------------------------------- */
 

@@ -1,12 +1,15 @@
 /*
  * examples/thermostat/thermostat_msgs.h — Thermostat application message IDs
  *
- * Application-specific message IDs and payload types for the EmbedIQ smart
- * thermostat demo.  In production these would be generated from a
- * thermostat.iq schema file; for the Phase 1 gate demo they are hand-written
- * as the canonical example of application-level messaging.
+ * Thin wrapper around the generated thermostat_msg_catalog.h.
+ * MSG_TEMP_READING and MSG_TEMP_READING_Payload_t are defined there; this
+ * header re-exports them and provides the TempReading_t backward-compatible
+ * alias used throughout the thermostat FB implementation.
  *
- * ID range: 0x0420–0x042F  (thermostat application namespace, AGENTS.md §3B)
+ * Do not define message IDs or payload structs here manually; edit
+ * messages/thermostat.iq and regenerate with:
+ *   python3 tools/messages_iq/generate.py messages/thermostat.iq \
+ *       --out generated/ --output-name thermostat_msg_catalog.h
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -17,28 +20,17 @@
 #ifndef THERMOSTAT_MSGS_H
 #define THERMOSTAT_MSGS_H
 
-#include <stdint.h>
+#include "thermostat_msg_catalog.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------------------
- * MSG_TEMP_READING (0x0420)
- *
- * Published by fb_temp_sensor every 1 second (on MSG_TIMER_1SEC).
- * Consumed by fb_temp_controller to drive the thermal FSM.
- * ------------------------------------------------------------------------- */
-
-#define MSG_TEMP_READING  0x0420u
-
 /**
- * Payload for MSG_TEMP_READING.
- * NOTE: In production this struct would be generated from thermostat.iq.
+ * Backward-compatible alias.
+ * All existing code using TempReading_t continues to compile unchanged.
  */
-typedef struct {
-    float temperature_c;   /**< Current temperature in degrees Celsius. */
-} TempReading_t;
+typedef MSG_TEMP_READING_Payload_t TempReading_t;
 
 #ifdef __cplusplus
 }

@@ -20,6 +20,8 @@
 #include "embediq_fb.h"
 #include "embediq_msg.h"
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,6 +65,14 @@ uint8_t embediq_bus_resolve_name(const char *fb_name);
 /** Resolve an endpoint index to the registered FB name string.
  *  Returns NULL if the endpoint index is not registered. */
 const char *embediq_bus_resolve_id(uint8_t endpoint_id);
+
+/**
+ * Non-blocking receive from one priority queue of an endpoint.
+ * priority: 0=HIGH, 1=NORMAL, 2=LOW.
+ * Returns true and fills *out if a message was available; false if empty.
+ * Used by the per-FB dispatch loop created by embediq_engine_dispatch_boot().
+ */
+bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out);
 
 #ifdef __cplusplus
 }
