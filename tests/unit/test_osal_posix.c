@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 /*
  * tests/unit/test_osal_posix.c — Unit tests for OSAL POSIX implementation
  *
