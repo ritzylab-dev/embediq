@@ -14,8 +14,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate message catalog (messages.iq → embediq_msg_catalog.h)
-        run: python3 tools/messages_iq/generate.py messages/core.iq --out generated/
+      - name: Generate message catalogs (messages.iq → C headers)
+        run: |
+          python3 tools/messages_iq/generate.py messages/core.iq --out generated/
+          python3 tools/messages_iq/generate.py messages/thermostat.iq \
+              --out generated/ --output-name thermostat_msg_catalog.h
 
       - name: Build (host platform)
         run: |
