@@ -15,7 +15,7 @@
  *   Timing from a cold start at 20 °C:
  *     tick 12  (≈ 12 s) temp = 80 °C → controller NORMAL → WARNING
  *     tick 14  (≈ 14 s) temp = 90 °C → controller WARNING → CRITICAL
- *     tick 24  (≈ 24 s) temp = 60 °C → controller CRITICAL → NORMAL
+ *     tick 19  (≈ 19 s) temp = 65 °C → controller CRITICAL → NORMAL
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_APPLICATION (3)
  *

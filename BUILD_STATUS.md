@@ -33,9 +33,18 @@ FSM through NORMAL → WARNING → CRITICAL → NORMAL automatically.
 
 The integration test (`test_thermostat_full`) passes all 6 assertions in ~15 s.
 
-Note: Phase 1 does NOT include a framework-managed dispatch thread per FB (Phase 2
-deliverable).  Application FBs are exercised via `fb_engine__deliver_msg()` in tests
-and via the real timer in the demo.
+Phase 1 includes a framework-managed dispatch loop: `embediq_engine_dispatch_boot()`
+creates one pthread per FB that has subscriptions.  Each thread reads from its FB's
+priority queues (HIGH > NORMAL > LOW) and calls the matching sub-function — completing
+the end-to-end chain from `fb_timer` through `fb_temp_sensor` to `fb_temp_controller`.
+
+The current dispatch loop uses 1 ms polling (`embediq_osal_delay_ms(1u)`) when all
+queues are empty.  Replacing this with a blocking OSAL semaphore is a Phase 2
+prerequisite before porting to FreeRTOS.
+
+`fb_cloud_mqtt` and `fb_ota` were deferred from Phase 1 and are Phase 2 deliverables.
+
+New Phase 1 public API: `embediq_engine_dispatch_boot()` — declared in embediq_fb.h.
 
 ## Phase 0 — COMPLETE
   ✓ P0-T1: Repo scaffold, CMake, CI pipeline
@@ -56,7 +65,9 @@ and via the real timer in the demo.
             test_thermostat_full — all 6 assertions pass in 15 s real-time run)
 
 ## Phase 2 — NOT STARTED
-  Next: P2-T1 — Framework-managed dispatch thread per FB (message loop)
+  Next: P2-T1 — Replace 1 ms polling dispatch loop with blocking OSAL semaphore
+  Next: P2-T2 — embediq_engine_dispatch_shutdown() for clean task teardown
+  Next: P2-T3 — fb_cloud_mqtt (MQTT 3.1.1) and fb_ota (OTA FSM)
 
 ## Your Next Actions (Human)
   1. Merge PR to dev
