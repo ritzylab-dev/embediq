@@ -37,7 +37,7 @@ A structured, message-driven application framework that sits above your RTOS and
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  TOOLS                                                              │
-│  messages.iq generator  ·  embediq CLI  ·  EmbedIQ Studio          │
+│  messages.iq generator  ·  embediq CLI  ·  EmbedIQ Studio           │
 ├─────────────────────────────────────────────────────────────────────┤
 │  COMPONENT FBs                            (all Apache 2.0)          │
 │  fb_cloud_mqtt  ·  fb_ota  ·  fb_telemetry  ·  fb_provisioning      │
@@ -54,10 +54,10 @@ A structured, message-driven application framework that sits above your RTOS and
 │  OSAL  ──────────  EmbedIQ above · your stack below  ──────────     │
 ├─────────────────────────────────────────────────────────────────────┤
 │  RTOS / OS                                                          │
-│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr  ·  RISC-V (SHAKTI/VEGA)   │
+│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr  ·  RISC-V (SHAKTI/VEGA)    │
 ├─────────────────────────────────────────────────────────────────────┤
 │  HARDWARE                                                           │
-│  RP2040  ·  STM32  ·  Pi/Linux SBC  ·  ESP32  ·  any target        │
+│  RP2040  ·  STM32  ·  Pi/Linux SBC  ·  ESP32  ·  any target         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
