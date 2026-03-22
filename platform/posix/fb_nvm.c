@@ -76,6 +76,14 @@
 #define NVM_PATH_BUF      PATH_MAX
 
 /*
+ * Longest fixed suffix appended to a directory path: "/nvm_store.json.tmp\0"
+ * = 19 chars + NUL = 20 bytes.  Used to compute %.*s width limits so GCC can
+ * statically prove snprintf output fits in NVM_PATH_BUF (I-08 safe: 20 is not
+ * a sizing constant from embediq_config.h).
+ */
+#define NVM_SUFFIX_MAX    20
+
+/*
  * Per-entry JSON string: key (≤63) + 2*val hex (≤128) + field names/brackets.
  * NVM_KEY_SIZE * 4 = 256 chars is a conservative upper bound per entry.
  */
@@ -295,12 +303,24 @@ static void nvm_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
 
+    /*
+     * Use %.*s to give GCC a static upper bound on the variable-length
+     * prefix, preventing -Werror=format-truncation false positives.
+     *
+     *   home_max: home is truncated so that home + "/.embediq" +
+     *             "/nvm_store.json.tmp\0" fits within NVM_PATH_BUF.
+     *   dir_max:  dir is truncated so that dir + "/nvm_store.json.tmp\0"
+     *             fits within NVM_PATH_BUF.
+     */
+    int home_max = (int)(NVM_PATH_BUF - sizeof("/.embediq") - NVM_SUFFIX_MAX);
+    int dir_max  = (int)(NVM_PATH_BUF - NVM_SUFFIX_MAX);
+
     char dir[NVM_PATH_BUF];
-    snprintf(dir, NVM_PATH_BUF, "%s/.embediq", home);
+    snprintf(dir,            NVM_PATH_BUF, "%.*s/.embediq",          home_max, home);
     mkdir(dir, 0755);   /* ignore EEXIST */
 
-    snprintf(g_nvm_path,     NVM_PATH_BUF, "%s/nvm_store.json",     dir);
-    snprintf(g_nvm_tmp_path, NVM_PATH_BUF, "%s/nvm_store.json.tmp", dir);
+    snprintf(g_nvm_path,     NVM_PATH_BUF, "%.*s/nvm_store.json",     dir_max, dir);
+    snprintf(g_nvm_tmp_path, NVM_PATH_BUF, "%.*s/nvm_store.json.tmp", dir_max, dir);
 
     nvm_load();
 }
@@ -468,8 +488,10 @@ int embediq_nvm_get_schema_version(const char *key, uint16_t *schema_out)
 void nvm__set_path(const char *path)
 {
     if (!path) return;
-    snprintf(g_nvm_path,     NVM_PATH_BUF, "%s", path);
-    snprintf(g_nvm_tmp_path, NVM_PATH_BUF, "%s.tmp", path);
+    snprintf(g_nvm_path,     NVM_PATH_BUF, "%.*s",
+             (int)(NVM_PATH_BUF - 1u), path);
+    snprintf(g_nvm_tmp_path, NVM_PATH_BUF, "%.*s.tmp",
+             (int)(NVM_PATH_BUF - sizeof(".tmp")), path);
 }
 
 /**
