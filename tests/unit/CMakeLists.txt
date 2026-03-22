@@ -99,3 +99,66 @@ target_compile_options(test_observatory PRIVATE
 )
 
 add_test(NAME unit_observatory COMMAND test_observatory)
+
+# ---------------------------------------------------------------------------
+# Watchdog FB unit tests (P1-T6)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_watchdog test_fb_watchdog.c)
+
+target_include_directories(test_fb_watchdog PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/platform/posix
+)
+
+target_link_libraries(test_fb_watchdog PRIVATE embediq_platform_posix)
+
+target_compile_options(test_fb_watchdog PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_watchdog COMMAND test_fb_watchdog)
+
+# ---------------------------------------------------------------------------
+# Timer FB unit tests (P1-T6)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_timer test_fb_timer.c)
+
+target_include_directories(test_fb_timer PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/platform/posix
+)
+
+target_link_libraries(test_fb_timer PRIVATE embediq_platform_posix)
+
+target_compile_options(test_fb_timer PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_timer COMMAND test_fb_timer)
+
+# ---------------------------------------------------------------------------
+# NVM FB unit tests (P1-T6)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_nvm test_fb_nvm.c)
+
+target_include_directories(test_fb_nvm PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/platform/posix
+)
+
+target_link_libraries(test_fb_nvm PRIVATE embediq_platform_posix)
+
+target_compile_options(test_fb_nvm PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_nvm COMMAND test_fb_nvm)
