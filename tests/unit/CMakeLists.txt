@@ -59,3 +59,23 @@ target_compile_options(test_message_bus PRIVATE
 )
 
 add_test(NAME unit_message_bus COMMAND test_message_bus)
+
+# ---------------------------------------------------------------------------
+# FSM engine unit tests (P1-T4)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fsm_engine test_fsm_engine.c)
+
+target_include_directories(test_fsm_engine PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_fsm_engine PRIVATE embediq_fb_engine)
+
+target_compile_options(test_fsm_engine PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fsm_engine COMMAND test_fsm_engine)
