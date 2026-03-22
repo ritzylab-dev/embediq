@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 /*
  * osal/posix/embediq_osal_posix.c — POSIX implementation of embediq_osal.h
  *
