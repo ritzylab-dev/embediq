@@ -16,6 +16,7 @@
  */
 
 #include "embediq_obs.h"
+#include "embediq_config.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -145,7 +146,7 @@ static void test_stdout_format_contains_seq(void)
     EmbedIQ_Event_t evt = {0};
     obs__ring_read(0u, &evt);
 
-    char buf[256];
+    char buf[EMBEDIQ_OBS_RING_DEPTH];
     obs__format_event(&evt, buf, sizeof(buf));
 
     ASSERT(strstr(buf, "seq=") != NULL,

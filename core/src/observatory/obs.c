@@ -178,7 +178,7 @@ static const char *fb_name(uint8_t id)
     if (id == 0xFFu) return "N/A";
     const char *n = embediq_bus_resolve_id(id);
     if (n) return n;
-    static char fallback[16];
+    static char fallback[EMBEDIQ_MAX_SUBFNS_PER_FB];
     snprintf(fallback, sizeof(fallback), "ep_%u", (unsigned)id);
     return fallback;
 }
