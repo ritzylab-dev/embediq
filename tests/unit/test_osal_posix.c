@@ -28,7 +28,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
+#include <time.h>
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness — one ASSERT per test function
@@ -65,7 +65,7 @@ static void test_task_create_runs_function(void)
     g_task_ran = 0;
     EmbedIQ_Task_t *t = embediq_osal_task_create(
             "flag_setter", task_set_flag, NULL, 1, 4096);
-    while (!g_task_ran) { usleep(500); }
+    while (!g_task_ran) { nanosleep(&(struct timespec){0, 500 * 1000L}, NULL); }
     embediq_osal_task_delete(t);
     ASSERT(g_task_ran == 1, "task function must run");
 }
@@ -82,7 +82,7 @@ static void incrementing_task(void *arg)
     (void)arg;
     while (1) {
         g_loop_count++;
-        usleep(200);     /* cancellation point */
+        nanosleep(&(struct timespec){0, 200 * 1000L}, NULL);     /* cancellation point */
     }
 }
 
@@ -91,10 +91,10 @@ static void test_task_delete_stops_execution(void)
     g_loop_count = 0;
     EmbedIQ_Task_t *t = embediq_osal_task_create(
             "counter", incrementing_task, NULL, 1, 4096);
-    usleep(5000);                      /* let it run for a bit */
+    nanosleep(&(struct timespec){0, 5000 * 1000L}, NULL);  /* let it run for a bit */
     embediq_osal_task_delete(t);       /* cancel + join */
     int snapshot = g_loop_count;
-    usleep(5000);                      /* would keep incrementing if still alive */
+    nanosleep(&(struct timespec){0, 5000 * 1000L}, NULL);  /* would keep incrementing if still alive */
     ASSERT(g_loop_count == snapshot, "counter must not change after task_delete");
 }
 
@@ -134,7 +134,7 @@ static void test_queue_send_timeout_returns_false(void)
 static void recv_after_delay(void *arg)
 {
     EmbedIQ_Queue_t *q = (EmbedIQ_Queue_t *)arg;
-    usleep(30000);                     /* 30 ms — give main time to block */
+    nanosleep(&(struct timespec){0, 30000 * 1000L}, NULL); /* 30 ms — give main time to block */
     uint8_t buf;
     embediq_osal_queue_recv(q, &buf, UINT32_MAX);
 }
@@ -159,7 +159,7 @@ static void test_queue_send_block_forever(void)
 static void post_after_delay(void *arg)
 {
     EmbedIQ_Signal_t *sig = (EmbedIQ_Signal_t *)arg;
-    usleep(20000);
+    nanosleep(&(struct timespec){0, 20000 * 1000L}, NULL);
     embediq_osal_signal_from_isr(sig);
 }
 
@@ -193,7 +193,7 @@ static void isr_waiter(void *arg)
 
 static void isr_poster(void *arg)
 {
-    usleep(20000);                     /* ensure waiter is blocked first */
+    nanosleep(&(struct timespec){0, 20000 * 1000L}, NULL);                     /* ensure waiter is blocked first */
     embediq_osal_signal_from_isr((EmbedIQ_Signal_t *)arg);
 }
 
@@ -213,7 +213,7 @@ static void test_signal_from_isr_unblocks_waiting_thread(void)
      * cancelling the poster during its 20 ms sleep would prevent it from
      * ever posting the signal.  Polling here guarantees both threads have
      * already finished before we call delete. */
-    while (!unblocked) { usleep(500); }
+    while (!unblocked) { nanosleep(&(struct timespec){0, 500 * 1000L}, NULL); }
 
     embediq_osal_task_delete(poster);  /* already exited — cancel is no-op */
     embediq_osal_task_delete(waiter);  /* already exited — cancel is no-op */
@@ -229,7 +229,7 @@ static void test_signal_from_isr_unblocks_waiting_thread(void)
 static void test_time_us_increases_monotonically(void)
 {
     uint32_t t1 = embediq_osal_time_us();
-    usleep(1000);
+    nanosleep(&(struct timespec){0, 1000 * 1000L}, NULL);
     uint32_t t2 = embediq_osal_time_us();
     ASSERT((uint32_t)(t2 - t1) >= 1000u,
            "time_us must increase monotonically");
@@ -263,7 +263,7 @@ static void hold_mutex_fn(void *arg)
     (void)arg;
     embediq_osal_mutex_lock(g_held_mutex, UINT32_MAX);
     embediq_osal_signal_from_isr(g_lock_acquired); /* signal: lock acquired */
-    usleep(300000);                                /* hold for 300 ms */
+    nanosleep(&(struct timespec){0, 300000 * 1000L}, NULL); /* hold for 300 ms */
     embediq_osal_mutex_unlock(g_held_mutex);
 }
 
