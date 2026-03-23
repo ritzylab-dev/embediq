@@ -1,0 +1,25 @@
+// messages/thermostat.iq — EmbedIQ Thermostat application messages
+//
+// Schema version 1. Namespace: com.embediq.thermostat
+// Message IDs in the thermostat namespace: 0x0420 – 0x042F.
+//
+// Rules:
+//   - Message IDs are never reused. A retired ID is tombstoned here.
+//   - Fields are append-only. Never remove or reorder an existing field.
+//   - Increment schema_id in any EmbedIQ_Msg_t that carries this message
+//     when any field is added.
+//
+// @author  Ritesh Anand
+// @company embediq.com | ritzylab.com
+//
+// SPDX-License-Identifier: Apache-2.0
+
+version 1
+namespace "com.embediq.thermostat"
+
+// Temperature reading published by fb_temp_sensor every 1 second.
+// Consumed by fb_temp_controller to drive the thermal FSM.
+// Triggered by MSG_TIMER_1SEC.
+message MSG_TEMP_READING id=0x0420 {
+    temperature_c : f32
+}

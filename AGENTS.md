@@ -192,38 +192,58 @@ embediq-core/
 
 ---
 
-## 5. Current Build Status
+## 5. File Placement Rules — Where Every File Lives
 
-> **Last updated:** Phase 0 complete (March 2026)
+This table is binding. When implementing any module, use EXACTLY these paths.
+Never place .c files flat in core/src/ — they belong in their subdirectory.
+
+| Module              | File path                                     |
+|---------------------|-----------------------------------------------|
+| FB engine           | core/src/registry/fb_engine.c                 |
+| Message bus         | core/src/bus/message_bus.c                    |
+| FSM engine          | core/src/fsm/fsm_engine.c                     |
+| Dispatcher          | core/src/dispatcher/dispatcher.c              |
+| Observatory         | core/src/observatory/obs.c                    |
+| OSAL POSIX          | osal/posix/embediq_osal_posix.c               |
+| OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
+| Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
+| Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
+| Components          | components/<fb_name>/<fb_name>.c              |
+| Unit tests          | tests/unit/test_<module>.c                    |
+
+Rule: if you are about to create a .c file directly in core/src/ (not in a
+subdirectory), STOP — wrong location. Check this table first.
+
+---
+
+## 6. Current Build Status
+
+> **Last updated:** Phase 1 complete (March 2026)
 > This table is updated at milestone boundaries only.
 
 | Layer | Module | Status | Notes |
 |-------|--------|--------|-------|
-| Core | All 13 headers | IN_PROGRESS | 7 of 13 done in Phase 0. Remaining in Phase 1. |
-| Core | messages.iq v0 generator | STABLE | Python generator, zero deps, core.iq live |
-| OSAL | posix (macOS + Linux + WSL) | NOT_STARTED | Phase 1 first target |
+| Core | All 13 headers | STABLE | Contracts frozen. Never change. |
+| Core | messages.iq generator | STABLE | Python, zero deps. core.iq + thermostat.iq live. |
+| Core | embediq_config.h | STABLE | All sizing constants. Use named constants only. |
+| OSAL | posix (macOS + Linux + WSL) | STABLE | pthreads + POSIX. Phase 1 complete. |
 | OSAL | freertos | NOT_STARTED | Phase 2 |
-| Core / Engine | FB Registry | NOT_STARTED | |
-| Core / Engine | Message Bus | NOT_STARTED | |
-| Core / Engine | Sub-fn Dispatcher | NOT_STARTED | |
-| Core / Engine | FSM Engine | NOT_STARTED | |
-| Core / Engine | Observatory | NOT_STARTED | |
-| Core / Engine | Test Runner | NOT_STARTED | |
-| Platform | fb_timer (posix) | NOT_STARTED | |
-| Platform | fb_uart (posix) | NOT_STARTED | |
-| Platform | fb_gpio (posix) | NOT_STARTED | |
-| Platform | fb_watchdog | NOT_STARTED | |
-| Platform | fb_logger | NOT_STARTED | |
-| Platform | esp32 | NOT_STARTED | Phase 2 |
-| Platform | raspberrypi | NOT_STARTED | Phase 2 |
-| Examples | thermostat | NOT_STARTED | freeze-gate demo |
-| Examples | industrial_gateway | NOT_STARTED | freeze-gate demo |
+| Core / Engine | FB Registry + Dispatch | STABLE | embediq_engine_boot() + embediq_engine_dispatch_boot() |
+| Core / Engine | Message Bus | STABLE | 3-queue routing, overflow policy, observatory drops |
+| Core / Engine | FSM Engine | STABLE | Table-driven, guard/action, observatory events |
+| Core / Engine | Observatory | STABLE | Ring buffer, stdout transport, level 0/1/2 filtering |
+| Platform | fb_timer (posix) | STABLE | Drift-corrected, MSG_TIMER_1SEC/100MS/10MS/1MS |
+| Platform | fb_watchdog | STABLE | Health-token model, 100ms check interval |
+| Platform | fb_nvm | STABLE | Atomic JSON key-value store, ~/.embediq/ |
+| Platform | fb_cloud_mqtt | NOT_STARTED | Phase 2 |
+| Platform | fb_ota | NOT_STARTED | Phase 2 |
+| Examples | thermostat | STABLE | 5 FBs, FSM cycles, Observatory output, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
 ---
 
-## 6. What v1 Will NOT Build (Non-Goals)
+## 7. What v1 Will NOT Build (Non-Goals)
 
 Agents: **do not generate code for any item on this list for v1.**
 These are named future work, not omissions. If you think something is missing,
@@ -252,7 +272,7 @@ TIMESTAMP:   64-bit timestamps on MCU. v1 = uint32_t microseconds, modulo 2³².
 
 ---
 
-## 7. Truth Hierarchy — Which File Wins Conflicts
+## 8. Truth Hierarchy — Which File Wins Conflicts
 
 When you see a conflict between documents, this order decides:
 
@@ -269,7 +289,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 8. Build System & Key Decisions
+## 9. Build System & Key Decisions
 
 | Decision | Choice | Do Not Change |
 |----------|--------|---------------|
@@ -285,7 +305,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 9. Where to Go Next
+## 10. Where to Go Next
 
 | What you need | Where to find it |
 |---------------|-----------------|
@@ -302,7 +322,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 10. The Developer First Hour Test
+## 11. The Developer First Hour Test
 
 Before any Phase 1 launch, this test must pass with 3 engineers
 who have never seen EmbedIQ before:

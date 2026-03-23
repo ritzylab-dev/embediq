@@ -139,6 +139,31 @@ EmbedIQ_FB_State_t embediq_fb_get_state(EmbedIQ_FB_Handle_t fb);
 /** Resolve an FB name to its endpoint index. Test harness use only. */
 uint8_t embediq_bus_resolve_name(const char *name);
 
+/**
+ * Boot the framework: sort all registered FBs by phase (1→2→3→4), resolve
+ * depends_on order within each phase via topological sort, then call each
+ * FB's init_fn in the computed order.  Also boots the message bus so that
+ * queues exist before any Phase-1 FB tasks start publishing.
+ *
+ * Must be called exactly once, after all embediq_fb_register() calls are done.
+ * Returns 0 on success. Returns -1 and emits an Observatory FAULT event if a
+ * dependency cycle or missing dependency is detected.
+ */
+int embediq_engine_boot(void);
+
+/**
+ * Create one per-FB dispatch pthread for every FB that has subscriptions.
+ * Each thread reads from the FB's priority queues (HIGH > NORMAL > LOW) and
+ * calls the matching sub-function dispatch loop.
+ *
+ * Must be called after embediq_engine_boot().
+ * Idempotent: safe to call multiple times, only first call has effect.
+ *
+ * Note: The integration test harness does NOT call this function; it drives
+ * FBs directly via fb_engine__deliver_msg() instead.
+ */
+void embediq_engine_dispatch_boot(void);
+
 #ifdef __cplusplus
 }
 #endif

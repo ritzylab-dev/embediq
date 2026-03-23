@@ -25,7 +25,7 @@ A structured, message-driven application framework that sits above your RTOS and
 - **Table-driven FSM engine** — every state, every event, every transition declared explicitly. Readable from the table alone.
 - **Zero-instrumentation Observatory** — every FB state transition and message captured automatically. No printf. No Percepio.
 - **Host simulation first-class** — run and test complete firmware on Mac or Linux. No hardware required for development or CI.
-- **Reusable component library** — `fb_cloud_mqtt`, `fb_ota`, `fb_watchdog`, `fb_nvm`, `fb_telemetry`. Import and use.
+- **Reusable component library** — `fb_watchdog`, `fb_nvm`, `fb_timer` (Phase 1 — shipping). `fb_cloud_mqtt`, `fb_ota`, `fb_telemetry` (Phase 2+).
 - **RTOS-agnostic OSAL** — same application code on FreeRTOS, Pi/Linux, Zephyr, and RISC-V targets.
 
 **The wrong patterns are structurally prevented.** Cross-FB coupling fails CI rule R-01. Hardware headers in application code fail compilation (Core headers compile standalone). Dynamic allocation in Shell 1 fails binary analysis. Structural discipline is enforced by the architecture, not hoped for.
@@ -68,7 +68,7 @@ A structured, message-driven application framework that sits above your RTOS and
 **Prerequisites:** CMake 3.18+, a C11 compiler, Git.
 
 ```bash
-git clone https://github.com/embediq/embediq.git
+git clone https://github.com/ritzylab-dev/embediq.git
 cd embediq
 cmake -B build -DEMBEDIQ_PLATFORM=host
 cmake --build build
@@ -117,10 +117,10 @@ See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the full commitment —
 
 ## Project status
 
-**Phase 0 — active.** Repo scaffold, all header contracts, CMake structure, AI agent framework.
-
-Phase 1 (Core Engine + Pi/Linux BSP + Observatory) begins when Phase 0 is complete.
-
+**Phase 1 — complete.** Core engine, message bus, FSM, Observatory, Platform FBs,
+and smart thermostat demo all running on Mac/Linux.
+`ctest --test-dir build` passes 100%. Observatory output visible without a single printf.
+Phase 2 (FreeRTOS OSAL + ESP32 target) is next.
 See [ROADMAP.md](ROADMAP.md) for the full timeline.
 
 ---

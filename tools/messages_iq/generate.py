@@ -181,23 +181,27 @@ def _c_str_width(fields):
     return max((len(f['c_type']) for f in fields), default=0)
 
 
-def generate_header(version, namespace, messages, source_path):
-    """Return the complete content of embediq_msg_catalog.h as a string."""
+def generate_header(version, namespace, messages, source_path, output_name):
+    """Return the complete content of the generated message catalog header as a string."""
 
-    src = Path(source_path).name
+    src   = Path(source_path).name
+    stem  = Path(output_name).stem          # e.g. 'thermostat_msg_catalog'
+    guard = stem.upper() + '_H'             # e.g. 'THERMOSTAT_MSG_CATALOG_H'
+    regen = (f'python3 tools/messages_iq/generate.py {source_path}'
+             f' --out generated/ --output-name {output_name}')
     lines = []
 
     # ---- file header ----
     lines += [
         '/*',
-        ' * embediq_msg_catalog.h — Generated message catalog',
+        f' * {output_name} — Generated message catalog',
         ' *',
         f' * Source:    {src}',
         f' * Namespace: {namespace}',
         f' * Schema:    version {version}',
         ' *',
         ' * DO NOT EDIT — regenerate with:',
-        ' *   python3 tools/messages_iq/generate.py messages/core.iq --out generated/',
+        f' *   {regen}',
         ' *',
         ' * @author  Ritesh Anand',
         ' * @company embediq.com | ritzylab.com',
@@ -205,8 +209,8 @@ def generate_header(version, namespace, messages, source_path):
         ' * SPDX-License-Identifier: Apache-2.0',
         ' */',
         '',
-        '#ifndef EMBEDIQ_MSG_CATALOG_H',
-        '#define EMBEDIQ_MSG_CATALOG_H',
+        f'#ifndef {guard}',
+        f'#define {guard}',
         '',
         '#include <stdint.h>',
         '#include <stddef.h>',
@@ -261,7 +265,7 @@ def generate_header(version, namespace, messages, source_path):
         '}',
         '#endif',
         '',
-        '#endif /* EMBEDIQ_MSG_CATALOG_H */',
+        f'#endif /* {guard} */',
         '',  # trailing newline
     ]
 
@@ -274,11 +278,13 @@ def generate_header(version, namespace, messages, source_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate embediq_msg_catalog.h from a .iq schema file.')
+        description='Generate a C message catalog header from a .iq schema file.')
     parser.add_argument('schema',
                         help='Path to the .iq input schema file')
     parser.add_argument('--out', required=True, metavar='DIR',
                         help='Output directory (created if absent)')
+    parser.add_argument('--output-name', metavar='FILENAME', default=None,
+                        help='Output filename (default: <schema_stem>_msg_catalog.h)')
     args = parser.parse_args()
 
     schema_path = Path(args.schema)
@@ -287,6 +293,10 @@ def main():
     if not schema_path.is_file():
         print(f'ERROR: schema not found: {schema_path}', file=sys.stderr)
         return 1
+
+    # Default output filename: <stem>_msg_catalog.h (e.g. core → core_msg_catalog.h)
+    # --output-name overrides for backward compatibility with embediq_msg_catalog.h
+    output_name = args.output_name or f'{schema_path.stem}_msg_catalog.h'
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -301,8 +311,8 @@ def main():
     if not messages:
         print(f'WARNING: no messages found in {schema_path}', file=sys.stderr)
 
-    out_path = out_dir / 'embediq_msg_catalog.h'
-    content  = generate_header(version, namespace, messages, schema_path)
+    out_path = out_dir / output_name
+    content  = generate_header(version, namespace, messages, schema_path, output_name)
     out_path.write_text(content, encoding='utf-8')
 
     print(f'OK  Generated {out_path}  ({len(messages)} message(s))')
