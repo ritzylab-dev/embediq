@@ -330,6 +330,19 @@ void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport)
 }
 
 /* ---------------------------------------------------------------------------
+ * Public: embediq_obs_set_level()
+ * ------------------------------------------------------------------------- */
+
+void embediq_obs_set_level(uint8_t level)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    g_level = level;
+#else
+    (void)level;
+#endif
+}
+
+/* ---------------------------------------------------------------------------
  * Package-internal + test-only API (EMBEDIQ_PLATFORM_HOST)
  * ------------------------------------------------------------------------- */
 

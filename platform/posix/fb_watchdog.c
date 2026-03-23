@@ -148,7 +148,10 @@ static void monitor_scan(void)
 
     if (all_ok) {
 #ifdef EMBEDIQ_PLATFORM_HOST
-        printf("[WDG] WDT kick [seq=%u]\n", (unsigned)g_kick_seq);
+        static uint32_t kick_count = 0;
+        if (++kick_count % 10 == 0) {
+            printf("[WDG] WDT kick [every-1s count=%u]\n", kick_count / 10);
+        }
 #endif
         g_kick_seq++;
     }

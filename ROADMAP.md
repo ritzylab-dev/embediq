@@ -6,18 +6,18 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 
 ---
 
-## Phase 0 — Foundations  ← active now
+## Phase 0 — Foundations  ← COMPLETE
 
 **Goal:** Repo scaffold, all header contracts, CMake structure, AI agent framework. No working firmware yet — but everything a developer needs to understand the architecture and start contributing.
 
 **Deliverables:**
-- [ ] All 13 Core headers (`embediq_fb.h`, `embediq_subfn.h`, `embediq_bus.h`, `embediq_msg.h`, `embediq_sm.h`, `embediq_obs.h`, `embediq_osal.h`, `embediq_time.h`, `embediq_bridge.h`, `embediq_meta.h`, `embediq_endpoint.h`, `embediq_msg_catalog.h`, `hal/`)
-- [ ] `embediq_config.h` + `validator.py`
-- [ ] CMake structure: Core-only build, host build, target build
-- [ ] CI: compile Core headers in isolation, license scan
-- [ ] `messages.iq` generator (Python/Node) — produces typed C structs from schema
-- [ ] AGENTS.md, CODING_RULES.md, CONTRIBUTING.md, ARCHITECTURE.md
-- [ ] Smart thermostat example skeleton (headers only, no implementation)
+- [x] All 13 Core headers (`embediq_fb.h`, `embediq_subfn.h`, `embediq_bus.h`, `embediq_msg.h`, `embediq_sm.h`, `embediq_obs.h`, `embediq_osal.h`, `embediq_time.h`, `embediq_bridge.h`, `embediq_meta.h`, `embediq_endpoint.h`, `embediq_msg_catalog.h`, `hal/`)
+- [x] `embediq_config.h` + `validator.py`
+- [x] CMake structure: Core-only build, host build, target build
+- [x] CI: compile Core headers in isolation, license scan
+- [x] `messages.iq` generator (Python/Node) — produces typed C structs from schema
+- [x] AGENTS.md, CODING_RULES.md, CONTRIBUTING.md, ARCHITECTURE.md
+- [x] Smart thermostat example skeleton (headers only, no implementation)
 
 **Success criterion:** `cmake -B build -DEMBEDIQ_PLATFORM=host && cmake --build build` completes clean. Core headers compile standalone. CI green.
 
@@ -25,27 +25,28 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 
 ---
 
-## Phase 1 — Core Engine
+## Phase 1 — Core Engine  ← COMPLETE
 
 **Goal:** The framework runs. The smart thermostat example runs on Pi/Linux with Observatory CLI output. Zero hardware required.
 
 **Deliverables:**
-- [ ] OSAL — Pi/Linux POSIX implementation (primary) + FreeRTOS host mock
-- [ ] Core FB engine — FB create/destroy, init sequence, lifecycle
-- [ ] Message bus — publish/subscribe, three-queue priority, routing table
-- [ ] FSM engine — table-driven dispatch, auto-guard evaluation
-- [ ] Observatory — bus tap, event capture, CLI transport
-- [ ] fb_uart — two-zone ISR model, ring buffer, thread delivery
-- [ ] fb_watchdog — health-token model, miss detection, reset reason logging
-- [ ] fb_nvm — key-value store, journalled write, host volatile backend
-- [ ] fb_cloud_mqtt — MQTT connect/publish/subscribe/reconnect, exponential backoff
-- [ ] fb_ota — firmware download, signature verification hook, dual-bank atomic write, rollback
-- [ ] Smart thermostat example — running end-to-end with Observatory output
-- [ ] Test harness — `embediq_test.h`, bus_inject, scenario runner
-- [ ] Full host test suite — CI green on every commit
-- [ ] `messages_registry.json` — initial namespace allocations for all official FBs
-- [ ] v1 compatibility shim (`tests/compat/fb_v1_compat.c`) — CI enforcement of core contract freeze
-- [ ] Boot phase model implemented — `EmbedIQ_BootPhase_t` enum, phase-gated startup
+- [x] OSAL — Pi/Linux POSIX implementation
+- [ ] (Phase 2) OSAL — FreeRTOS host mock
+- [x] Core FB engine — FB create/destroy, init sequence, lifecycle
+- [x] Message bus — publish/subscribe, three-queue priority, routing table
+- [x] FSM engine — table-driven dispatch, auto-guard evaluation
+- [x] Observatory — bus tap, event capture, CLI transport
+- [ ] (Phase 2) fb_uart — two-zone ISR model, ring buffer, thread delivery
+- [x] fb_watchdog — health-token model, miss detection, reset reason logging
+- [x] fb_nvm — key-value store, journalled write, host volatile backend
+- [ ] (Phase 2) fb_cloud_mqtt — MQTT connect/publish/subscribe/reconnect, exponential backoff
+- [ ] (Phase 2) fb_ota — firmware download, signature verification hook, dual-bank atomic write, rollback
+- [x] Smart thermostat example — running end-to-end with Observatory output
+- [ ] (Phase 2) Test harness — `embediq_test.h`, bus_inject, scenario runner
+- [x] Full host test suite — CI green on every commit
+- [ ] (Phase 2) `messages_registry.json` — initial namespace allocations for all official FBs
+- [x] v1 compatibility shim (`tests/compat/fb_v1_compat.c`) — CI enforcement of core contract freeze
+- [x] Boot phase model implemented — `EmbedIQ_BootPhase_t` enum, phase-gated startup
 
 **Success criterion:** Run `./build/examples/thermostat/embediq_thermostat`. See Observatory output. Every FB state transition, every message, timestamped. Zero printf in application FBs. `ctest --test-dir build` passes 100%.
 
@@ -107,7 +108,8 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 
 ## Completed
 
-Nothing yet — Phase 0 is active.
+- Phase 0: Foundations — complete March 2026
+- Phase 1: Core Engine + thermostat demo — complete March 2026
 
 ---
 

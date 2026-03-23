@@ -1,5 +1,5 @@
 # BUILD_STATUS.md — EmbedIQ Implementation Status
-# Last updated: Phase 0 complete
+# Last updated: Phase 1 complete
 # Rule: update this file at every phase boundary. Never let it go stale.
 
 ## What Exists vs What Does Not
@@ -13,24 +13,28 @@
 | CI pipeline | STABLE | Validates build + validator + compat shim on every PR |
 | validator.py | STABLE | Catches hardcoded sizing constants |
 | fb_v1_compat.c | STABLE | Compile-time API contract enforcement |
-| OSAL posix | NOT_STARTED | Phase 1 — pthreads + POSIX queues |
+| OSAL posix | STABLE | pthreads + POSIX message queues |
 | OSAL freertos | NOT_STARTED | Phase 2 |
-| FB Registry | NOT_STARTED | Phase 1 |
-| Message Bus | NOT_STARTED | Phase 1 |
-| Sub-fn Dispatcher | NOT_STARTED | Phase 1 |
-| FSM Engine | NOT_STARTED | Phase 1 |
-| Observatory | NOT_STARTED | Phase 1 |
-| Test Runner | NOT_STARTED | Phase 1 |
-| platform/posix/fb_timer | NOT_STARTED | Phase 1 |
-| platform/posix/fb_uart | NOT_STARTED | Phase 1 |
-| platform/posix/fb_gpio | NOT_STARTED | Phase 1 |
-| platform/posix/fb_watchdog | NOT_STARTED | Phase 1 |
-| examples/thermostat | NOT_STARTED | Phase 1 gate demo |
+| FB Registry | STABLE | Phase 1 — embediq_engine_boot(), fb state machine |
+| Message Bus | STABLE | Phase 1 — static routing table, pub/sub queues |
+| Sub-fn Dispatcher | STABLE | Phase 1 — embediq_subfn_register(), dispatch loop |
+| FSM Engine | STABLE | Phase 1 — table-driven FSM with guard/action |
+| Observatory | STABLE | Phase 1 — ring buffer, stdout/UART transport |
+| Test Runner | STABLE | Phase 1 — unit + integration tests via CTest |
+| platform/posix/fb_timer | STABLE | 1 ms background tick, MSG_TIMER_1SEC every 1 s |
+| platform/posix/fb_nvm | STABLE | Filesystem-backed JSON key-value store |
+| platform/posix/fb_watchdog | STABLE | Health-token monitor, 100 ms check interval |
+| examples/thermostat | STABLE | Phase 1 gate demo — all 5 FBs, FSM transitions verified |
 
 ## IMPORTANT FOR CONTRIBUTORS
-The headers in core/include/ define contracts only — zero implementation exists.
-Do not assume any runtime engine is present. Phase 1 builds the engine.
-The thermostat example binary (embediq_thermostat) does not run yet.
+The Phase 1 platform stack is complete and running.  The thermostat demo binary
+(`embediq_thermostat`) boots all 5 FBs, runs for 30 s, and drives the thermal
+FSM through NORMAL → WARNING → CRITICAL → NORMAL automatically.
+
+The integration test (`test_thermostat_full`) passes all 6 assertions in ~15 s.
+
+Note: Phase 1 dispatch loop uses 1ms polling (acceptable for host demo).
+Phase 2 will replace with blocking OSAL semaphore before FreeRTOS port.
 
 ## Phase 0 — COMPLETE
   ✓ P0-T1: Repo scaffold, CMake, CI pipeline
@@ -39,11 +43,24 @@ The thermostat example binary (embediq_thermostat) does not run yet.
   ✓ P0-T4: messages.iq generator + core.iq schema
   ✓ P0-T5: Full integration verify — all checks green
 
-## Phase 1 — NOT STARTED
-  Next: P1-T1 — OSAL POSIX implementation
+## Phase 1 — COMPLETE
+  ✓ P1-T1: OSAL POSIX (pthreads, mqueues, signals, delays) — osal/posix/
+  ✓ P1-T2: FB Engine (register, boot, state machine) — core/src/registry/
+  ✓ P1-T3: Message Bus (pub/sub routing, static table) — core/src/bus/
+  ✓ P1-T4: Sub-fn Dispatcher + FSM Engine — core/src/subfn/, core/src/fsm/
+  ✓ P1-T5: Observatory (ring buffer, stdout transport, CTest) — core/src/obs/
+  ✓ P1-T6: Platform FBs (fb_timer, fb_nvm, fb_watchdog) — platform/posix/
+  ✓ P1-T7: thermostat_msgs.h + message namespace (0x0420)
+  ✓ P1-T8: Thermostat integration (fb_temp_sensor, fb_temp_controller, 5-FB demo,
+            test_thermostat_full — all 6 assertions pass in 15 s real-time run)
+
+## Phase 2 — NOT STARTED
+  Next: P2-T1 — Replace 1 ms polling dispatch loop with blocking OSAL semaphore
+  Next: P2-T2 — embediq_engine_dispatch_shutdown() for clean task teardown
+  Next: P2-T3 — fb_cloud_mqtt (MQTT 3.1.1) and fb_ota (OTA FSM)
 
 ## Your Next Actions (Human)
-  1. Merge this PR to dev
-  2. Merge dev to main (Phase 0 complete milestone)
-  3. Set up Claude Projects on claude.ai (see CLAUDE_PROJECTS_SETUP.md)
-  4. Post LinkedIn update #4 — March 23
+  1. Run final demo: ./build/examples/thermostat/embediq_thermostat
+  2. Merge PR to dev
+  3. Merge dev → main (Phase 1 release tag)
+  4. Start Phase 2 with P2-T0 (blocking dispatch loop)

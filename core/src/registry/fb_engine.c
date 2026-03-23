@@ -34,6 +34,8 @@
 #include "embediq_fb.h"
 #include "embediq_subfn.h"
 #include "embediq_obs.h"
+#include "embediq_bus.h"
+#include "embediq_osal.h"
 #include "embediq_config.h"
 
 #include <stdint.h>
@@ -68,6 +70,18 @@ static bool          g_booted     = false;
 /* Computed by embediq_engine_boot(): global indices in init sequence order. */
 static uint8_t       g_boot_order[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t       g_boot_count = 0;
+
+/* ---------------------------------------------------------------------------
+ * Per-FB dispatch thread state (populated by embediq_engine_dispatch_boot)
+ * ------------------------------------------------------------------------- */
+
+typedef struct {
+    EmbedIQ_FB_t *fb;
+    uint8_t       ep_id;
+} dispatch_arg_t;
+
+static dispatch_arg_t    g_dispatch_args[EMBEDIQ_MAX_ENDPOINTS];
+static volatile bool     g_dispatch_running = false;
 
 /* ---------------------------------------------------------------------------
  * Public: embediq_fb_register()
@@ -247,6 +261,11 @@ int embediq_engine_boot(void)
 
     g_boot_count = 0;
 
+    /* Boot the message bus first: builds subscription table and creates
+     * per-FB priority queues before any Phase-1 FB tasks start running.
+     * This must happen before embediq_publish() is called by any FB thread. */
+    message_bus_boot();
+
     /* --- Step 1: verify all dependencies exist (global, pre-phase) --- */
     for (uint8_t i = 0; i < g_reg_count; i++) {
         for (int d = 0; d < (int)g_registry[i].config.depends_count; d++) {
@@ -363,6 +382,64 @@ uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle)
 }
 
 /* ---------------------------------------------------------------------------
+ * Per-FB dispatch loop
+ *
+ * One instance of this task runs per FB that has subscriptions.
+ * Polls the FB's three priority queues (HIGH > NORMAL > LOW) in a tight loop
+ * with a 1 ms yield when all queues are empty.  This is a Phase 1 placeholder;
+ * Phase 2 will replace the polling with a blocking semaphore.
+ * ------------------------------------------------------------------------- */
+
+static void fb_dispatch_loop(void *arg)
+{
+    dispatch_arg_t *da = (dispatch_arg_t *)arg;
+    EmbedIQ_FB_t   *fb = da->fb;
+    uint8_t         ep = da->ep_id;
+    EmbedIQ_Msg_t   msg;
+
+    while (g_dispatch_running) {
+        bool got = false;
+
+        /* Drain in priority order: HIGH, NORMAL, LOW. */
+        for (uint8_t p = 0u; p < 3u && !got; p++) {
+            got = message_bus_recv_ep(ep, p, &msg);
+        }
+
+        if (got) {
+            dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
+        } else {
+            embediq_osal_delay_ms(1u);
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: embediq_engine_dispatch_boot()
+ * ------------------------------------------------------------------------- */
+
+void embediq_engine_dispatch_boot(void)
+{
+    if (g_dispatch_running) return;   /* idempotent */
+
+    g_dispatch_running = true;
+
+    for (uint8_t i = 0u; i < g_reg_count; i++) {
+        EmbedIQ_FB_t *fb = &g_registry[i];
+
+        /* Only create dispatch tasks for FBs that receive messages. */
+        if (fb->config.subscription_count == 0u) continue;
+
+        g_dispatch_args[i].fb    = fb;
+        g_dispatch_args[i].ep_id = fb->ep_idx;
+
+        embediq_osal_task_create(fb->config.name,
+                                 fb_dispatch_loop,
+                                 &g_dispatch_args[i],
+                                 2u, 4096u);
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Host / test-only API
  *
  * Guarded by EMBEDIQ_PLATFORM_HOST so these symbols are absent from MCU
@@ -375,14 +452,21 @@ uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle)
 extern void     obs__reset(void);
 extern uint32_t obs__event_count(void);
 
+/* message_bus__reset() is defined in message_bus.c; extern decl here avoids
+ * a private header.  Safe to call even if message_bus_boot() never ran. */
+extern void message_bus__reset(void);
+
 /** Reset all engine state — must be called between test cases. */
 void fb_engine__reset(void)
 {
-    memset(g_registry,   0, sizeof(g_registry));
-    memset(g_boot_order, 0, sizeof(g_boot_order));
-    g_reg_count  = 0;
-    g_boot_count = 0;
-    g_booted     = false;
+    memset(g_registry,      0, sizeof(g_registry));
+    memset(g_boot_order,    0, sizeof(g_boot_order));
+    memset(g_dispatch_args, 0, sizeof(g_dispatch_args));
+    g_reg_count        = 0;
+    g_boot_count       = 0;
+    g_booted           = false;
+    g_dispatch_running = false;
+    message_bus__reset();
     obs__reset();
 }
 
