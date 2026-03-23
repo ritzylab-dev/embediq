@@ -38,7 +38,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  SHELL 4 — COMMERCIAL                                               │
-│  EmbedIQ Studio  ·  EmbedIQ Cloud  ·  MCP Server                   │
+│  EmbedIQ Studio  ·  EmbedIQ Cloud  ·  MCP Server                    │
 ├─────────────────────────────────────────────────────────────────────┤
 │  SHELL 3 — ECOSYSTEM                                                │
 │  Bridge daemon  ·  bridge/websocket  ·  bridge/unix_socket          │
@@ -185,10 +185,10 @@ Community FBs **must** reserve a range in `messages_registry.json` before publis
 Undefined overflow behavior is a production bug class. This policy is binding:
 
 | Queue | Behavior when full | Observatory event? |
-|-------|-------------------|-------------------|
-| HIGH | **Block sender** — HIGH messages are safety-critical, dropping is worse than blocking | No |
-| NORMAL | **Drop oldest** — recent data is more valuable than stale data | Yes |
-| LOW | **Drop incoming** — best-effort delivery | Yes |
+|-------|--------------------|-------------------|
+| HIGH  | **Block sender**  — HIGH messages are safety-critical, dropping is worse than blocking | No |
+| NORMAL| **Drop oldest**   — recent data is more valuable than stale data | Yes |
+| LOW   | **Drop incoming** — best-effort delivery | Yes |
 
 ---
 
