@@ -166,6 +166,13 @@ void embediq_osal_task_delete(EmbedIQ_Task_t *task)
     free(task);
 }
 
+void embediq_osal_task_join(EmbedIQ_Task_t *task)
+{
+    if (!task) return;
+    pthread_join(task->thread, NULL);
+    free(task);
+}
+
 void embediq_osal_delay_ms(uint32_t ms)
 {
     struct timespec ts = {

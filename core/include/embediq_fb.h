@@ -164,6 +164,20 @@ int embediq_engine_boot(void);
  */
 void embediq_engine_dispatch_boot(void);
 
+/**
+ * Signal all dispatch threads to exit and join them.
+ *
+ * Sets the shutdown flag, posts each FB's dispatch semaphore once to unblock
+ * any waiting thread, then calls pthread_join() on every dispatch thread.
+ * Returns only after all threads have exited — no polling, no busy-wait.
+ *
+ * Safe to call multiple times (idempotent).
+ * Call before OTA restart or clean process exit.
+ *
+ * Returns 0 on success (including when no threads were running), -1 on error.
+ */
+int embediq_engine_dispatch_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

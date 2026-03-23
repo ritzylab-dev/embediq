@@ -73,6 +73,14 @@ EmbedIQ_Task_t *embediq_osal_task_create(const char *name,
 /** Delete a task created by embediq_osal_task_create(). */
 void embediq_osal_task_delete(EmbedIQ_Task_t *task);
 
+/**
+ * Wait for a task to exit naturally, then free its handle.
+ * Unlike task_delete(), this does NOT cancel the thread — it only joins.
+ * The task must have already exited or be on the verge of exiting.
+ * Used by embediq_engine_dispatch_shutdown() for clean teardown.
+ */
+void embediq_osal_task_join(EmbedIQ_Task_t *task);
+
 /** Block the calling task for at least ms milliseconds. */
 void embediq_osal_delay_ms(uint32_t ms);
 

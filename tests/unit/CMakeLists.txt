@@ -163,6 +163,26 @@ target_compile_options(test_blocking_dispatch PRIVATE
 add_test(NAME unit_blocking_dispatch COMMAND test_blocking_dispatch)
 
 # ---------------------------------------------------------------------------
+# Dispatch shutdown unit tests (P2-T0b)
+# ---------------------------------------------------------------------------
+
+add_executable(test_dispatch_shutdown test_dispatch_shutdown.c)
+
+target_include_directories(test_dispatch_shutdown PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_dispatch_shutdown PRIVATE embediq_fb_engine)
+
+target_compile_options(test_dispatch_shutdown PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_dispatch_shutdown COMMAND test_dispatch_shutdown)
+
+# ---------------------------------------------------------------------------
 # NVM FB unit tests (P1-T6)
 # ---------------------------------------------------------------------------
 
