@@ -10,8 +10,10 @@ Verifies that boundary_checker.py:
   - Correctly resolves relative path includes (../../...).
   - hal/*/ files may only include core/include/hal/ contracts and C stdlib.
   - hal/*/ files must not include framework headers or cross-platform HAL headers.
-  - drivers/ files may include core/include/ (incl. hal/ contracts) and C stdlib.
-  - drivers/ files must not reach into hal/posix/, hal/esp32/ etc. or vendor BSP headers.
+  - fbs/drivers/ files may include core/include/ (incl. hal/ contracts) and C stdlib.
+  - fbs/drivers/ files must not reach into hal/posix/, hal/esp32/ etc. or vendor BSP headers.
+  - fbs/services/ files may include core/include/ framework headers and C stdlib.
+  - fbs/services/ files must NOT include core/include/hal/ or any hal/ path.
 
 Run: python3 tools/test_boundary_checker.py
 All output lines start with PASS or FAIL. Exit 0 iff all pass.
@@ -195,37 +197,37 @@ def test_hal_impl_must_not_include_other_platform_hal():
                "VIOLATION" in out, f"output: {out!r}")
 
 
-# ── Test 11 — drivers/ may include core/include/ framework headers ────────────
+# ── Test 11 — fbs/drivers/ may include core/include/ framework headers ────────
 
 def test_drivers_may_include_core():
     with tempfile.TemporaryDirectory() as tmp:
         _write(tmp, "core/include/embediq_fb.h", "/* stub */\n")
-        _write(tmp, "drivers/fb_timer.c",
+        _write(tmp, "fbs/drivers/fb_timer.c",
                '#include "embediq_fb.h"\n')
         rc, out = _run(tmp)
         _check("drivers_may_include_core: exits 0",
                rc == 0, f"got rc={rc}. output: {out!r}")
 
 
-# ── Test 12 — drivers/ may include core/include/hal/ contracts ───────────────
+# ── Test 12 — fbs/drivers/ may include core/include/hal/ contracts ───────────
 
 def test_drivers_may_include_hal_contract():
     with tempfile.TemporaryDirectory() as tmp:
         _write(tmp, "core/include/hal/hal_timer.h", "/* stub */\n")
-        _write(tmp, "drivers/fb_timer.c",
-               '#include "../core/include/hal/hal_timer.h"\n')
+        _write(tmp, "fbs/drivers/fb_timer.c",
+               '#include "../../core/include/hal/hal_timer.h"\n')
         rc, out = _run(tmp)
         _check("drivers_may_include_hal_contract: exits 0",
                rc == 0, f"got rc={rc}. output: {out!r}")
 
 
-# ── Test 13 — drivers/ must NOT include hal/posix/ (impl, not contract) ──────
+# ── Test 13 — fbs/drivers/ must NOT include hal/posix/ (impl, not contract) ──
 
 def test_drivers_must_not_include_hal_impl():
     with tempfile.TemporaryDirectory() as tmp:
         _write(tmp, "hal/posix/hal_timer_posix.h", "/* stub */\n")
-        _write(tmp, "drivers/fb_timer.c",
-               '#include "../hal/posix/hal_timer_posix.h"\n')
+        _write(tmp, "fbs/drivers/fb_timer.c",
+               '#include "../../hal/posix/hal_timer_posix.h"\n')
         rc, out = _run(tmp)
         _check("drivers_must_not_include_hal_impl: exits 1",
                rc == 1, f"got rc={rc}")
@@ -233,17 +235,43 @@ def test_drivers_must_not_include_hal_impl():
                "VIOLATION" in out, f"output: {out!r}")
 
 
-# ── Test 14 — drivers/ must NOT include vendor BSP headers ───────────────────
+# ── Test 14 — fbs/drivers/ must NOT include vendor BSP headers ───────────────
 
 def test_drivers_must_not_include_vendor_bsp():
     with tempfile.TemporaryDirectory() as tmp:
         # esp_uart.h is not created anywhere — it is an unknown/vendor header
-        _write(tmp, "drivers/fb_uart.c",
+        _write(tmp, "fbs/drivers/fb_uart.c",
                '#include "esp_uart.h"\n')
         rc, out = _run(tmp)
         _check("drivers_must_not_include_vendor_bsp: exits 1",
                rc == 1, f"got rc={rc}")
         _check("drivers_must_not_include_vendor_bsp: prints VIOLATION",
+               "VIOLATION" in out, f"output: {out!r}")
+
+
+# ── Test 15 — fbs/services/ may include core/include/ framework headers ──────
+
+def test_fbs_services_may_include_core_framework():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/include/embediq_bus.h", "/* stub */\n")
+        _write(tmp, "fbs/services/fb_cloud_mqtt.c",
+               '#include "embediq_bus.h"\n')
+        rc, out = _run(tmp)
+        _check("fbs_services_may_include_core_framework: exits 0",
+               rc == 0, f"got rc={rc}. output: {out!r}")
+
+
+# ── Test 16 — fbs/services/ must NOT include core/include/hal/ contracts ─────
+
+def test_fbs_services_must_not_include_hal_contract():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/include/hal/hal_timer.h", "/* stub */\n")
+        _write(tmp, "fbs/services/fb_cloud_mqtt.c",
+               '#include "../../core/include/hal/hal_timer.h"\n')
+        rc, out = _run(tmp)
+        _check("fbs_services_must_not_include_hal_contract: exits 1",
+               rc == 1, f"got rc={rc}")
+        _check("fbs_services_must_not_include_hal_contract: prints VIOLATION",
                "VIOLATION" in out, f"output: {out!r}")
 
 
@@ -265,11 +293,13 @@ if __name__ == "__main__":
     test_drivers_may_include_hal_contract()
     test_drivers_must_not_include_hal_impl()
     test_drivers_must_not_include_vendor_bsp()
+    test_fbs_services_may_include_core_framework()
+    test_fbs_services_must_not_include_hal_contract()
 
     print()
     if _failed:
         print(f"FAILED: {len(_failed)} test(s): {', '.join(_failed)}")
         sys.exit(1)
     else:
-        print("All 14 tests passed.")
+        print("All 16 tests passed.")
         sys.exit(0)

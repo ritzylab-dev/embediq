@@ -90,7 +90,7 @@ Agents: never add an include that skips a layer.
 **Driver FB** — wraps a hardware peripheral into the EmbedIQ message model.
 - Calls HAL contract (`core/include/hal/`) for hardware access
 - Calls OSAL for threading and ISR wakeup
-- One portable source file (`drivers/fb_uart.c`) — target differences are handled
+- One portable source file (`fbs/drivers/fb_uart.c`) — target differences are handled
   entirely inside the HAL implementation
 - Examples: `fb_uart`, `fb_gpio`, `fb_timer`, `fb_nvm`, `fb_watchdog`
 
@@ -172,16 +172,17 @@ not with the layer that implements it.
 
 Enforced by `tools/boundary_checker.py` in CI. Violations = CI failure.
 
-| Source location     | May include                               | Must NOT include                    |
-|---------------------|-------------------------------------------|-------------------------------------|
-| `core/src/`         | `core/include/`, system headers           | `hal/`, `osal/`, `platform/`, `drivers/` |
-| `osal/posix/`       | `core/include/`, system + OS headers      | `hal/`, `drivers/`, `examples/`    |
-| `osal/freertos/`    | `core/include/`, FreeRTOS headers         | `hal/`, `drivers/`, `examples/`    |
-| `hal/posix/`        | `core/include/hal/`, system + OS headers  | `osal/`, `core/src/`, `drivers/`   |
-| `hal/esp32/`        | `core/include/hal/`, ESP-IDF headers      | `osal/`, `core/src/`, `drivers/`   |
-| `drivers/`          | `core/include/` (incl. `hal/`), `osal/`   | `examples/`, `tests/`              |
-| `examples/`         | `core/include/`, `drivers/` contracts     | `hal/` impl headers, `osal/` impl  |
-| `tests/`            | `core/include/`, test framework headers   | `hal/` impl, `osal/` impl          |
+| Source location     | May include                                          | Must NOT include                               |
+|---------------------|------------------------------------------------------|------------------------------------------------|
+| `core/src/`         | `core/include/`, system headers                      | `hal/`, `osal/`, `platform/`, `fbs/`           |
+| `osal/posix/`       | `core/include/`, system + OS headers                 | `hal/`, `fbs/`, `examples/`                    |
+| `osal/freertos/`    | `core/include/`, FreeRTOS headers                    | `hal/`, `fbs/`, `examples/`                    |
+| `hal/posix/`        | `core/include/hal/`, system + OS headers             | `osal/`, `core/src/`, `fbs/`                   |
+| `hal/esp32/`        | `core/include/hal/`, ESP-IDF headers                 | `osal/`, `core/src/`, `fbs/`                   |
+| `fbs/drivers/`      | `core/include/` (incl. `hal/`), C stdlib             | `hal/` impl paths, vendor BSP, `examples/`     |
+| `fbs/services/`     | `core/include/` (excl. `hal/`), C stdlib             | `core/include/hal/`, `hal/`, `osal/` impl      |
+| `examples/`         | `core/include/`, `fbs/drivers/`, `fbs/services/`     | `hal/` impl headers, `osal/` impl              |
+| `tests/`            | `core/include/`, `examples/`, `fbs/` contracts       | `hal/` impl, `osal/` impl                      |
 
 ---
 

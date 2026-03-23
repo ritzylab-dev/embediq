@@ -250,7 +250,8 @@ Never place .c files flat in core/src/ — they belong in their subdirectory.
 | OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
 | Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
 | Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
-| Driver FBs (portable) | drivers/<fb_name>.c                         |
+| Driver FBs (portable) | fbs/drivers/fb_<name>.c — calls hal/*.h, no platform code |
+| Service FBs (portable) | fbs/services/fb_<name>.c — no hal/ includes permitted    |
 | HAL implementations | hal/<target>/hal_<peripheral>.c               |
 | Components          | components/<fb_name>/<fb_name>.c              |
 | Unit tests          | tests/unit/test_<module>.c                    |
