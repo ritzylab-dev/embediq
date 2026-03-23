@@ -129,10 +129,16 @@ add_executable(test_fb_timer test_fb_timer.c)
 
 target_include_directories(test_fb_timer PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
     ${CMAKE_SOURCE_DIR}/platform/posix
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
-target_link_libraries(test_fb_timer PRIVATE embediq_platform_posix)
+target_link_libraries(test_fb_timer PRIVATE
+    embediq_platform_posix
+    embediq_driver_fbs
+    embediq_hal_posix
+)
 
 target_compile_options(test_fb_timer PRIVATE
     -Wall

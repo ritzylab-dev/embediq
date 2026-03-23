@@ -14,7 +14,11 @@ target_include_directories(thermostat PRIVATE
     ${CMAKE_SOURCE_DIR}/examples/thermostat
 )
 
-target_link_libraries(thermostat PRIVATE embediq_platform_posix)
+target_link_libraries(thermostat PRIVATE
+    embediq_platform_posix
+    embediq_driver_fbs
+    embediq_hal_posix
+)
 
 target_compile_options(thermostat PRIVATE
     -Wall

@@ -7,7 +7,6 @@
 # Tests that exercise these FBs link against embediq_platform_posix.
 
 add_library(embediq_platform_posix STATIC
-    fb_timer.c
     fb_watchdog.c
     fb_nvm.c
 )
