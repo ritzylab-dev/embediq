@@ -210,6 +210,24 @@ Rules:
 If you are about to run git checkout -b without first running
 git checkout dev && git pull origin dev — STOP. Do those two commands first.
 
+```
+GATE 12 — Contract before implementation (Principle 2 enforced at task level):
+  Before any implementation task starts, the module's contract header
+  must exist in core/include/.
+
+  Check: does core/include/embediq_<module>.h exist?
+    YES → proceed with implementation.
+    NO  → create the contract header FIRST. No exceptions.
+
+  This applies to every FB, every platform module, every service.
+  The contract header must contain declarations only — zero implementation.
+  It must compile standalone: gcc -x c -std=c11 -Icore/include -fsyntax-only
+
+  Rationale: Principle 2 ("Everything has a contract") is not retroactive.
+  Writing an implementation before its contract exists creates an architectural
+  debt that is expensive to fix after the fact.
+```
+
 ---
 
 ## 6. File Placement Rules — Where Every File Lives
