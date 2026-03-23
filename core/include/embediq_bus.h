@@ -53,8 +53,8 @@ void message_bus_set_notify_fn(embediq_notify_fn_t fn);
 
 /**
  * Build the subscription routing table and create per-FB priority queues.
- * Must be called once, after embediq_engine_boot() completes.
- * Idempotent: safe to call multiple times, only first call has effect.
+ * Called automatically from embediq_engine_boot(). Do not call manually.
+ * Safe to call again from tests (idempotent).
  */
 void message_bus_boot(void);
 
