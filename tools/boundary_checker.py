@@ -9,19 +9,25 @@ Checks that no .c or .h file includes headers from a layer it is not
 permitted to access (AGENTS.md §3 layer dependency rule).
 
 Layer rules (a file in layer X may only include from allowed layers):
-  core/src/        → allowed: core/include/
-  osal/posix/      → allowed: core/include/
-  osal/freertos/   → allowed: core/include/
-  platform/posix/  → allowed: core/include/, osal/posix/
-  platform/esp32/  → allowed: core/include/, osal/freertos/
-  components/      → allowed: core/include/
-  examples/        → allowed: core/include/, components/
-  tests/           → allowed: core/include/, examples/  (integration tests need example headers)
+  core/src/        → allowed: core/include/, core/include/hal/
+  osal/posix/      → allowed: core/include/, core/include/hal/
+  osal/freertos/   → allowed: core/include/, core/include/hal/
+  platform/posix/  → allowed: core/include/, core/include/hal/, osal/posix/
+  platform/esp32/  → allowed: core/include/, core/include/hal/, osal/freertos/
+  components/      → allowed: core/include/, core/include/hal/
+  examples/        → allowed: core/include/, core/include/hal/, components/
+  tests/           → allowed: core/include/, core/include/hal/, examples/
+  hal/posix/       → allowed: core/include/hal/ only (no framework headers)
+  hal/esp32/       → allowed: core/include/hal/ only
+  hal/stm32/       → allowed: core/include/hal/ only
+  drivers/         → allowed: core/include/, core/include/hal/
+                     STRICT: unrecognised quote-includes treated as vendor BSP
 
 Rules:
   - Same-layer includes are always allowed.
   - System headers (#include <...>) are always allowed.
-  - Headers in unknown layers (build/, generated/, tools/) are skipped.
+  - Headers in unknown layers (build/, generated/, tools/) are skipped,
+    EXCEPT in strict layers (drivers/) where they are violations.
 
 Exit codes: 0 = clean, 1 = violations found.
 
@@ -40,29 +46,43 @@ import re
 def _layer_of(rel_path):
     """Return the canonical layer name for a repo-relative path, or None."""
     p = rel_path.replace(os.sep, '/')
-    if p.startswith('core/include/'):  return 'core/include'
-    if p.startswith('core/src/'):      return 'core/src'
-    if p.startswith('osal/posix/'):    return 'osal/posix'
-    if p.startswith('osal/freertos/'): return 'osal/freertos'
-    if p.startswith('platform/posix/'): return 'platform/posix'
-    if p.startswith('platform/esp32/'): return 'platform/esp32'
-    if p.startswith('components/'):    return 'components'
-    if p.startswith('examples/'):      return 'examples'
-    if p.startswith('tests/'):         return 'tests'
+    if p.startswith('core/include/hal/'):  return 'core/include/hal'
+    if p.startswith('core/include/'):      return 'core/include'
+    if p.startswith('core/src/'):          return 'core/src'
+    if p.startswith('osal/posix/'):        return 'osal/posix'
+    if p.startswith('osal/freertos/'):     return 'osal/freertos'
+    if p.startswith('platform/posix/'):    return 'platform/posix'
+    if p.startswith('platform/esp32/'):    return 'platform/esp32'
+    if p.startswith('components/'):        return 'components'
+    if p.startswith('examples/'):          return 'examples'
+    if p.startswith('tests/'):             return 'tests'
+    if p.startswith('hal/posix/'):         return 'hal/posix'
+    if p.startswith('hal/esp32/'):         return 'hal/esp32'
+    if p.startswith('hal/stm32/'):         return 'hal/stm32'
+    if p.startswith('drivers/'):           return 'drivers'
     return None  # build/, generated/, tools/, docs/ — not checked
 
 
 # Allowed cross-layer include sets (same-layer is always permitted separately)
 _ALLOWED = {
-    'core/src':        {'core/include'},
-    'osal/posix':      {'core/include'},
-    'osal/freertos':   {'core/include'},
-    'platform/posix':  {'core/include', 'osal/posix'},
-    'platform/esp32':  {'core/include', 'osal/freertos'},
-    'components':      {'core/include'},
-    'examples':        {'core/include', 'components'},
-    'tests':           {'core/include', 'examples'},
+    'core/src':        {'core/include', 'core/include/hal'},
+    'osal/posix':      {'core/include', 'core/include/hal'},
+    'osal/freertos':   {'core/include', 'core/include/hal'},
+    'platform/posix':  {'core/include', 'core/include/hal', 'osal/posix'},
+    'platform/esp32':  {'core/include', 'core/include/hal', 'osal/freertos'},
+    'components':      {'core/include', 'core/include/hal'},
+    'examples':        {'core/include', 'core/include/hal', 'components'},
+    'tests':           {'core/include', 'core/include/hal', 'examples'},
+    # HAL implementation layers — only HAL contracts, nothing else
+    'hal/posix':       {'core/include/hal'},
+    'hal/esp32':       {'core/include/hal'},
+    'hal/stm32':       {'core/include/hal'},
+    # Driver FBs — may use all framework contracts (incl. HAL) but not impl paths
+    'drivers':         {'core/include', 'core/include/hal'},
 }
+
+# Layers where an unresolvable quote-include is a vendor BSP violation
+_VENDOR_BSP_STRICT = {'drivers'}
 
 # ── Header index (basename → layer) ─────────────────────────────────────────
 
@@ -72,15 +92,23 @@ def _build_header_index(repo_root):
 
     core/include/ is indexed first so it wins when the same header name
     exists in multiple layers (e.g. shim + canonical).
+    core/include/hal/ is indexed in Pass 1 as well (wins over any shim).
     """
     idx = {}
 
-    # Pass 1 — core/include/ wins all ties
+    # Pass 1 — core/include/ wins all ties (direct children)
     core_inc = os.path.join(repo_root, 'core', 'include')
     if os.path.isdir(core_inc):
         for fname in os.listdir(core_inc):
             if fname.endswith(('.h', '.hpp')):
                 idx[fname] = 'core/include'
+
+        # Pass 1b — core/include/hal/ also wins all ties
+        core_hal = os.path.join(core_inc, 'hal')
+        if os.path.isdir(core_hal):
+            for fname in os.listdir(core_hal):
+                if fname.endswith(('.h', '.hpp')):
+                    idx[fname] = 'core/include/hal'
 
     # Pass 2 — everything else (first-found wins after core/include)
     skip = {'build', '.git', '__pycache__'}
@@ -120,15 +148,22 @@ def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
                 # Resolve which layer the included file belongs to
                 if '/' in inc or '\\' in inc:
                     # Path includes a separator → resolve relative to file dir
-                    resolved     = os.path.normpath(os.path.join(file_dir, inc))
+                    resolved      = os.path.normpath(os.path.join(file_dir, inc))
                     inc_from_root = os.path.relpath(resolved, repo_root)
-                    inc_layer    = _layer_of(inc_from_root)
+                    inc_layer     = _layer_of(inc_from_root)
                 else:
                     # Simple basename → look up in the pre-built index
                     inc_layer = header_index.get(os.path.basename(inc))
 
                 if inc_layer is None:
-                    continue  # unknown layer (generated/, tools/, etc.) — skip
+                    # Unknown layer (generated/, tools/, vendor BSP, etc.)
+                    if file_layer in _VENDOR_BSP_STRICT:
+                        violations.append(
+                            f'VIOLATION: {rel_path}:{lineno}: '
+                            f'{file_layer} must not include unrecognised headers '
+                            f'("{inc}") — possible vendor BSP or unknown include'
+                        )
+                    continue
 
                 if inc_layer == file_layer:
                     continue  # same-layer include always allowed
