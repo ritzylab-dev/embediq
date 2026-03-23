@@ -33,37 +33,156 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 
 ---
 
-## Shell Model
+## Layer Model
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  SHELL 4 — COMMERCIAL                                               │
+│  LAYER 4 — COMMERCIAL                                               │
 │  EmbedIQ Studio  ·  EmbedIQ Cloud  ·  MCP Server                   │
 ├─────────────────────────────────────────────────────────────────────┤
-│  SHELL 3 — ECOSYSTEM                                                │
+│  LAYER 3 — ECOSYSTEM                                                │
 │  Bridge daemon  ·  bridge/websocket  ·  bridge/unix_socket          │
 │  Registry  ·  Community BSPs  ·  3rd-party FB wrappers              │
+│  External FBs (Python · Node.js · Java · any language)             │
 ├─────────────────────────────────────────────────────────────────────┤
-│  SHELL 2 — PLATFORM COMPONENTS               (all Apache 2.0)       │
-│  fb_uart  ·  fb_i2c  ·  fb_spi  ·  fb_timer  ·  fb_gpio             │
-│  fb_cloud_mqtt  ·  fb_ota  ·  fb_telemetry  ·  fb_logger            │
-│  fb_nvm  ·  fb_watchdog                                             │
+│  LAYER 2 — DRIVER FBs + SERVICE FBs          (all Apache 2.0)      │
+│  Driver FBs:   fb_uart · fb_gpio · fb_spi · fb_i2c                 │
+│                fb_timer · fb_nvm · fb_watchdog                      │
+│  Service FBs:  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger   │
 ├─────────────────────────────────────────────────────────────────────┤
-│  SHELL 1 — FRAMEWORK ENGINE                  (all Apache 2.0)       │
-│  FB Registry  ·  Endpoint Router  ·  Message Bus (3-queue)          │
-│  Sub-fn Dispatcher  ·  Timer Manager  ·  FSM Engine                 │
-│  Observatory  ·  Test Runner [TEST BUILDS ONLY]                     │
+│  LAYER 1 — FRAMEWORK ENGINE                  (all Apache 2.0)      │
+│  FB Registry  ·  Endpoint Router  ·  Message Bus (3-queue)         │
+│  Sub-fn Dispatcher  ·  FSM Engine  ·  Observatory                  │
+│  Test Runner [TEST BUILDS ONLY]                                     │
 ├─────────────────────────────────────────────────────────────────────┤
-│  CORE — CONTRACTS  (header-only · stable · never change post-v1)    │
-│  embediq_fb.h  ·  embediq_subfn.h  ·  embediq_bus.h                 │
-│  embediq_msg.h  ·  embediq_sm.h  ·  embediq_obs.h  ·  embediq_osal.h│
-│  embediq_time.h  ·  embediq_bridge.h  ·  embediq_meta.h             │
-│  embediq_endpoint.h  ·  embediq_msg_catalog.h  ·  hal/              │
+│  CONTRACTS  (core/include/ — header-only · frozen post-v1)         │
+│  embediq_fb.h  ·  embediq_subfn.h  ·  embediq_bus.h                │
+│  embediq_msg.h  ·  embediq_sm.h  ·  embediq_obs.h                  │
+│  embediq_osal.h  ·  embediq_time.h  ·  embediq_bridge.h            │
+│  embediq_meta.h  ·  embediq_endpoint.h  ·  embediq_msg_catalog.h   │
+│  embediq_nvm.h  ·  embediq_timer.h  ·  embediq_wdg.h               │
+│  embediq_ota.h  ·  embediq_mqtt.h                                  │
+│  hal/ (HAL contract headers — see HAL section below)               │
+├─────────────────────────────────────────────────────────────────────┤
+│  HAL — Hardware Abstraction Layer                                   │
+│  Contracts: core/include/hal/  (hal_uart.h · hal_gpio.h · etc.)    │
+│  Implementations: hal/posix/ · hal/esp32/ · hal/stm32/             │
+├─────────────────────────────────────────────────────────────────────┤
+│  OSAL — OS Abstraction Layer                                        │
+│  Contract: core/include/embediq_osal.h                             │
+│  Implementations: osal/posix/ · osal/freertos/ · osal/zephyr/      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  SUBSTRATE                                                          │
-│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr (Phase 2)  ·  bare-metal    │
+│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr  ·  bare-metal MCU         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+**Layer dependency rule:** Each layer may only depend on the layer directly below it.
+Layer 2 may call Layer 1 APIs. Layer 2 must NOT call Core internals or skip Layer 1.
+Agents: never add an include that skips a layer.
+
+---
+
+## Layer Definitions
+
+### Driver FB vs Service FB (both are Layer 2)
+
+**Driver FB** — wraps a hardware peripheral into the EmbedIQ message model.
+- Calls HAL contract (`core/include/hal/`) for hardware access
+- Calls OSAL for threading and ISR wakeup
+- One portable source file (`fbs/drivers/fb_uart.c`) — target differences are handled
+  entirely inside the HAL implementation
+- Examples: `fb_uart`, `fb_gpio`, `fb_timer`, `fb_nvm`, `fb_watchdog`
+
+**Service FB** — platform-agnostic reusable service.
+- Does NOT call HAL directly
+- Calls an ops table (`embediq_ota_ops_t`, `embediq_mqtt_ops_t`) that is registered
+  by the platform at boot — this is its hardware abstraction
+- One source file runs on all targets unchanged
+- Examples: `fb_cloud_mqtt`, `fb_ota`, `fb_telemetry`, `fb_logger`
+
+**Rule:** If an FB directly accesses hardware or OS-provided device drivers, it is a
+Driver FB. If it accesses hardware only through an ops table, it is a Service FB.
+
+### HAL — Hardware Abstraction Layer
+
+HAL sits just above hardware. It provides thin C functions that abstract raw MCU
+peripheral access. No FBs. No messages. No RTOS calls.
+
+```c
+hal_gpio_set(pin, value);
+hal_uart_write(port, buf, len);
+hal_flash_erase(addr, size);
+```
+
+HAL contracts live in `core/include/hal/`. Implementations live in:
+- `hal/posix/` — POSIX (file I/O, termios, `clock_gettime`)
+- `hal/esp32/` — ESP-IDF peripheral APIs
+- `hal/stm32/` — STM32Cube HAL (Phase 3+)
+
+Driver FBs call HAL. HAL implementations call vendor BSP or OS APIs.
+Vendor BSPs (ESP-IDF, STM32Cube, NRF SDK) are not owned by EmbedIQ.
+
+### OSAL — OS Abstraction Layer
+
+OSAL abstracts the operating system — threads, queues, semaphores, mutexes, signals.
+It does NOT abstract hardware peripherals (that is HAL).
+Contract: `core/include/embediq_osal.h`.
+
+### Native FB vs External FB
+
+**Native FB** — written in C, running inside the EmbedIQ runtime. All FBs in this
+document are Native FBs unless stated otherwise.
+
+**External FB** — running outside the EmbedIQ runtime as a separate process (Python,
+Node.js, Java, any language). Communicates via the Bridge interface (Layer 3). Appears
+as a named endpoint on the bus. External FBs boot in Phase 4 — BRIDGE.
+
+**Rule:** `FB` alone means Native FB. `External FB` is always written in full.
+
+---
+
+## Contract Ownership Table
+
+ALL contracts live in `core/include/`. A contract lives with the interface it defines,
+not with the layer that implements it.
+
+| Contract file            | Defines interface for       | Consumed by            |
+|--------------------------|-----------------------------|------------------------|
+| `embediq_fb.h`           | FB registration + lifecycle | All layers             |
+| `embediq_bus.h`          | Message publish/receive     | All layers             |
+| `embediq_endpoint.h`     | Endpoint registration       | Layer 1, Layer 3       |
+| `embediq_osal.h`         | OS primitives               | Layer 1, Layer 2       |
+| `embediq_obs.h`          | Observatory events          | All layers             |
+| `embediq_sm.h`           | FSM table contract          | Layer 2 (Driver FBs)   |
+| `embediq_time.h`         | Monotonic + wall clock      | All layers             |
+| `embediq_nvm.h`          | NVM key-value store         | Layer 2+, Application  |
+| `embediq_timer.h`        | Timer tick messages         | Layer 2+, Application  |
+| `embediq_wdg.h`          | Watchdog checkin            | Layer 2+, Application  |
+| `embediq_ota.h`          | OTA ops table + FSM         | Layer 2 Service FB     |
+| `embediq_mqtt.h`         | MQTT ops table + FSM        | Layer 2 Service FB     |
+| `embediq_meta.h`         | FB metadata                 | Layer 3 Registry       |
+| `embediq_bridge.h`       | External FB bridge          | Layer 3                |
+| `embediq_endpoint.h`     | Endpoint Router contract    | Layer 1, Layer 3       |
+| `core/include/hal/*.h`   | HAL peripheral access       | Layer 2 Driver FBs     |
+
+---
+
+## Layer Boundary Rules
+
+Enforced by `tools/boundary_checker.py` in CI. Violations = CI failure.
+
+| Source location     | May include                                          | Must NOT include                               |
+|---------------------|------------------------------------------------------|------------------------------------------------|
+| `core/src/`         | `core/include/`, system headers                      | `hal/`, `osal/`, `platform/`, `fbs/`           |
+| `osal/posix/`       | `core/include/`, system + OS headers                 | `hal/`, `fbs/`, `examples/`                    |
+| `osal/freertos/`    | `core/include/`, FreeRTOS headers                    | `hal/`, `fbs/`, `examples/`                    |
+| `hal/posix/`        | `core/include/hal/`, system + OS headers             | `osal/`, `core/src/`, `fbs/`                   |
+| `hal/esp32/`        | `core/include/hal/`, ESP-IDF headers                 | `osal/`, `core/src/`, `fbs/`                   |
+| `fbs/drivers/`      | `core/include/` (incl. `hal/`), C stdlib             | `hal/` impl paths, vendor BSP, `examples/`     |
+| `fbs/services/`     | `core/include/` (excl. `hal/`), C stdlib             | `core/include/hal/`, `hal/`, `osal/` impl      |
+| `examples/`         | `core/include/`, `fbs/drivers/`, `fbs/services/`     | `hal/` impl headers, `osal/` impl              |
+| `tests/`            | `core/include/`, `examples/`, `fbs/` contracts       | `hal/` impl, `osal/` impl                      |
 
 ---
 
@@ -81,14 +200,6 @@ The FB is the unit of everything. Every concern in your firmware is one FB.
 | Observable by default | All lifecycle, bus messages, FSM transitions auto-captured. Zero developer code. |
 | Testable by design | Message-only cross-FB interface: inject messages, assert on output. No hardware required. |
 | Composed of sub-functions | Internal structure from sub-functions, each with subscriptions and optional FSM. |
-
-### Native FB vs External FB
-
-**Native FB** — written in C/C++, running inside the EmbedIQ runtime. All FBs in this document are Native FBs unless stated otherwise.
-
-**External FB** — running outside the EmbedIQ runtime as a separate process (Python, Node.js, Java, any language). Communicates via the Bridge interface. Appears as a named endpoint on the bus.
-
-Rule: `FB` alone means Native FB. `External FB` is always written in full.
 
 ---
 
@@ -257,7 +368,7 @@ INTERRUPT ZONE   (< 10 CPU cycles — ring buffer write + osal_signal_from_isr o
 
   ─────────────── OSAL signal crosses the boundary ───────────────
 
-THREAD ZONE      (Platform FB thread — full framework access)
+THREAD ZONE      (Driver FB thread — full framework access)
 
   byte_collector sub-fn wakes → drain ring buffer → assemble frame
   → embediq_publish(MSG_UART_FRAME_RX)
@@ -316,8 +427,8 @@ MESSAGING:   Variable-length payload. v1 = fixed EMBEDIQ_MSG_MAX_PAYLOAD (64 byt
 BRIDGE:      Authenticated connections. v1 = no auth.
 BRIDGE:      Reliable delivery. v1 = at-most-once.
 OSAL:        Zephyr OSAL. v1 = FreeRTOS + Pi/Linux POSIX.
-BSP:         STM32/nRF52 bare-metal. v1 = Pi/Linux + FreeRTOS host only.
-PLATFORM:    fb_i2c, fb_spi, fb_usb. v1 = fb_uart, fb_timer, fb_watchdog, fb_nvm.
+HAL:         hal/stm32/, hal/nrf52/ implementations. v1 = hal/posix/ + hal/esp32/ only.
+DRIVER FBs:  fb_i2c, fb_spi, fb_usb. v1 = fb_timer, fb_nvm, fb_watchdog, fb_uart.
 COMMERCIAL:  Studio GUI, Cloud, AI Coder. v1 = framework + Observatory CLI + Test Runner.
 ```
 
@@ -385,17 +496,18 @@ Verify every item before emitting any EmbedIQ code.
 | R-sub-02 | `embediq_publish(fb, &msg)` for cross-FB | `other_fb_do_thing()` — direct call, violates R-01 |
 | R-sub-03 | `embediq_fb_register(&config)` | `xTaskCreate(...)` in application FB — no RTOS calls in app layer |
 | R-sub-04 | `uint32_t delta = b.sequence - a.sequence` | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap |
-| R-sub-05 | `EmbedIQ_Msg_t msg = {.msg_id=X}` (stack) | `malloc(sizeof(EmbedIQ_Msg_t))` — no malloc in Shell 1 |
+| R-sub-05 | `EmbedIQ_Msg_t msg = {.msg_id=X}` (stack) | `malloc(sizeof(EmbedIQ_Msg_t))` — no malloc in Layer 1 |
 | R-sub-06 | Add fields at END only, increment schema_id | Remove/rename/reorder existing fields — breaks Observatory |
 | R-sub-07 | `report_fault()` when FB cannot continue | `report_fault()` for a timeout that should be retried |
 | R-sub-08 | Call all `subfn_register()` first, then return | Call `init_fn()` manually before registration completes |
 | R-sub-09 | `"fb.subfn"` dotted syntax in test files only | `embediq_bus_send(fb, "fb.subfn", &msg)` in production code |
 | R-sub-10 | Opaque types in Core: `typedef struct EmbedIQ_Task_s EmbedIQ_Task_t` | `#include "freertos/FreeRTOS.h"` in Core header |
-| R-sub-11 | `osal_signal` only in Platform FB sub-functions | `osal_signal` in application FB sub-function |
+| R-sub-11 | `osal_signal` only in Driver FB sub-functions | `osal_signal` in application FB sub-function |
 | R-sub-12 | See Non-Goals list | Worker pool, message pool, bridge auth, runtime subscriptions |
 | R-sub-13 | Message ID in correct namespace range | Community FB ID outside 5120–65535 without registry reservation |
 | R-sub-14 | `boot_phase` declared in every FB config | Missing boot_phase — will default to APPLICATION silently |
 | R-sub-15 | `sequence` for ordering, not `timestamp_us` | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap |
+| R-sub-16 | Driver FB calls `hal/*.h` only for hardware access | Driver FB calls `esp_uart_write()` or `HAL_UART_Transmit()` directly — bypasses HAL contract |
 
 ---
 

@@ -16,7 +16,7 @@
  * Note: tests 1 and 2 involve real time (≈ 1 second each).
  *
  * Run:      ./build/tests/unit/test_fb_timer
- * Expected: "All 4 tests passed. (0 failed)"
+ * Expected: "All 10 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -27,6 +27,7 @@
 #include "embediq_fb.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
+#include "hal/hal_timer.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -145,6 +146,90 @@ static void test_timer_no_publish_without_subscriber(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * HAL timer tests (Arch-4a)
+ * ------------------------------------------------------------------------- */
+
+static volatile int g_hal_cb_count = 0;
+
+static void hal_test_cb(void *ctx)
+{
+    (void)ctx;
+    g_hal_cb_count++;
+}
+
+/*
+ * test_hal_timer_init_null_cb_returns_invalid
+ * hal_timer_init with a NULL callback must return HAL_ERR_INVALID.
+ */
+static void test_hal_timer_init_null_cb_returns_invalid(void)
+{
+    int ret = hal_timer_init(1000u, NULL, NULL);
+    ASSERT(ret == HAL_ERR_INVALID,
+           "hal_timer_init(NULL cb) returns HAL_ERR_INVALID");
+}
+
+/*
+ * test_hal_timer_init_valid_returns_ok
+ * Valid parameters must return HAL_OK.
+ */
+static void test_hal_timer_init_valid_returns_ok(void)
+{
+    int ret = hal_timer_init(1000u, hal_test_cb, NULL);
+    ASSERT(ret == HAL_OK, "hal_timer_init valid returns HAL_OK");
+    hal_timer_deinit();
+}
+
+/*
+ * test_hal_timer_fires_callback
+ * 20 ms period, started for 90 ms → callback must fire >= 3 times.
+ */
+static void test_hal_timer_fires_callback(void)
+{
+    g_hal_cb_count = 0;
+    int ret = hal_timer_init(20000u, hal_test_cb, NULL);   /* 20 ms = 20 000 µs */
+    ASSERT(ret == HAL_OK, "hal_timer_fires_callback: init ok");
+    hal_timer_start();
+    embediq_osal_delay_ms(90u);
+    hal_timer_stop();
+    embediq_osal_delay_ms(25u);    /* drain any in-flight callback */
+    hal_timer_deinit();
+    ASSERT(g_hal_cb_count >= 3,
+           "HAL timer fires >= 3 times in 90 ms at 20 ms period");
+}
+
+/*
+ * test_hal_timer_stop_halts_callback
+ * After hal_timer_stop() the tick counter must not increase.
+ */
+static void test_hal_timer_stop_halts_callback(void)
+{
+    g_hal_cb_count = 0;
+    hal_timer_init(5000u, hal_test_cb, NULL);   /* 5 ms = 5 000 µs */
+    hal_timer_start();
+    embediq_osal_delay_ms(30u);
+    hal_timer_stop();
+    embediq_osal_delay_ms(20u);    /* drain any in-flight callback */
+    int count_after_stop = g_hal_cb_count;
+    embediq_osal_delay_ms(30u);    /* confirm count frozen */
+    hal_timer_deinit();
+    ASSERT(g_hal_cb_count == count_after_stop,
+           "hal_timer_stop halts callbacks");
+}
+
+/*
+ * test_hal_timer_deinit_allows_reinit
+ * After hal_timer_deinit(), a second hal_timer_init() must return HAL_OK.
+ */
+static void test_hal_timer_deinit_allows_reinit(void)
+{
+    hal_timer_init(1000u, hal_test_cb, NULL);
+    hal_timer_deinit();
+    int ret = hal_timer_init(1000u, hal_test_cb, NULL);
+    ASSERT(ret == HAL_OK, "hal_timer_deinit then reinit returns HAL_OK");
+    hal_timer_deinit();
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -153,6 +238,11 @@ int main(void)
     test_timer_1sec_fires_within_5_percent_of_1_second();
     test_timer_100ms_fires_10_times_in_1_second();
     test_timer_no_publish_without_subscriber();
+    test_hal_timer_init_null_cb_returns_invalid();
+    test_hal_timer_init_valid_returns_ok();
+    test_hal_timer_fires_callback();
+    test_hal_timer_stop_halts_callback();
+    test_hal_timer_deinit_allows_reinit();
 
     printf("\n");
     if (g_tests_failed == 0) {

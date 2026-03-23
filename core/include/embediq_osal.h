@@ -26,6 +26,14 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
+ * Error code type
+ * ------------------------------------------------------------------------- */
+
+typedef int32_t embediq_err_t;
+#define EMBEDIQ_OK   ((embediq_err_t) 0)
+#define EMBEDIQ_ERR  ((embediq_err_t)-1)
+
+/* ---------------------------------------------------------------------------
  * Opaque OS primitive handles
  *
  * Callers hold pointers only. Struct definitions live in osal/<target>/.
@@ -48,6 +56,10 @@ typedef struct EmbedIQ_Mutex_s   EmbedIQ_Mutex_t;
 /** Opaque software timer handle. */
 typedef struct EmbedIQ_Timer_s   EmbedIQ_Timer_t;
 
+/** Opaque counting semaphore — used by the dispatch engine.
+ *  Not for application FBs. typedef to pointer so callers do not need '*'. */
+typedef struct EmbedIQ_Sem_s    *embediq_sem_t;
+
 /* ---------------------------------------------------------------------------
  * Task / thread API
  * ------------------------------------------------------------------------- */
@@ -60,6 +72,14 @@ EmbedIQ_Task_t *embediq_osal_task_create(const char *name,
 
 /** Delete a task created by embediq_osal_task_create(). */
 void embediq_osal_task_delete(EmbedIQ_Task_t *task);
+
+/**
+ * Wait for a task to exit naturally, then free its handle.
+ * Unlike task_delete(), this does NOT cancel the thread — it only joins.
+ * The task must have already exited or be on the verge of exiting.
+ * Used by embediq_engine_dispatch_shutdown() for clean teardown.
+ */
+void embediq_osal_task_join(EmbedIQ_Task_t *task);
 
 /** Block the calling task for at least ms milliseconds. */
 void embediq_osal_delay_ms(uint32_t ms);
@@ -113,6 +133,32 @@ bool embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
 
 /** Unlock a mutex held by the calling task. */
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
+
+/* ---------------------------------------------------------------------------
+ * Semaphore API — used internally by the dispatch engine
+ *
+ * Not for application FBs. embediq_sem_post_from_isr() is safe to call from
+ * an ISR or any thread context.
+ * ------------------------------------------------------------------------- */
+
+/** Create a counting semaphore with the given initial and maximum counts. */
+embediq_sem_t  embediq_sem_create(uint32_t initial_count, uint32_t max_count);
+
+/** Block until the semaphore count is > 0, then decrement and return. */
+embediq_err_t  embediq_sem_wait(embediq_sem_t sem);
+
+/** Non-blocking: return true and decrement if count > 0, else return false. */
+bool           embediq_sem_trywait(embediq_sem_t sem);
+
+/** Increment the semaphore count (unblocks one waiter). */
+embediq_err_t  embediq_sem_post(embediq_sem_t sem);
+
+/** Destroy a semaphore created by embediq_sem_create(). */
+void           embediq_sem_destroy(embediq_sem_t sem);
+
+/** Post from an ISR or timer context.
+ *  POSIX: same as sem_post. FreeRTOS: use xSemaphoreGiveFromISR. */
+embediq_err_t  embediq_sem_post_from_isr(embediq_sem_t sem);
 
 /* ---------------------------------------------------------------------------
  * Time API

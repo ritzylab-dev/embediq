@@ -93,25 +93,25 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 **Agent rule:** When generating an FB, always include boot_phase in the config. When writing fb_nvm, fb_watchdog, fb_cloud — use INFRASTRUCTURE. When writing application FBs — use APPLICATION. Never declare a Phase 2 FB with depends_on pointing to a Phase 3 FB.
 
 ---
-## 3. Shell Model — The Complete Layer Diagram
+## 3. Layer Model — The Complete Layer Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  SHELL 4 — COMMERCIAL (future)                                  │
+│  LAYER 4 — COMMERCIAL (future)                                  │
 │  EmbedIQ Studio · EmbedIQ Cloud · AI Coder                     │
 ├─────────────────────────────────────────────────────────────────┤
 │  CLIENT SDKs (future)                                           │
 │  embediq-python · embediq-js · embediq-rust                     │
 ├─────────────────────────────────────────────────────────────────┤
-│  SHELL 3 — ECOSYSTEM                                            │
+│  LAYER 3 — ECOSYSTEM                                            │
 │  Bridge daemon · bridge/websocket · bridge/unix_socket          │
-│  Community BSPs · 3rd-party FB wrappers                         │
+│  Community Driver FBs · 3rd-party FB wrappers                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  SHELL 2 — PLATFORM COMPONENTS                                  │
+│  LAYER 2 — DRIVER FBs + SERVICE FBs                             │
 │  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_logger         │
 │  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_nvm                 │
 ├─────────────────────────────────────────────────────────────────┤
-│  SHELL 1 — FRAMEWORK ENGINE                                     │
+│  LAYER 1 — FRAMEWORK ENGINE                                     │
 │  FB Registry · Endpoint Router · Message Bus (3-queue)          │
 │  Sub-fn Dispatcher · Timer Manager · FSM Engine                 │
 │  Observatory · Test Runner [TEST BUILDS ONLY]                   │
@@ -122,13 +122,17 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 │  embediq_bridge.h · embediq_meta.h · embediq_endpoint.h         │
 │  embediq_msg_catalog.h · hal/embediq_hal_*.h (×6)               │
 ├─────────────────────────────────────────────────────────────────┤
+│  HAL  ←  hal/posix/ · hal/esp32/ · hal/stm32/                  │
+├─────────────────────────────────────────────────────────────────┤
+│  OSAL  ←  osal/posix/ · osal/freertos/ · osal/zephyr/          │
+├─────────────────────────────────────────────────────────────────┤
 │  SUBSTRATE                                                      │
 │  FreeRTOS · Zephyr (Phase 2) · bare-metal (Phase 2) · host/Linux│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Layer dependency rule:** Each layer may only depend on the layer directly below it.
-Shell 2 may call Shell 1 APIs. Shell 2 must NOT call Core internals or skip Shell 1.
+Layer 2 may call Layer 1 APIs. Layer 2 must NOT call Core internals or skip Layer 1.
 Agents: never add an include that skips a layer.
 
 ---
@@ -192,7 +196,45 @@ embediq-core/
 
 ---
 
-## 5. File Placement Rules — Where Every File Lives
+## 5. Git Branch Workflow — Mandatory First Step
+
+Every task starts with these exact commands — no exceptions:
+
+  git checkout dev
+  git pull origin dev
+  git checkout -b feature/<branch-name-here>
+
+Rules:
+- Always branch from dev, never from main or wherever HEAD happens to be.
+- Always git pull before branching — never branch from a stale dev.
+- Branch naming: feature/p2-t0-description, fix/issue-description, cleanup/what-changed
+- PR target is always dev. Never open a PR directly to main.
+- main is only ever updated via a dev→main PR at milestone boundaries.
+
+If you are about to run git checkout -b without first running
+git checkout dev && git pull origin dev — STOP. Do those two commands first.
+
+```
+GATE 12 — Contract before implementation (Principle 2 enforced at task level):
+  Before any implementation task starts, the module's contract header
+  must exist in core/include/.
+
+  Check: does core/include/embediq_<module>.h exist?
+    YES → proceed with implementation.
+    NO  → create the contract header FIRST. No exceptions.
+
+  This applies to every FB, every platform module, every service.
+  The contract header must contain declarations only — zero implementation.
+  It must compile standalone: gcc -x c -std=c11 -Icore/include -fsyntax-only
+
+  Rationale: Principle 2 ("Everything has a contract") is not retroactive.
+  Writing an implementation before its contract exists creates an architectural
+  debt that is expensive to fix after the fact.
+```
+
+---
+
+## 6. File Placement Rules — Where Every File Lives
 
 This table is binding. When implementing any module, use EXACTLY these paths.
 Never place .c files flat in core/src/ — they belong in their subdirectory.
@@ -208,6 +250,9 @@ Never place .c files flat in core/src/ — they belong in their subdirectory.
 | OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
 | Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
 | Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
+| Driver FBs (portable) | fbs/drivers/fb_<name>.c — calls hal/*.h, no platform code |
+| Service FBs (portable) | fbs/services/fb_<name>.c — no hal/ includes permitted    |
+| HAL implementations | hal/<target>/hal_<peripheral>.c               |
 | Components          | components/<fb_name>/<fb_name>.c              |
 | Unit tests          | tests/unit/test_<module>.c                    |
 
@@ -216,7 +261,26 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ---
 
-## 6. Current Build Status
+## 7. FB Lifecycle Contract — OTA and Clean Shutdown
+
+Any FB that owns persistent state or has in-flight work that must
+complete before a firmware update must follow this contract:
+
+REQUIRED:
+- Subscribe to MSG_SYS_OTA_REQUEST (ID 0x0003)
+- On receipt: finish in-flight work, flush NVM state, then publish
+  MSG_SYS_OTA_READY (ID 0x0004)
+- Must publish MSG_SYS_OTA_READY within 500ms or engine forces shutdown
+
+OPTIONAL (FBs with no persistent state):
+- No subscription required — engine handles shutdown via timeout
+
+This contract is enforced by fb_ota (Phase 2 P2-T5).
+See docs/architecture/lifecycle.md for full protocol description.
+
+---
+
+## 8. Current Build Status
 
 > **Last updated:** Phase 1 complete (March 2026)
 > This table is updated at milestone boundaries only.
@@ -243,7 +307,7 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ---
 
-## 7. What v1 Will NOT Build (Non-Goals)
+## 9. What v1 Will NOT Build (Non-Goals)
 
 Agents: **do not generate code for any item on this list for v1.**
 These are named future work, not omissions. If you think something is missing,
@@ -272,7 +336,7 @@ TIMESTAMP:   64-bit timestamps on MCU. v1 = uint32_t microseconds, modulo 2³².
 
 ---
 
-## 8. Truth Hierarchy — Which File Wins Conflicts
+## 10. Truth Hierarchy — Which File Wins Conflicts
 
 When you see a conflict between documents, this order decides:
 
@@ -289,7 +353,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 9. Build System & Key Decisions
+## 11. Build System & Key Decisions
 
 | Decision | Choice | Do Not Change |
 |----------|--------|---------------|
@@ -305,7 +369,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 10. Where to Go Next
+## 12. Where to Go Next
 
 | What you need | Where to find it |
 |---------------|-----------------|
@@ -322,7 +386,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 11. The Developer First Hour Test
+## 13. The Developer First Hour Test
 
 Before any Phase 1 launch, this test must pass with 3 engineers
 who have never seen EmbedIQ before:

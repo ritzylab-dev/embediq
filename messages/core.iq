@@ -34,6 +34,26 @@ message MSG_FB_FAULT id=0x0002 {
     _reserved  : u8
 }
 
+// Broadcast by fb_ota to all FBs when a firmware update is imminent.
+// Recipient FBs with persistent state must flush and reply with MSG_SYS_OTA_READY
+// within 500 ms. FBs with no persistent state do not need to subscribe.
+// See docs/architecture/lifecycle.md for the full protocol.
+message MSG_SYS_OTA_REQUEST id=0x0003 {
+    reason : u8
+}
+
+// Published by each FB to fb_ota when its state is flushed and it is safe
+// for the system to proceed with the OTA update.
+message MSG_SYS_OTA_READY id=0x0004 {
+    fb_id : u8
+}
+
+// Broadcast by fb_ota after all OTA_READY messages received (or 500 ms timeout).
+// Receipt signals that dispatch threads will be joined and the bootloader invoked.
+message MSG_SYS_SHUTDOWN id=0x0005 {
+    reason : u8
+}
+
 // --- Timer ------------------------------------------------------------------
 
 // Emitted by fb_timer on every scheduler tick.

@@ -129,10 +129,16 @@ add_executable(test_fb_timer test_fb_timer.c)
 
 target_include_directories(test_fb_timer PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
     ${CMAKE_SOURCE_DIR}/platform/posix
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
-target_link_libraries(test_fb_timer PRIVATE embediq_platform_posix)
+target_link_libraries(test_fb_timer PRIVATE
+    embediq_platform_posix
+    embediq_driver_fbs
+    embediq_hal_posix
+)
 
 target_compile_options(test_fb_timer PRIVATE
     -Wall
@@ -141,6 +147,46 @@ target_compile_options(test_fb_timer PRIVATE
 )
 
 add_test(NAME unit_fb_timer COMMAND test_fb_timer)
+
+# ---------------------------------------------------------------------------
+# Blocking dispatch unit tests (P2-T0)
+# ---------------------------------------------------------------------------
+
+add_executable(test_blocking_dispatch test_blocking_dispatch.c)
+
+target_include_directories(test_blocking_dispatch PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_blocking_dispatch PRIVATE embediq_fb_engine)
+
+target_compile_options(test_blocking_dispatch PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_blocking_dispatch COMMAND test_blocking_dispatch)
+
+# ---------------------------------------------------------------------------
+# Dispatch shutdown unit tests (P2-T0b)
+# ---------------------------------------------------------------------------
+
+add_executable(test_dispatch_shutdown test_dispatch_shutdown.c)
+
+target_include_directories(test_dispatch_shutdown PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_dispatch_shutdown PRIVATE embediq_fb_engine)
+
+target_compile_options(test_dispatch_shutdown PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_dispatch_shutdown COMMAND test_dispatch_shutdown)
 
 # ---------------------------------------------------------------------------
 # NVM FB unit tests (P1-T6)
@@ -162,3 +208,23 @@ target_compile_options(test_fb_nvm PRIVATE
 )
 
 add_test(NAME unit_fb_nvm COMMAND test_fb_nvm)
+
+# ---------------------------------------------------------------------------
+# HAL contract headers + Endpoint Router compile-and-value tests (Arch-2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_hal_contracts test_hal_contracts.c)
+
+target_include_directories(test_hal_contracts PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_hal_contracts PRIVATE embediq_fb_engine)
+
+target_compile_options(test_hal_contracts PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_hal_contracts COMMAND test_hal_contracts)

@@ -74,6 +74,13 @@ struct EmbedIQ_Mutex_s {
     pthread_mutex_t mutex;
 };
 
+struct EmbedIQ_Sem_s {
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    uint32_t        count;
+    uint32_t        max_count;
+};
+
 /* Phase 1: no timer API functions declared in embediq_osal.h.
  * Struct defined here to satisfy the forward declaration. */
 struct EmbedIQ_Timer_s {
@@ -155,6 +162,13 @@ void embediq_osal_task_delete(EmbedIQ_Task_t *task)
 {
     if (!task) return;
     pthread_cancel(task->thread);
+    pthread_join(task->thread, NULL);
+    free(task);
+}
+
+void embediq_osal_task_join(EmbedIQ_Task_t *task)
+{
+    if (!task) return;
     pthread_join(task->thread, NULL);
     free(task);
 }
@@ -361,6 +375,76 @@ bool embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)
 {
     pthread_mutex_unlock(&m->mutex);
+}
+
+/* ---------------------------------------------------------------------------
+ * Semaphore API — counting semaphore via mutex + condvar
+ *
+ * embediq_sem_post_from_isr maps to the same implementation as
+ * embediq_sem_post on POSIX (no hardware ISRs on host).
+ * On FreeRTOS this call site maps to xSemaphoreGiveFromISR.
+ * ------------------------------------------------------------------------- */
+
+embediq_sem_t embediq_sem_create(uint32_t initial_count, uint32_t max_count)
+{
+    struct EmbedIQ_Sem_s *s = malloc(sizeof(struct EmbedIQ_Sem_s));
+    if (!s) return NULL;
+    pthread_mutex_init(&s->mutex, NULL);
+    pthread_cond_init (&s->cond,  NULL);
+    s->count     = initial_count;
+    s->max_count = (max_count == 0u) ? UINT32_MAX : max_count;
+    return s;
+}
+
+embediq_err_t embediq_sem_wait(embediq_sem_t sem)
+{
+    if (!sem) return EMBEDIQ_ERR;
+    pthread_mutex_lock(&sem->mutex);
+    while (sem->count == 0u) {
+        pthread_cond_wait(&sem->cond, &sem->mutex);
+    }
+    sem->count--;
+    pthread_mutex_unlock(&sem->mutex);
+    return EMBEDIQ_OK;
+}
+
+bool embediq_sem_trywait(embediq_sem_t sem)
+{
+    if (!sem) return false;
+    pthread_mutex_lock(&sem->mutex);
+    if (sem->count == 0u) {
+        pthread_mutex_unlock(&sem->mutex);
+        return false;
+    }
+    sem->count--;
+    pthread_mutex_unlock(&sem->mutex);
+    return true;
+}
+
+embediq_err_t embediq_sem_post(embediq_sem_t sem)
+{
+    if (!sem) return EMBEDIQ_ERR;
+    pthread_mutex_lock(&sem->mutex);
+    if (sem->count < sem->max_count) {
+        sem->count++;
+        pthread_cond_signal(&sem->cond);
+    }
+    pthread_mutex_unlock(&sem->mutex);
+    return EMBEDIQ_OK;
+}
+
+void embediq_sem_destroy(embediq_sem_t sem)
+{
+    if (!sem) return;
+    pthread_mutex_destroy(&sem->mutex);
+    pthread_cond_destroy (&sem->cond);
+    free(sem);
+}
+
+embediq_err_t embediq_sem_post_from_isr(embediq_sem_t sem)
+{
+    /* POSIX: same as sem_post. FreeRTOS: use xSemaphoreGiveFromISR */
+    return embediq_sem_post(sem);
 }
 
 /* ---------------------------------------------------------------------------
