@@ -202,3 +202,23 @@ target_compile_options(test_fb_nvm PRIVATE
 )
 
 add_test(NAME unit_fb_nvm COMMAND test_fb_nvm)
+
+# ---------------------------------------------------------------------------
+# HAL contract headers + Endpoint Router compile-and-value tests (Arch-2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_hal_contracts test_hal_contracts.c)
+
+target_include_directories(test_hal_contracts PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_hal_contracts PRIVATE embediq_fb_engine)
+
+target_compile_options(test_hal_contracts PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_hal_contracts COMMAND test_hal_contracts)
