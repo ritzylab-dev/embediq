@@ -236,7 +236,26 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ---
 
-## 7. Current Build Status
+## 7. FB Lifecycle Contract — OTA and Clean Shutdown
+
+Any FB that owns persistent state or has in-flight work that must
+complete before a firmware update must follow this contract:
+
+REQUIRED:
+- Subscribe to MSG_SYS_OTA_REQUEST (ID 0x0003)
+- On receipt: finish in-flight work, flush NVM state, then publish
+  MSG_SYS_OTA_READY (ID 0x0004)
+- Must publish MSG_SYS_OTA_READY within 500ms or engine forces shutdown
+
+OPTIONAL (FBs with no persistent state):
+- No subscription required — engine handles shutdown via timeout
+
+This contract is enforced by fb_ota (Phase 2 P2-T5).
+See docs/architecture/lifecycle.md for full protocol description.
+
+---
+
+## 8. Current Build Status
 
 > **Last updated:** Phase 1 complete (March 2026)
 > This table is updated at milestone boundaries only.
@@ -263,7 +282,7 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ---
 
-## 8. What v1 Will NOT Build (Non-Goals)
+## 9. What v1 Will NOT Build (Non-Goals)
 
 Agents: **do not generate code for any item on this list for v1.**
 These are named future work, not omissions. If you think something is missing,
@@ -292,7 +311,7 @@ TIMESTAMP:   64-bit timestamps on MCU. v1 = uint32_t microseconds, modulo 2³².
 
 ---
 
-## 9. Truth Hierarchy — Which File Wins Conflicts
+## 10. Truth Hierarchy — Which File Wins Conflicts
 
 When you see a conflict between documents, this order decides:
 
@@ -309,7 +328,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 10. Build System & Key Decisions
+## 11. Build System & Key Decisions
 
 | Decision | Choice | Do Not Change |
 |----------|--------|---------------|
@@ -325,7 +344,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 11. Where to Go Next
+## 12. Where to Go Next
 
 | What you need | Where to find it |
 |---------------|-----------------|
@@ -342,7 +361,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 12. The Developer First Hour Test
+## 13. The Developer First Hour Test
 
 Before any Phase 1 launch, this test must pass with 3 engineers
 who have never seen EmbedIQ before:
