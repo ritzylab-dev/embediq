@@ -93,25 +93,25 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 **Agent rule:** When generating an FB, always include boot_phase in the config. When writing fb_nvm, fb_watchdog, fb_cloud — use INFRASTRUCTURE. When writing application FBs — use APPLICATION. Never declare a Phase 2 FB with depends_on pointing to a Phase 3 FB.
 
 ---
-## 3. Shell Model — The Complete Layer Diagram
+## 3. Layer Model — The Complete Layer Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  SHELL 4 — COMMERCIAL (future)                                  │
+│  LAYER 4 — COMMERCIAL (future)                                  │
 │  EmbedIQ Studio · EmbedIQ Cloud · AI Coder                     │
 ├─────────────────────────────────────────────────────────────────┤
 │  CLIENT SDKs (future)                                           │
 │  embediq-python · embediq-js · embediq-rust                     │
 ├─────────────────────────────────────────────────────────────────┤
-│  SHELL 3 — ECOSYSTEM                                            │
+│  LAYER 3 — ECOSYSTEM                                            │
 │  Bridge daemon · bridge/websocket · bridge/unix_socket          │
-│  Community BSPs · 3rd-party FB wrappers                         │
+│  Community Driver FBs · 3rd-party FB wrappers                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  SHELL 2 — PLATFORM COMPONENTS                                  │
+│  LAYER 2 — DRIVER FBs + SERVICE FBs                             │
 │  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_logger         │
 │  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_nvm                 │
 ├─────────────────────────────────────────────────────────────────┤
-│  SHELL 1 — FRAMEWORK ENGINE                                     │
+│  LAYER 1 — FRAMEWORK ENGINE                                     │
 │  FB Registry · Endpoint Router · Message Bus (3-queue)          │
 │  Sub-fn Dispatcher · Timer Manager · FSM Engine                 │
 │  Observatory · Test Runner [TEST BUILDS ONLY]                   │
@@ -122,13 +122,17 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 │  embediq_bridge.h · embediq_meta.h · embediq_endpoint.h         │
 │  embediq_msg_catalog.h · hal/embediq_hal_*.h (×6)               │
 ├─────────────────────────────────────────────────────────────────┤
+│  HAL  ←  hal/posix/ · hal/esp32/ · hal/stm32/                  │
+├─────────────────────────────────────────────────────────────────┤
+│  OSAL  ←  osal/posix/ · osal/freertos/ · osal/zephyr/          │
+├─────────────────────────────────────────────────────────────────┤
 │  SUBSTRATE                                                      │
 │  FreeRTOS · Zephyr (Phase 2) · bare-metal (Phase 2) · host/Linux│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 **Layer dependency rule:** Each layer may only depend on the layer directly below it.
-Shell 2 may call Shell 1 APIs. Shell 2 must NOT call Core internals or skip Shell 1.
+Layer 2 may call Layer 1 APIs. Layer 2 must NOT call Core internals or skip Layer 1.
 Agents: never add an include that skips a layer.
 
 ---
@@ -246,6 +250,8 @@ Never place .c files flat in core/src/ — they belong in their subdirectory.
 | OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
 | Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
 | Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
+| Driver FBs (portable) | drivers/<fb_name>.c                         |
+| HAL implementations | hal/<target>/hal_<peripheral>.c               |
 | Components          | components/<fb_name>/<fb_name>.c              |
 | Unit tests          | tests/unit/test_<module>.c                    |
 
