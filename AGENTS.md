@@ -239,22 +239,22 @@ GATE 12 — Contract before implementation (Principle 2 enforced at task level):
 This table is binding. When implementing any module, use EXACTLY these paths.
 Never place .c files flat in core/src/ — they belong in their subdirectory.
 
-| Module              | File path                                     |
-|---------------------|-----------------------------------------------|
-| FB engine           | core/src/registry/fb_engine.c                 |
-| Message bus         | core/src/bus/message_bus.c                    |
-| FSM engine          | core/src/fsm/fsm_engine.c                     |
-| Dispatcher          | core/src/dispatcher/dispatcher.c              |
-| Observatory         | core/src/observatory/obs.c                    |
-| OSAL POSIX          | osal/posix/embediq_osal_posix.c               |
-| OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
-| Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
-| Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
-| Driver FBs (portable) | fbs/drivers/fb_<name>.c — calls hal/*.h, no platform code |
-| Service FBs (portable) | fbs/services/fb_<name>.c — no hal/ includes permitted    |
-| HAL implementations | hal/<target>/hal_<peripheral>.c               |
-| Components          | components/<fb_name>/<fb_name>.c              |
-| Unit tests          | tests/unit/test_<module>.c                    |
+| Module                 | File path                                                 |
+| ---------------------- | --------------------------------------------------------- |
+| FB engine              | core/src/registry/fb_engine.c                             |
+| Message bus            | core/src/bus/message_bus.c                                |
+| FSM engine             | core/src/fsm/fsm_engine.c                                 |
+| Dispatcher             | core/src/dispatcher/dispatcher.c                          |
+| Observatory            | core/src/observatory/obs.c                                |
+| OSAL POSIX             | osal/posix/embediq_osal_posix.c                           |
+| OSAL FreeRTOS          | osal/freertos/embediq_osal_freertos.c                     |
+| Platform POSIX FBs     | platform/posix/fb_<name>.c                                |
+| Platform ESP32 FBs     | platform/esp32/fb_<name>.c                                |
+| Driver FBs (portable)  | fbs/drivers/fb_<name>.c — calls hal/*.h, no platform code |
+| Service FBs (portable) | fbs/services/fb_<name>.c — no hal/ includes permitted     |
+| HAL implementations    | hal/<target>/hal_<peripheral>.c                           |
+| Components             | components/<fb_name>/<fb_name>.c                          |
+| Unit tests             | tests/unit/test_<module>.c                                |
 
 Rule: if you are about to create a .c file directly in core/src/ (not in a
 subdirectory), STOP — wrong location. Check this table first.
@@ -285,23 +285,23 @@ See docs/architecture/lifecycle.md for full protocol description.
 > **Last updated:** Phase 1 complete (March 2026)
 > This table is updated at milestone boundaries only.
 
-| Layer | Module | Status | Notes |
-|-------|--------|--------|-------|
-| Core | All 13 headers | STABLE | Contracts frozen. Never change. |
-| Core | messages.iq generator | STABLE | Python, zero deps. core.iq + thermostat.iq live. |
-| Core | embediq_config.h | STABLE | All sizing constants. Use named constants only. |
-| OSAL | posix (macOS + Linux + WSL) | STABLE | pthreads + POSIX. Phase 1 complete. |
-| OSAL | freertos | NOT_STARTED | Phase 2 |
-| Core / Engine | FB Registry + Dispatch | STABLE | embediq_engine_boot() + embediq_engine_dispatch_boot() |
-| Core / Engine | Message Bus | STABLE | 3-queue routing, overflow policy, observatory drops |
-| Core / Engine | FSM Engine | STABLE | Table-driven, guard/action, observatory events |
-| Core / Engine | Observatory | STABLE | Ring buffer, stdout transport, level 0/1/2 filtering |
-| Platform | fb_timer (posix) | STABLE | Drift-corrected, MSG_TIMER_1SEC/100MS/10MS/1MS |
-| Platform | fb_watchdog | STABLE | Health-token model, 100ms check interval |
-| Platform | fb_nvm | STABLE | Atomic JSON key-value store, ~/.embediq/ |
-| Platform | fb_cloud_mqtt | NOT_STARTED | Phase 2 |
-| Platform | fb_ota | NOT_STARTED | Phase 2 |
-| Examples | thermostat | STABLE | 5 FBs, FSM cycles, Observatory output, zero printf |
+| Layer         | Module                      | Status      | Notes                                                  |
+| ------------- | --------------------------- | ----------- | ------------------------------------------------------ |
+| Core          | All 13 headers              | STABLE      | Contracts frozen. Never change.                        |
+| Core          | messages.iq generator       | STABLE      | Python, zero deps. core.iq + thermostat.iq live.       |
+| Core          | embediq_config.h            | STABLE      | All sizing constants. Use named constants only.        |
+| OSAL          | posix (macOS + Linux + WSL) | STABLE      | pthreads + POSIX. Phase 1 complete.                    |
+| OSAL          | freertos                    | NOT_STARTED | Phase 2                                                |
+| Core / Engine | FB Registry + Dispatch      | STABLE      | embediq_engine_boot() + embediq_engine_dispatch_boot() |
+| Core / Engine | Message Bus                 | STABLE      | 3-queue routing, overflow policy, observatory drops    |
+| Core / Engine | FSM Engine                  | STABLE      | Table-driven, guard/action, observatory events         |
+| Core / Engine | Observatory                 | STABLE      | Ring buffer, stdout transport, level 0/1/2 filtering   |
+| Platform      | fb_timer (posix)            | STABLE      | Drift-corrected, MSG_TIMER_1SEC/100MS/10MS/1MS         |
+| Platform      | fb_watchdog                 | STABLE      | Health-token model, 100ms check interval               |
+| Platform      | fb_nvm                      | STABLE      | Atomic JSON key-value store, ~/.embediq/               |
+| Platform      | fb_cloud_mqtt               | NOT_STARTED | Phase 2                                                |
+| Platform      | fb_ota                      | NOT_STARTED | Phase 2                                                |
+| Examples      | thermostat                  | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf     |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
@@ -355,34 +355,34 @@ the Core header is correct. Update MODULE.md to match.
 
 ## 11. Build System & Key Decisions
 
-| Decision | Choice | Do Not Change |
-|----------|--------|---------------|
-| Build system | CMake | Yes — locked |
-| Core language | C11 | Yes — locked |
-| License | Apache 2.0 | Yes — locked |
-| v1 executor | Dedicated OS thread per FB | Yes — locked |
-| v1 message passing | Copy-by-value | Yes — locked |
-| v1 message priority | 3 queues per FB (HIGH/NORMAL/LOW) | Yes — locked |
-| messages.iq v0 | msg_id + name + payload_size + schema_id | Yes — locked |
-| Timestamp on MCU | uint32_t microseconds, wraps ~71 min | Yes — locked |
-| Core header freeze | After thermostat + Observatory + Test Runner pass on host | Pending |
+| Decision            | Choice                                                    | Do Not Change |
+| ------------------- | --------------------------------------------------------- | ------------- |
+| Build system        | CMake                                                     | Yes — locked  |
+| Core language       | C11                                                       | Yes — locked  |
+| License             | Apache 2.0                                                | Yes — locked  |
+| v1 executor         | Dedicated OS thread per FB                                | Yes — locked  |
+| v1 message passing  | Copy-by-value                                             | Yes — locked  |
+| v1 message priority | 3 queues per FB (HIGH/NORMAL/LOW)                         | Yes — locked  |
+| messages.iq v0      | msg_id + name + payload_size + schema_id                  | Yes — locked  |
+| Timestamp on MCU    | uint32_t microseconds, wraps ~71 min                      | Yes — locked  |
+| Core header freeze  | After thermostat + Observatory + Test Runner pass on host | Pending       |
 
 ---
 
 ## 12. Where to Go Next
 
-| What you need | Where to find it |
-|---------------|-----------------|
-| All coding rules + invariants + forbidden patterns | `CODING_RULES.md` |
-| Layer-specific API surface and status | `{layer}/LAYER.md` |
-| Module-specific contract, tests, dependencies | `{layer}/{module}/MODULE.md` |
-| Complete header contracts with examples | `core/include/*.h` |
-| Style reference for application FBs | `examples/thermostat/` |
-| Style reference for Platform FBs | `platform/posix/fb_uart/` |
-| How to add a new OSAL | `osal/OSAL_GUIDE.md` |
-| How to add a new Platform target | `platform/PLATFORM_GUIDE.md` |
-| How to contribute a new FB | `contrib/CONTRIB_GUIDE.md` |
-| Run invariant checks locally | `tools/check_invariants.sh` |
+| What you need                                      | Where to find it             |
+| -------------------------------------------------- | ---------------------------- |
+| All coding rules + invariants + forbidden patterns | `CODING_RULES.md`            |
+| Layer-specific API surface and status              | `{layer}/LAYER.md`           |
+| Module-specific contract, tests, dependencies      | `{layer}/{module}/MODULE.md` |
+| Complete header contracts with examples            | `core/include/*.h`           |
+| Style reference for application FBs                | `examples/thermostat/`       |
+| Style reference for Platform FBs                   | `platform/posix/fb_uart/`    |
+| How to add a new OSAL                              | `osal/OSAL_GUIDE.md`         |
+| How to add a new Platform target                   | `platform/PLATFORM_GUIDE.md` |
+| How to contribute a new FB                         | `contrib/CONTRIB_GUIDE.md`   |
+| Run invariant checks locally                       | `tools/check_invariants.sh`  |
 
 ---
 

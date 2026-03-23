@@ -22,11 +22,11 @@ Individual FBs declare readiness by publishing a message — no direct calls.
 
 ## Message IDs (core namespace 0x0000–0x03FF)
 
-| Message                | ID     | Direction              | Payload fields           |
-|------------------------|--------|------------------------|--------------------------|
-| `MSG_SYS_OTA_REQUEST`  | 0x0003 | fb_ota → all FBs       | `reason : u8`            |
-| `MSG_SYS_OTA_READY`    | 0x0004 | each FB → fb_ota       | `fb_id : u8`             |
-| `MSG_SYS_SHUTDOWN`     | 0x0005 | engine → all FBs       | `reason : u8`            |
+| Message               | ID     | Direction        | Payload fields |
+| --------------------- | ------ | ---------------- | -------------- |
+| `MSG_SYS_OTA_REQUEST` | 0x0003 | fb_ota → all FBs | `reason : u8`  |
+| `MSG_SYS_OTA_READY`   | 0x0004 | each FB → fb_ota | `fb_id : u8`   |
+| `MSG_SYS_SHUTDOWN`    | 0x0005 | engine → all FBs | `reason : u8`  |
 
 These IDs are reserved in the core namespace.  No other message may use them.
 See `messages/core.iq` for the normative schema definitions.
@@ -37,20 +37,20 @@ See `messages/core.iq` for the normative schema definitions.
 
 ```
   fb_ota              fb_nvm              fb_cloud             fb_logger
-    |                   |                    |                    |
-    |-- MSG_SYS_OTA_REQUEST (0x0003) ------->|-------------------->
-    |                   |                    |                    |
-    |          [flush NVM state]   [finish in-flight]    [drain ring buf]
-    |                   |                    |                    |
-    |<-- MSG_SYS_OTA_READY (0x0004) ---------|                    |
-    |                   |           MSG_SYS_OTA_READY (0x0004) -->|
-    |                   |                    |   MSG_SYS_OTA_READY (0x0004)
-    |                   |                    |                    |
-    | [all ready — or timeout 500 ms elapsed]
-    |
-    |-- MSG_SYS_SHUTDOWN (0x0005) ---------->|-------------------->
-    |
-    | [apply OTA image]
+| ---------------------------------------------------------- | ------------------------------ | -------------------------- |
+| -- MSG_SYS_OTA_REQUEST (0x0003) ------->                   | -------------------->          |                            |
+| ---------------------------------------------------------- | ------------------------------ | -------------------------- |
+| [flush NVM state]   [finish in-flight]    [drain ring buf] |                                |                            |
+| ---------------------------------------------------------- | ------------------------------ | -------------------------- |
+| <-- MSG_SYS_OTA_READY (0x0004) ---------                   |                                |                            |
+|                                                            | MSG_SYS_OTA_READY (0x0004) --> |                            |
+|                                                            |                                | MSG_SYS_OTA_READY (0x0004) |
+| ---------------------------------------------------------- | ------------------------------ | -------------------------- |
+| [all ready — or timeout 500 ms elapsed]                    |                                |                            |
+| ---------------------------------------------------------- | ------------------------------ | -------------------------- |
+| -- MSG_SYS_SHUTDOWN (0x0005) ---------->                   | -------------------->          |                            |
+| ---------------------------------------------------------- | ------------------------------ | -------------------------- |
+| [apply OTA image]                                          |                                |                            |
 ```
 
 ---
@@ -97,11 +97,11 @@ Adding an unnecessary OTA subscription is a code smell.
 
 ## Timeout and Force-Shutdown Rules
 
-| Condition                               | Action                                       |
-|-----------------------------------------|----------------------------------------------|
-| All subscribed FBs reply within 500 ms  | Clean shutdown, OTA proceeds                 |
-| Timeout expires, some FBs not ready     | Force shutdown; fb_ota logs which FBs missed |
-| FB publishes OTA_READY after timeout    | Message is ignored; already in shutdown      |
+| Condition                              | Action                                       |
+| -------------------------------------- | -------------------------------------------- |
+| All subscribed FBs reply within 500 ms | Clean shutdown, OTA proceeds                 |
+| Timeout expires, some FBs not ready    | Force shutdown; fb_ota logs which FBs missed |
+| FB publishes OTA_READY after timeout   | Message is ignored; already in shutdown      |
 
 ---
 
@@ -134,12 +134,12 @@ the engine's shutdown hook fires.
 
 ## Related Files
 
-| File                              | Purpose                                    |
-|-----------------------------------|--------------------------------------------|
-| `AGENTS.md §7`                    | Rule summary (binding)                     |
-| `messages/core.iq`                | Normative message schema                   |
-| `core/include/embediq_fb.h`       | `embediq_engine_dispatch_shutdown()` decl  |
-| `components/fb_ota/` (Phase 2)    | Coordinator FB implementation              |
+| File                           | Purpose                                   |
+| ------------------------------ | ----------------------------------------- |
+| `AGENTS.md §7`                 | Rule summary (binding)                    |
+| `messages/core.iq`             | Normative message schema                  |
+| `core/include/embediq_fb.h`    | `embediq_engine_dispatch_shutdown()` decl |
+| `components/fb_ota/` (Phase 2) | Coordinator FB implementation             |
 
 ---
 

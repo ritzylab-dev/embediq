@@ -10,22 +10,22 @@
 These 12 rules are enforced by CI on every PR.
 A PR that breaks any invariant will not merge. No exceptions.
 
-| ID | Invariant | CI Check |
-|----|-----------|----------|
-| I-01 | Core headers compile standalone — zero OSAL or BSP includes | Compile Core headers in isolation |
-| I-02 | `sizeof(EmbedIQ_Event_t) == 14` on all targets | `static_assert` + CI multi-target compile |
-| I-03 | `offsetof(EmbedIQ_Msg_t, payload) == 20` on all targets | `static_assert` |
-| I-04 | `messages.iq` is the only payload schema source | Grep: no hand-written payload structs |
-| I-05 | Zero `test/*` symbols in production binary | `nm`/`readelf` on release binary |
-| I-06 | `EMBEDIQ_DEBUG_JSON` never defined in release builds | CMake release config check |
-| I-07 | No `malloc`/`free` in Shell 1 | Binary analysis: no malloc in Shell 1 objects |
-| I-08 | All sizing parameters in `embediq_config.h` | `validator.py` fails build if hardcoded |
-| I-09 | Native bus compiles without bridge code when flag undefined | CI build without bridge flag |
-| I-10 | Sub-fn registrations only inside FB `init_fn` | Code review + static analysis |
-| I-11 | `osal_signal` non-NULL only in Platform FB sub-functions | Code review: only in `platform/` |
-| I-12 | Developer First Hour test passes before Phase 1 launch | Manual gate — 3 naive engineer sessions |
-| I-13 | `sequence` is canonical event ordering — never use `timestamp_us` for ordering or gap detection | Code review + static analysis on Observatory consumers |
-| I-14 | Core header v1 API surface unchanged after v1 release — CI v1 compatibility shim enforces no breaking changes | `tests/compat/fb_v1_compat.c` compile on every PR |
+| ID   | Invariant                                                                                                     | CI Check                                               |
+| ---- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| I-01 | Core headers compile standalone — zero OSAL or BSP includes                                                   | Compile Core headers in isolation                      |
+| I-02 | `sizeof(EmbedIQ_Event_t) == 14` on all targets                                                                | `static_assert` + CI multi-target compile              |
+| I-03 | `offsetof(EmbedIQ_Msg_t, payload) == 20` on all targets                                                       | `static_assert`                                        |
+| I-04 | `messages.iq` is the only payload schema source                                                               | Grep: no hand-written payload structs                  |
+| I-05 | Zero `test/*` symbols in production binary                                                                    | `nm`/`readelf` on release binary                       |
+| I-06 | `EMBEDIQ_DEBUG_JSON` never defined in release builds                                                          | CMake release config check                             |
+| I-07 | No `malloc`/`free` in Shell 1                                                                                 | Binary analysis: no malloc in Shell 1 objects          |
+| I-08 | All sizing parameters in `embediq_config.h`                                                                   | `validator.py` fails build if hardcoded                |
+| I-09 | Native bus compiles without bridge code when flag undefined                                                   | CI build without bridge flag                           |
+| I-10 | Sub-fn registrations only inside FB `init_fn`                                                                 | Code review + static analysis                          |
+| I-11 | `osal_signal` non-NULL only in Platform FB sub-functions                                                      | Code review: only in `platform/`                       |
+| I-12 | Developer First Hour test passes before Phase 1 launch                                                        | Manual gate — 3 naive engineer sessions                |
+| I-13 | `sequence` is canonical event ordering — never use `timestamp_us` for ordering or gap detection               | Code review + static analysis on Observatory consumers |
+| I-14 | Core header v1 API surface unchanged after v1 release — CI v1 compatibility shim enforces no breaking changes | `tests/compat/fb_v1_compat.c` compile on every PR      |
 
 ---
 
@@ -34,20 +34,20 @@ A PR that breaks any invariant will not merge. No exceptions.
 These rules cannot all be automated but are enforced at code review.
 Any PR violating these will be rejected.
 
-| ID | Rule |
-|----|------|
-| R-01 | No cross-FB function calls. Cross-FB communication = messages only. |
-| R-02 | No dynamic allocation (`malloc`/`free`/`new`/`delete`) in Shell 1 or Core. |
-| R-03 | C11 for Core and Shell 1. C++ opt-in wrapper only in Shell 3 and above. |
-| R-04 | Apache 2.0 only in Core/Shell 1/Shell 2. No GPL or LGPL anywhere. |
-| R-05 | Every layer: one interface header, one or more impl directories. |
-| R-06 | Every module: `EmbedIQ_Module_Meta_t` descriptor. |
-| R-07 | Test infrastructure compiles to zero bytes in production. |
-| R-08 | Core headers compile standalone — no OSAL or platform headers. |
-| R-09 | Native bus never depends on Bridge. |
-| R-10 | `messages.iq` is the only authoritative payload schema source. |
-| R-11 | All sizing in `embediq_config.h`. Validated by `validator.py` at build. |
-| R-12 | Sub-function registrations only inside FB `init_fn`. |
+| ID   | Rule                                                                                                                                      |             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| R-01 | No cross-FB function calls. Cross-FB communication = messages only.                                                                       |             |
+| R-02 | No dynamic allocation (`malloc`/`free`/`new`/`delete`) in Shell 1 or Core.                                                                |             |
+| R-03 | C11 for Core and Shell 1. C++ opt-in wrapper only in Shell 3 and above.                                                                   |             |
+| R-04 | Apache 2.0 only in Core/Shell 1/Shell 2. No GPL or LGPL anywhere.                                                                         |             |
+| R-05 | Every layer: one interface header, one or more impl directories.                                                                          |             |
+| R-06 | Every module: `EmbedIQ_Module_Meta_t` descriptor.                                                                                         |             |
+| R-07 | Test infrastructure compiles to zero bytes in production.                                                                                 |             |
+| R-08 | Core headers compile standalone — no OSAL or platform headers.                                                                            |             |
+| R-09 | Native bus never depends on Bridge.                                                                                                       |             |
+| R-10 | `messages.iq` is the only authoritative payload schema source.                                                                            |             |
+| R-11 | All sizing in `embediq_config.h`. Validated by `validator.py` at build.                                                                   |             |
+| R-12 | Sub-function registrations only inside FB `init_fn`.                                                                                      |             |
 | R-15 | Sub-function execution order when multiple sub-fns match same message = registration order (init_order ascending). Must be deterministic. | Code review |
 
 ---
@@ -230,16 +230,16 @@ See AGENTS.md Section 6 for the full list.
 
 ### Naming
 
-| Element | Convention | Example |
-|---------|------------|---------|
-| Types | `PascalCase_t` | `EmbedIQ_FB_Handle_t` |
-| Functions (public) | `embediq_module_verb()` | `embediq_fb_register()` |
-| Functions (private) | `module__verb()` | `temp_reader__init()` |
-| Sub-function names | `subfn_name__verb()` | `byte_collector__run()` |
-| Constants / macros | `UPPER_SNAKE_CASE` | `EMBEDIQ_MSG_MAX_PAYLOAD` |
-| Config macros | `EMBEDIQ_FEATURE_*` | `EMBEDIQ_FB_QUEUE_DEPTH_HIGH` |
-| Message IDs | `MSG_NOUN_VERB` | `MSG_TEMP_READING` |
-| Files | `embediq_module.h/.c` | `embediq_fb.h` |
+| Element             | Convention              | Example                       |
+| ------------------- | ----------------------- | ----------------------------- |
+| Types               | `PascalCase_t`          | `EmbedIQ_FB_Handle_t`         |
+| Functions (public)  | `embediq_module_verb()` | `embediq_fb_register()`       |
+| Functions (private) | `module__verb()`        | `temp_reader__init()`         |
+| Sub-function names  | `subfn_name__verb()`    | `byte_collector__run()`       |
+| Constants / macros  | `UPPER_SNAKE_CASE`      | `EMBEDIQ_MSG_MAX_PAYLOAD`     |
+| Config macros       | `EMBEDIQ_FEATURE_*`     | `EMBEDIQ_FB_QUEUE_DEPTH_HIGH` |
+| Message IDs         | `MSG_NOUN_VERB`         | `MSG_TEMP_READING`            |
+| Files               | `embediq_module.h/.c`   | `embediq_fb.h`                |
 
 ### File structure (every .c file)
 
@@ -384,11 +384,11 @@ Open an issue tagged `arch-review` and wait for sign-off.
 All message IDs must fall within the assigned namespace range.
 Violating this rule causes silent ecosystem corruption between community FBs.
 
-| Range | Owner | Rule |
-|-------|-------|------|
-| 0x0000 – 0x03FF (0–1023) | EmbedIQ Core | Framework internals only. Never use in application or community FBs. |
-| 0x0400 – 0x13FF (1024–5119) | Official EmbedIQ components | Assigned by embediq/embediq repo. Listed in messages_registry.json. |
-| 0x1400 – 0xFFFF (5120–65535) | Community / third-party | MUST reserve range in messages_registry.json before use. |
+| Range                        | Owner                       | Rule                                                                 |
+| ---------------------------- | --------------------------- | -------------------------------------------------------------------- |
+| 0x0000 – 0x03FF (0–1023)     | EmbedIQ Core                | Framework internals only. Never use in application or community FBs. |
+| 0x0400 – 0x13FF (1024–5119)  | Official EmbedIQ components | Assigned by embediq/embediq repo. Listed in messages_registry.json.  |
+| 0x1400 – 0xFFFF (5120–65535) | Community / third-party     | MUST reserve range in messages_registry.json before use.             |
 
 **Rules:**
 - Message IDs are never reused. A retired ID is tombstoned in messages_registry.json.
@@ -402,12 +402,12 @@ Violating this rule causes silent ecosystem corruption between community FBs.
 
 Every FB must declare its boot phase. Default = APPLICATION (Phase 3).
 
-| Phase | Value | FBs | Rule |
-|-------|-------|-----|------|
-| PLATFORM | 1 | fb_uart, fb_timer, fb_gpio | Hardware peripherals only |
-| INFRASTRUCTURE | 2 | fb_nvm, fb_watchdog, fb_cloud | Services consumed by application FBs |
-| APPLICATION | 3 | Developer FBs (default) | Business logic |
-| BRIDGE | 4 | External FBs, Studio | Best-effort, may join late |
+| Phase          | Value | FBs                           | Rule                                 |
+| -------------- | ----- | ----------------------------- | ------------------------------------ |
+| PLATFORM       | 1     | fb_uart, fb_timer, fb_gpio    | Hardware peripherals only            |
+| INFRASTRUCTURE | 2     | fb_nvm, fb_watchdog, fb_cloud | Services consumed by application FBs |
+| APPLICATION    | 3     | Developer FBs (default)       | Business logic                       |
+| BRIDGE         | 4     | External FBs, Studio          | Best-effort, may join late           |
 
 **Rules:**
 - A Phase 2 FB with depends_on pointing to a Phase 3 FB = BOOT FAULT.

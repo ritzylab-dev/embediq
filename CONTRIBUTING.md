@@ -16,16 +16,16 @@ Welcome. Contributions are what make EmbedIQ better for everyone.
 
 ## What we welcome
 
-| Contribution type | Where it goes | Notes |
-|-------------------|---------------|-------|
-| Bug fixes | Anywhere | Always welcome. Small and focused. |
-| New Platform FBs | `platform/posix/` | Must follow the five-layer pattern below |
-| New Component FBs | `components/` | Must have full host test coverage |
-| OSAL implementations | `osal/` | For new RTOS targets (Zephyr, bare-metal, RISC-V) |
-| BSP implementations | `platform/bsp/` | For new hardware targets |
-| Example applications | `examples/` | Must run on host without hardware |
-| Documentation | `docs/` | Corrections, clarifications, translations |
-| messages.iq schemas | `messages/` | New message types for shared use |
+| Contribution type    | Where it goes     | Notes                                             |
+| -------------------- | ----------------- | ------------------------------------------------- |
+| Bug fixes            | Anywhere          | Always welcome. Small and focused.                |
+| New Platform FBs     | `platform/posix/` | Must follow the five-layer pattern below          |
+| New Component FBs    | `components/`     | Must have full host test coverage                 |
+| OSAL implementations | `osal/`           | For new RTOS targets (Zephyr, bare-metal, RISC-V) |
+| BSP implementations  | `platform/bsp/`   | For new hardware targets                          |
+| Example applications | `examples/`       | Must run on host without hardware                 |
+| Documentation        | `docs/`           | Corrections, clarifications, translations         |
+| messages.iq schemas  | `messages/`       | New message types for shared use                  |
 
 ---
 

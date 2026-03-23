@@ -4,27 +4,27 @@
 
 ## What Exists vs What Does Not
 
-| Module | Status | What it means |
-|--------|--------|---------------|
-| Core headers (7 files) | STABLE | Contracts declared, compile clean, v1 API frozen |
-| messages.iq generator | STABLE | Python tool, zero deps, generates typed C structs |
-| Core schema (core.iq) | STABLE | Lifecycle, boot, watchdog, timer, observatory messages |
-| CMake build system | STABLE | host + test targets, pre-build generation step |
-| CI pipeline | STABLE | Validates build + validator + compat shim on every PR |
-| validator.py | STABLE | Catches hardcoded sizing constants |
-| fb_v1_compat.c | STABLE | Compile-time API contract enforcement |
-| OSAL posix | STABLE | pthreads + POSIX message queues |
-| OSAL freertos | NOT_STARTED | Phase 2 |
-| FB Registry | STABLE | Phase 1 — embediq_engine_boot(), fb state machine |
-| Message Bus | STABLE | Phase 1 — static routing table, pub/sub queues |
-| Sub-fn Dispatcher | STABLE | Phase 1 — embediq_subfn_register(), dispatch loop |
-| FSM Engine | STABLE | Phase 1 — table-driven FSM with guard/action |
-| Observatory | STABLE | Phase 1 — ring buffer, stdout/UART transport |
-| Test Runner | STABLE | Phase 1 — unit + integration tests via CTest |
-| platform/posix/fb_timer | STABLE | 1 ms background tick, MSG_TIMER_1SEC every 1 s |
-| platform/posix/fb_nvm | STABLE | Filesystem-backed JSON key-value store |
-| platform/posix/fb_watchdog | STABLE | Health-token monitor, 100 ms check interval |
-| examples/thermostat | STABLE | Phase 1 gate demo — all 5 FBs, FSM transitions verified |
+| Module                     | Status      | What it means                                           |
+| -------------------------- | ----------- | ------------------------------------------------------- |
+| Core headers (7 files)     | STABLE      | Contracts declared, compile clean, v1 API frozen        |
+| messages.iq generator      | STABLE      | Python tool, zero deps, generates typed C structs       |
+| Core schema (core.iq)      | STABLE      | Lifecycle, boot, watchdog, timer, observatory messages  |
+| CMake build system         | STABLE      | host + test targets, pre-build generation step          |
+| CI pipeline                | STABLE      | Validates build + validator + compat shim on every PR   |
+| validator.py               | STABLE      | Catches hardcoded sizing constants                      |
+| fb_v1_compat.c             | STABLE      | Compile-time API contract enforcement                   |
+| OSAL posix                 | STABLE      | pthreads + POSIX message queues                         |
+| OSAL freertos              | NOT_STARTED | Phase 2                                                 |
+| FB Registry                | STABLE      | Phase 1 — embediq_engine_boot(), fb state machine       |
+| Message Bus                | STABLE      | Phase 1 — static routing table, pub/sub queues          |
+| Sub-fn Dispatcher          | STABLE      | Phase 1 — embediq_subfn_register(), dispatch loop       |
+| FSM Engine                 | STABLE      | Phase 1 — table-driven FSM with guard/action            |
+| Observatory                | STABLE      | Phase 1 — ring buffer, stdout/UART transport            |
+| Test Runner                | STABLE      | Phase 1 — unit + integration tests via CTest            |
+| platform/posix/fb_timer    | STABLE      | 1 ms background tick, MSG_TIMER_1SEC every 1 s          |
+| platform/posix/fb_nvm      | STABLE      | Filesystem-backed JSON key-value store                  |
+| platform/posix/fb_watchdog | STABLE      | Health-token monitor, 100 ms check interval             |
+| examples/thermostat        | STABLE      | Phase 1 gate demo — all 5 FBs, FSM transitions verified |
 
 ## IMPORTANT FOR CONTRIBUTORS
 The Phase 1 platform stack is complete and running.  The thermostat demo binary
