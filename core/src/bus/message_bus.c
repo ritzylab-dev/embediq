@@ -66,6 +66,14 @@ extern uint8_t                     fb_engine__reg_count(void);
 extern const EmbedIQ_FB_Config_t  *fb_engine__reg_config(uint8_t idx);
 extern uint8_t                     fb_engine__get_ep_id(EmbedIQ_FB_Handle_t h);
 
+/* Notify callback — registered by the engine, called after each enqueue. */
+static embediq_notify_fn_t g_notify_fn = NULL;
+
+void message_bus_set_notify_fn(embediq_notify_fn_t fn)
+{
+    g_notify_fn = fn;
+}
+
 /* ---------------------------------------------------------------------------
  * Subscription table — flat sorted array, built once at message_bus_boot()
  * ------------------------------------------------------------------------- */
@@ -238,6 +246,7 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
         if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH) {
             /* ---- HIGH: block until space is available ---- */
             embediq_osal_queue_send(q, &copy, UINT32_MAX);
+            if (g_notify_fn) g_notify_fn(ep);
 
         } else if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL) {
             /* ---- NORMAL: drop OLDEST on overflow ---- */
@@ -252,10 +261,13 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
                 g_drop_count++;
 #endif
             }
+            if (g_notify_fn) g_notify_fn(ep);
 
         } else {
             /* ---- LOW: drop INCOMING on overflow ---- */
-            if (!embediq_osal_queue_send(q, &copy, 0u)) {
+            if (embediq_osal_queue_send(q, &copy, 0u)) {
+                if (g_notify_fn) g_notify_fn(ep);
+            } else {
                 embediq_obs_emit(EMBEDIQ_OBS_EVT_QUEUE_DROP,
                                  msg->source_endpoint_id, ep,
                                  prio, msg_id);
@@ -300,6 +312,13 @@ void message_bus__reset(void)
     g_ep_count    = 0u;
     g_bus_booted  = false;
     g_drop_count  = 0u;
+    g_notify_fn   = NULL;
+}
+
+/** Return the currently registered notify callback (NULL if not yet set). */
+embediq_notify_fn_t message_bus__get_notify_fn(void)
+{
+    return g_notify_fn;
 }
 
 /**

@@ -72,12 +72,16 @@ static uint8_t       g_boot_order[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t       g_boot_count = 0;
 
 /* ---------------------------------------------------------------------------
- * Per-FB dispatch thread state (populated by embediq_engine_dispatch_boot)
+ * Per-FB dispatch thread state (populated by embediq_engine_boot)
  * ------------------------------------------------------------------------- */
 
+/* Forward declaration — defined after embediq_engine_boot(). */
+void embediq_engine_notify_fb(uint8_t ep_id);
+
 typedef struct {
-    EmbedIQ_FB_t *fb;
-    uint8_t       ep_id;
+    EmbedIQ_FB_t  *fb;
+    uint8_t        ep_id;
+    embediq_sem_t  sem;   /* posted by bus on every successful enqueue */
 } dispatch_arg_t;
 
 static dispatch_arg_t    g_dispatch_args[EMBEDIQ_MAX_ENDPOINTS];
@@ -350,6 +354,18 @@ int embediq_engine_boot(void)
         }
     }
 
+    /* Create per-FB dispatch semaphores now that all FBs are fully init'd.
+     * embediq_engine_dispatch_boot() will start threads that block on these. */
+    for (uint8_t i = 0u; i < g_reg_count; i++) {
+        if (g_registry[i].config.subscription_count == 0u) continue;
+        g_dispatch_args[i].fb    = &g_registry[i];
+        g_dispatch_args[i].ep_id = g_registry[i].ep_idx;
+        g_dispatch_args[i].sem   = embediq_sem_create(0u, UINT32_MAX);
+    }
+
+    /* Register the notify callback so the bus can wake dispatch threads. */
+    message_bus_set_notify_fn(embediq_engine_notify_fb);
+
     g_booted = true;
     return 0;
 }
@@ -382,12 +398,27 @@ uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle)
 }
 
 /* ---------------------------------------------------------------------------
+ * Public: embediq_engine_notify_fb()
+ *
+ * Called by message_bus.c after every successful message enqueue.
+ * Posts the semaphore of the target FB's dispatch thread so it wakes
+ * immediately instead of polling.  Safe to call from any thread.
+ * ------------------------------------------------------------------------- */
+
+void embediq_engine_notify_fb(uint8_t ep_id)
+{
+    if (ep_id >= EMBEDIQ_MAX_ENDPOINTS) return;
+    if (!g_dispatch_args[ep_id].sem)    return;
+    embediq_sem_post_from_isr(g_dispatch_args[ep_id].sem);
+}
+
+/* ---------------------------------------------------------------------------
  * Per-FB dispatch loop
  *
- * One instance of this task runs per FB that has subscriptions.
- * Polls the FB's three priority queues (HIGH > NORMAL > LOW) in a tight loop
- * with a 1 ms yield when all queues are empty.  This is a Phase 1 placeholder;
- * Phase 2 will replace the polling with a blocking semaphore.
+ * One instance runs per FB that has subscriptions.
+ * Blocks on the FB's dispatch semaphore (posted by the bus after each
+ * enqueue) then drains all available messages before blocking again.
+ * Zero CPU burn when idle — no polling.
  * ------------------------------------------------------------------------- */
 
 static void fb_dispatch_loop(void *arg)
@@ -398,18 +429,20 @@ static void fb_dispatch_loop(void *arg)
     EmbedIQ_Msg_t   msg;
 
     while (g_dispatch_running) {
-        bool got = false;
+        /* Block until the bus signals that at least one message is queued. */
+        embediq_sem_wait(da->sem);
 
-        /* Drain in priority order: HIGH, NORMAL, LOW. */
-        for (uint8_t p = 0u; p < 3u && !got; p++) {
-            got = message_bus_recv_ep(ep, p, &msg);
-        }
-
-        if (got) {
-            dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
-        } else {
-            embediq_osal_delay_ms(1u);
-        }
+        /* Drain all queued messages before blocking again. */
+        bool got;
+        do {
+            got = false;
+            for (uint8_t p = 0u; p < 3u && !got; p++) {
+                got = message_bus_recv_ep(ep, p, &msg);
+            }
+            if (got) {
+                dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
+            }
+        } while (got);
     }
 }
 
@@ -426,11 +459,9 @@ void embediq_engine_dispatch_boot(void)
     for (uint8_t i = 0u; i < g_reg_count; i++) {
         EmbedIQ_FB_t *fb = &g_registry[i];
 
-        /* Only create dispatch tasks for FBs that receive messages. */
+        /* Only create dispatch tasks for FBs that receive messages.
+         * Semaphore was already created in embediq_engine_boot(). */
         if (fb->config.subscription_count == 0u) continue;
-
-        g_dispatch_args[i].fb    = fb;
-        g_dispatch_args[i].ep_id = fb->ep_idx;
 
         embediq_osal_task_create(fb->config.name,
                                  fb_dispatch_loop,
@@ -459,6 +490,14 @@ extern void message_bus__reset(void);
 /** Reset all engine state — must be called between test cases. */
 void fb_engine__reset(void)
 {
+    /* Destroy any dispatch semaphores created by embediq_engine_dispatch_boot().
+     * Tests do not call dispatch_boot, so these will be NULL in the normal
+     * test path.  Safe to call: embediq_sem_destroy(NULL) is a no-op. */
+    for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
+        if (g_dispatch_args[i].sem) {
+            embediq_sem_destroy(g_dispatch_args[i].sem);
+        }
+    }
     memset(g_registry,      0, sizeof(g_registry));
     memset(g_boot_order,    0, sizeof(g_boot_order));
     memset(g_dispatch_args, 0, sizeof(g_dispatch_args));
@@ -484,6 +523,13 @@ void fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle, uint16_t msg_id,
     EmbedIQ_FB_t *fb = (EmbedIQ_FB_t *)handle;
     if (!fb) return;
     dispatch_msg_to_fb(fb, msg_id, msg);
+}
+
+/** Return the dispatch semaphore for ep_id, or NULL if none (no subscriptions). */
+embediq_sem_t fb_engine__dispatch_sem(uint8_t ep_id)
+{
+    if (ep_id >= EMBEDIQ_MAX_ENDPOINTS) return NULL;
+    return g_dispatch_args[ep_id].sem;
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */
