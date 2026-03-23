@@ -143,6 +143,26 @@ target_compile_options(test_fb_timer PRIVATE
 add_test(NAME unit_fb_timer COMMAND test_fb_timer)
 
 # ---------------------------------------------------------------------------
+# Blocking dispatch unit tests (P2-T0)
+# ---------------------------------------------------------------------------
+
+add_executable(test_blocking_dispatch test_blocking_dispatch.c)
+
+target_include_directories(test_blocking_dispatch PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_blocking_dispatch PRIVATE embediq_fb_engine)
+
+target_compile_options(test_blocking_dispatch PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_blocking_dispatch COMMAND test_blocking_dispatch)
+
+# ---------------------------------------------------------------------------
 # NVM FB unit tests (P1-T6)
 # ---------------------------------------------------------------------------
 

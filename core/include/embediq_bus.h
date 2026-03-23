@@ -42,6 +42,16 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 /**
+ * Callback type invoked by the bus after a successful message enqueue.
+ * ep_id is the destination endpoint that received the message.
+ * Registered by the engine via message_bus_set_notify_fn().
+ */
+typedef void (*embediq_notify_fn_t)(uint8_t ep_id);
+
+/** Register the engine notify callback. Called once inside embediq_engine_boot(). */
+void message_bus_set_notify_fn(embediq_notify_fn_t fn);
+
+/**
  * Build the subscription routing table and create per-FB priority queues.
  * Must be called once, after embediq_engine_boot() completes.
  * Idempotent: safe to call multiple times, only first call has effect.

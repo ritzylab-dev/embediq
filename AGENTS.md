@@ -192,7 +192,27 @@ embediq-core/
 
 ---
 
-## 5. File Placement Rules — Where Every File Lives
+## 5. Git Branch Workflow — Mandatory First Step
+
+Every task starts with these exact commands — no exceptions:
+
+  git checkout dev
+  git pull origin dev
+  git checkout -b feature/<branch-name-here>
+
+Rules:
+- Always branch from dev, never from main or wherever HEAD happens to be.
+- Always git pull before branching — never branch from a stale dev.
+- Branch naming: feature/p2-t0-description, fix/issue-description, cleanup/what-changed
+- PR target is always dev. Never open a PR directly to main.
+- main is only ever updated via a dev→main PR at milestone boundaries.
+
+If you are about to run git checkout -b without first running
+git checkout dev && git pull origin dev — STOP. Do those two commands first.
+
+---
+
+## 6. File Placement Rules — Where Every File Lives
 
 This table is binding. When implementing any module, use EXACTLY these paths.
 Never place .c files flat in core/src/ — they belong in their subdirectory.
@@ -216,7 +236,7 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ---
 
-## 6. Current Build Status
+## 7. Current Build Status
 
 > **Last updated:** Phase 1 complete (March 2026)
 > This table is updated at milestone boundaries only.
@@ -243,7 +263,7 @@ subdirectory), STOP — wrong location. Check this table first.
 
 ---
 
-## 7. What v1 Will NOT Build (Non-Goals)
+## 8. What v1 Will NOT Build (Non-Goals)
 
 Agents: **do not generate code for any item on this list for v1.**
 These are named future work, not omissions. If you think something is missing,
@@ -272,7 +292,7 @@ TIMESTAMP:   64-bit timestamps on MCU. v1 = uint32_t microseconds, modulo 2³².
 
 ---
 
-## 8. Truth Hierarchy — Which File Wins Conflicts
+## 9. Truth Hierarchy — Which File Wins Conflicts
 
 When you see a conflict between documents, this order decides:
 
@@ -289,7 +309,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 9. Build System & Key Decisions
+## 10. Build System & Key Decisions
 
 | Decision | Choice | Do Not Change |
 |----------|--------|---------------|
@@ -305,7 +325,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 10. Where to Go Next
+## 11. Where to Go Next
 
 | What you need | Where to find it |
 |---------------|-----------------|
@@ -322,7 +342,7 @@ the Core header is correct. Update MODULE.md to match.
 
 ---
 
-## 11. The Developer First Hour Test
+## 12. The Developer First Hour Test
 
 Before any Phase 1 launch, this test must pass with 3 engineers
 who have never seen EmbedIQ before:
