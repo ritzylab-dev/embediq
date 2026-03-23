@@ -189,17 +189,21 @@ target_compile_options(test_dispatch_shutdown PRIVATE
 add_test(NAME unit_dispatch_shutdown COMMAND test_dispatch_shutdown)
 
 # ---------------------------------------------------------------------------
-# NVM FB unit tests (P1-T6)
+# NVM FB unit tests (P1-T6 / Arch-4b)
 # ---------------------------------------------------------------------------
 
 add_executable(test_fb_nvm test_fb_nvm.c)
 
 target_include_directories(test_fb_nvm PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/platform/posix
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
-target_link_libraries(test_fb_nvm PRIVATE embediq_platform_posix)
+target_link_libraries(test_fb_nvm PRIVATE
+    embediq_driver_fbs
+    embediq_hal_posix
+)
 
 target_compile_options(test_fb_nvm PRIVATE
     -Wall

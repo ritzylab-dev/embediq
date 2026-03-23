@@ -8,7 +8,6 @@
 
 add_library(embediq_platform_posix STATIC
     fb_watchdog.c
-    fb_nvm.c
 )
 
 target_include_directories(embediq_platform_posix PUBLIC
