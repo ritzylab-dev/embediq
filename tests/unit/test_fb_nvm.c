@@ -212,21 +212,25 @@ static void test_nvm_get_missing_key_returns_error(void)
  * HAL flash tests
  * ------------------------------------------------------------------------- */
 
+/* Test buffer sizes — derived from named config constants (I-08). */
+#define TEST_HAL_WRITE_BYTES  EMBEDIQ_MAX_SUBFNS_PER_FB   /* 16 */
+#define TEST_HAL_ERASE_BYTES  EMBEDIQ_MAX_BOOT_DEPS       /*  8 */
+
 /* test_hal_flash_write_read_roundtrip
- * Write 16 bytes at addr 0, read them back, verify match.
+ * Write TEST_HAL_WRITE_BYTES bytes at addr 0, read them back, verify match.
  */
 static void test_hal_flash_write_read_roundtrip(void)
 {
     hal_setup();
 
-    const uint8_t data[16] = {
+    const uint8_t data[TEST_HAL_WRITE_BYTES] = {
         0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04,
         0x10, 0x20, 0x30, 0x40, 0xAA, 0xBB, 0xCC, 0xDD
     };
     int rc_w = hal_flash_write(0u, data, sizeof(data));
     ASSERT(rc_w == HAL_OK, "hal_flash_write returns HAL_OK");
 
-    uint8_t buf[16];
+    uint8_t buf[TEST_HAL_WRITE_BYTES];
     memset(buf, 0, sizeof(buf));
     int rc_r = hal_flash_read(0u, buf, sizeof(buf));
     ASSERT(rc_r == HAL_OK && memcmp(buf, data, sizeof(data)) == 0,
@@ -240,12 +244,12 @@ static void test_hal_flash_read_uninitialised_returns_ok(void)
 {
     hal_setup();
 
-    uint8_t buf[16];
+    uint8_t buf[TEST_HAL_WRITE_BYTES];
     memset(buf, 0xAA, sizeof(buf));   /* fill with non-zero sentinel */
     int rc = hal_flash_read(0u, buf, sizeof(buf));
 
     /* File doesn't exist — HAL should return OK with zeroed buffer. */
-    uint8_t zeros[16];
+    uint8_t zeros[TEST_HAL_WRITE_BYTES];
     memset(zeros, 0, sizeof(zeros));
     ASSERT(rc == HAL_OK && memcmp(buf, zeros, sizeof(zeros)) == 0,
            "uninitialised read returns HAL_OK with zeroed buffer");
@@ -258,16 +262,18 @@ static void test_hal_flash_erase_zeros_region(void)
 {
     hal_setup();
 
-    const uint8_t data[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    const uint8_t data[TEST_HAL_ERASE_BYTES] = {
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+    };
     hal_flash_write(0u, data, sizeof(data));
 
     int rc_e = hal_flash_erase(0u, sizeof(data));
     ASSERT(rc_e == HAL_OK, "hal_flash_erase returns HAL_OK");
 
-    uint8_t buf[8];
+    uint8_t buf[TEST_HAL_ERASE_BYTES];
     hal_flash_read(0u, buf, sizeof(buf));
 
-    uint8_t ff[8];
+    uint8_t ff[TEST_HAL_ERASE_BYTES];
     memset(ff, 0xFF, sizeof(ff));
     ASSERT(memcmp(buf, ff, sizeof(ff)) == 0,
            "erased region reads back as 0xFF");
