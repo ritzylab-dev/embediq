@@ -1,5 +1,5 @@
 PHASE_COMPLETE: Phase 1
-NEXT_SESSION: P2-T0 — Replace polling dispatch loop with blocking OSAL semaphore
+NEXT_SESSION: P2-T1 — FreeRTOS OSAL (osal/freertos/embediq_osal_freertos.c)
 
 PHASE 1 SUMMARY:
   All core engine modules implemented and tested on macOS/Linux.
@@ -16,10 +16,9 @@ PHASE 1 WHAT WAS BUILT:
   ✓ Thermostat demo     — examples/thermostat/
 
 PHASE 1 KNOWN LIMITATIONS (fix before Phase 2 ships to hardware):
-  ! fb_dispatch_loop uses 1ms polling — must be replaced with blocking OSAL semaphore
-    before FreeRTOS port. Polling is acceptable for host demo only.
-  ! embediq_engine_dispatch_boot() spawns threads but no shutdown API exists.
-    embediq_engine_dispatch_shutdown() must be added in Phase 2 for OTA support.
+  ✓ DONE (P2-T0):  fb_dispatch_loop replaced with blocking OSAL semaphore.
+  ✓ DONE (P2-T0b): embediq_engine_dispatch_shutdown() added — clean teardown,
+    pthread_join, idempotent, enables OTA restart and test teardown.
   ! embediq_bus.h header comment says "call message_bus_boot() after engine_boot"
     but it is now called inside engine_boot automatically — fix the comment.
 

@@ -79,13 +79,15 @@ static uint8_t       g_boot_count = 0;
 void embediq_engine_notify_fb(uint8_t ep_id);
 
 typedef struct {
-    EmbedIQ_FB_t  *fb;
-    uint8_t        ep_id;
-    embediq_sem_t  sem;   /* posted by bus on every successful enqueue */
+    EmbedIQ_FB_t   *fb;
+    uint8_t         ep_id;
+    embediq_sem_t   sem;    /* posted by bus on every successful enqueue */
+    EmbedIQ_Task_t *task;   /* handle stored for pthread_join on shutdown */
 } dispatch_arg_t;
 
 static dispatch_arg_t    g_dispatch_args[EMBEDIQ_MAX_ENDPOINTS];
-static volatile bool     g_dispatch_running = false;
+static volatile bool     g_dispatch_running  = false;
+static volatile bool     g_dispatch_shutdown = false;
 
 /* ---------------------------------------------------------------------------
  * Public: embediq_fb_register()
@@ -429,8 +431,12 @@ static void fb_dispatch_loop(void *arg)
     EmbedIQ_Msg_t   msg;
 
     while (g_dispatch_running) {
-        /* Block until the bus signals that at least one message is queued. */
+        /* Block until the bus signals that at least one message is queued
+         * or dispatch_shutdown posts the semaphore to wake this thread. */
         embediq_sem_wait(da->sem);
+
+        /* Shutdown path: exit the loop cleanly without processing more msgs. */
+        if (g_dispatch_shutdown) break;
 
         /* Drain all queued messages before blocking again. */
         bool got;
@@ -463,11 +469,50 @@ void embediq_engine_dispatch_boot(void)
          * Semaphore was already created in embediq_engine_boot(). */
         if (fb->config.subscription_count == 0u) continue;
 
-        embediq_osal_task_create(fb->config.name,
-                                 fb_dispatch_loop,
-                                 &g_dispatch_args[i],
-                                 2u, 4096u);
+        g_dispatch_args[i].task =
+            embediq_osal_task_create(fb->config.name,
+                                     fb_dispatch_loop,
+                                     &g_dispatch_args[i],
+                                     2u, 4096u);
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: embediq_engine_dispatch_shutdown()
+ *
+ * 1. Set the shutdown flag so dispatch loops exit after their next sem_wait.
+ * 2. Post each FB's semaphore once to unblock any thread currently waiting.
+ * 3. Join every dispatch thread — returns only when all have exited.
+ * 4. Clear the shutdown flag and g_dispatch_running so dispatch_boot() can
+ *    be called again for a clean restart (idempotent re-boot support).
+ * ------------------------------------------------------------------------- */
+
+int embediq_engine_dispatch_shutdown(void)
+{
+    if (!g_dispatch_running) return 0;   /* idempotent — nothing to stop */
+
+    /* Signal all dispatch loops to exit after their next wake-up. */
+    g_dispatch_shutdown = true;
+
+    /* Post each semaphore once to unblock any thread blocked in sem_wait. */
+    for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
+        if (g_dispatch_args[i].sem) {
+            embediq_sem_post(g_dispatch_args[i].sem);
+        }
+    }
+
+    /* Join every thread — no busy-wait, no polling. */
+    for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
+        if (g_dispatch_args[i].task) {
+            embediq_osal_task_join(g_dispatch_args[i].task);
+            g_dispatch_args[i].task = NULL;
+        }
+    }
+
+    /* Reset flags so dispatch_boot() can restart cleanly. */
+    g_dispatch_shutdown = false;
+    g_dispatch_running  = false;
+    return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -490,9 +535,14 @@ extern void message_bus__reset(void);
 /** Reset all engine state — must be called between test cases. */
 void fb_engine__reset(void)
 {
-    /* Destroy any dispatch semaphores created by embediq_engine_dispatch_boot().
-     * Tests do not call dispatch_boot, so these will be NULL in the normal
-     * test path.  Safe to call: embediq_sem_destroy(NULL) is a no-op. */
+    /* If dispatch threads are running, shut them down cleanly first.
+     * This handles tests that call dispatch_boot without dispatch_shutdown. */
+    if (g_dispatch_running) {
+        embediq_engine_dispatch_shutdown();
+    }
+
+    /* Destroy per-FB dispatch semaphores (created in embediq_engine_boot).
+     * Safe to call: embediq_sem_destroy(NULL) is a no-op. */
     for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
         if (g_dispatch_args[i].sem) {
             embediq_sem_destroy(g_dispatch_args[i].sem);
