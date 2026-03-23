@@ -1,16 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 
 /*
- * tests/unit/test_fb_nvm.c — Unit tests for fb_nvm
+ * tests/unit/test_fb_nvm.c — Unit tests for fb_nvm + HAL flash
  *
  * Tests the host file-backed NVM: set/get round-trip, atomic write pattern,
  * delete, reset_defaults, schema version persistence, and missing-key error.
+ * Also tests the HAL flash contract (hal_flash.h) directly.
  *
- * All tests redirect the NVM file to /tmp/test_nvm_store.json to avoid
- * touching the user's ~/.embediq/ directory.
+ * All tests use EMBEDIQ_NVM_PATH env var to point to /tmp — never touches
+ * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 9 tests passed. (0 failed)"
+ * Expected: "All 13 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -21,11 +22,13 @@
 #include "embediq_fb.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
+#include "hal/hal_flash.h"
 
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>     /* setenv */
 
 /* ---------------------------------------------------------------------------
  * Public NVM API
@@ -43,10 +46,7 @@ extern int  embediq_nvm_get_schema_version(const char *key, uint16_t *schema_out
  * Package-internal NVM test API
  * ------------------------------------------------------------------------- */
 
-extern void        nvm__set_path(const char *path);
 extern void        nvm__init_state(void);
-extern const char *nvm__get_path(void);
-extern const char *nvm__get_tmp_path(void);
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -69,12 +69,19 @@ static int g_tests_failed = 0;
  * Test path (in /tmp — never touches ~/.embediq)
  * ------------------------------------------------------------------------- */
 
-#define TEST_NVM_PATH  "/tmp/test_nvm_store.json"
+#define TEST_NVM_PATH  "/tmp/test_nvm_store.bin"
+#define TEST_HAL_PATH  "/tmp/test_hal_flash.bin"
 
 static void setup(void)
 {
-    nvm__set_path(TEST_NVM_PATH);
+    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
     nvm__init_state();
+}
+
+static void hal_setup(void)
+{
+    setenv("EMBEDIQ_NVM_PATH", TEST_HAL_PATH, 1);
+    remove(TEST_HAL_PATH);
 }
 
 /* ---------------------------------------------------------------------------
@@ -103,8 +110,8 @@ static void test_nvm_set_and_get_roundtrip(void)
 }
 
 /* test_nvm_set_atomic_write_creates_tmp_then_renames
- * After a successful set: the .json file must exist and no .tmp file
- * must remain (it was atomically renamed over the .json).
+ * After a successful set: the backing file must exist and no .tmp file
+ * must remain (it was atomically renamed).
  */
 static void test_nvm_set_atomic_write_creates_tmp_then_renames(void)
 {
@@ -114,16 +121,16 @@ static void test_nvm_set_atomic_write_creates_tmp_then_renames(void)
     embediq_nvm_set("atomic_key", val, 2u, 1u);
 
     /* .tmp file must NOT be present (it was renamed). */
-    FILE *f_tmp = fopen(nvm__get_tmp_path(), "rb");
+    FILE *f_tmp = fopen(TEST_NVM_PATH ".tmp", "rb");
     ASSERT(f_tmp == NULL,
            "no leftover .tmp file — atomic rename completed successfully");
     if (f_tmp) fclose(f_tmp);
 
-    /* .json file must exist. */
-    FILE *f_json = fopen(nvm__get_path(), "rb");
-    ASSERT(f_json != NULL,
-           "nvm_store.json exists after atomic write");
-    if (f_json) fclose(f_json);
+    /* backing file must exist. */
+    FILE *f_bin = fopen(TEST_NVM_PATH, "rb");
+    ASSERT(f_bin != NULL,
+           "nvm_store.bin exists after atomic write");
+    if (f_bin) fclose(f_bin);
 }
 
 /* test_nvm_delete_removes_key
@@ -202,17 +209,98 @@ static void test_nvm_get_missing_key_returns_error(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * HAL flash tests
+ * ------------------------------------------------------------------------- */
+
+/* test_hal_flash_write_read_roundtrip
+ * Write 16 bytes at addr 0, read them back, verify match.
+ */
+static void test_hal_flash_write_read_roundtrip(void)
+{
+    hal_setup();
+
+    const uint8_t data[16] = {
+        0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04,
+        0x10, 0x20, 0x30, 0x40, 0xAA, 0xBB, 0xCC, 0xDD
+    };
+    int rc_w = hal_flash_write(0u, data, sizeof(data));
+    ASSERT(rc_w == HAL_OK, "hal_flash_write returns HAL_OK");
+
+    uint8_t buf[16];
+    memset(buf, 0, sizeof(buf));
+    int rc_r = hal_flash_read(0u, buf, sizeof(buf));
+    ASSERT(rc_r == HAL_OK && memcmp(buf, data, sizeof(data)) == 0,
+           "hal_flash_read returns written data");
+}
+
+/* test_hal_flash_read_uninitialised_returns_ok
+ * Fresh flash read before any write returns HAL_OK (erased/zero).
+ */
+static void test_hal_flash_read_uninitialised_returns_ok(void)
+{
+    hal_setup();
+
+    uint8_t buf[16];
+    memset(buf, 0xAA, sizeof(buf));   /* fill with non-zero sentinel */
+    int rc = hal_flash_read(0u, buf, sizeof(buf));
+
+    /* File doesn't exist — HAL should return OK with zeroed buffer. */
+    uint8_t zeros[16];
+    memset(zeros, 0, sizeof(zeros));
+    ASSERT(rc == HAL_OK && memcmp(buf, zeros, sizeof(zeros)) == 0,
+           "uninitialised read returns HAL_OK with zeroed buffer");
+}
+
+/* test_hal_flash_erase_zeros_region
+ * Write bytes, erase, read back — erased region must be 0xFF.
+ */
+static void test_hal_flash_erase_zeros_region(void)
+{
+    hal_setup();
+
+    const uint8_t data[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    hal_flash_write(0u, data, sizeof(data));
+
+    int rc_e = hal_flash_erase(0u, sizeof(data));
+    ASSERT(rc_e == HAL_OK, "hal_flash_erase returns HAL_OK");
+
+    uint8_t buf[8];
+    hal_flash_read(0u, buf, sizeof(buf));
+
+    uint8_t ff[8];
+    memset(ff, 0xFF, sizeof(ff));
+    ASSERT(memcmp(buf, ff, sizeof(ff)) == 0,
+           "erased region reads back as 0xFF");
+}
+
+/* test_hal_flash_page_size_nonzero
+ * hal_flash_page_size() must return a value > 0.
+ */
+static void test_hal_flash_page_size_nonzero(void)
+{
+    uint32_t ps = hal_flash_page_size();
+    ASSERT(ps > 0u, "hal_flash_page_size returns non-zero");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
 int main(void)
 {
+    /* NVM Driver FB tests */
     test_nvm_set_and_get_roundtrip();
     test_nvm_set_atomic_write_creates_tmp_then_renames();
     test_nvm_delete_removes_key();
     test_nvm_reset_defaults_clears_all();
     test_nvm_schema_version_stored_with_key();
     test_nvm_get_missing_key_returns_error();
+
+    /* HAL flash tests */
+    test_hal_flash_write_read_roundtrip();
+    test_hal_flash_read_uninitialised_returns_ok();
+    test_hal_flash_erase_zeros_region();
+    test_hal_flash_page_size_nonzero();
 
     printf("\n");
     if (g_tests_failed == 0) {
