@@ -15,19 +15,21 @@ Layer rules (a file in layer X may only include from allowed layers):
   platform/posix/  → allowed: core/include/, core/include/hal/, osal/posix/
   platform/esp32/  → allowed: core/include/, core/include/hal/, osal/freertos/
   components/      → allowed: core/include/, core/include/hal/
-  examples/        → allowed: core/include/, core/include/hal/, components/
-  tests/           → allowed: core/include/, core/include/hal/, examples/
+  examples/        → allowed: core/include/, core/include/hal/, fbs/drivers/, fbs/services/
+  tests/           → allowed: core/include/, core/include/hal/, examples/, fbs/drivers/, fbs/services/
   hal/posix/       → allowed: core/include/hal/ only (no framework headers)
   hal/esp32/       → allowed: core/include/hal/ only
   hal/stm32/       → allowed: core/include/hal/ only
-  drivers/         → allowed: core/include/, core/include/hal/
+  fbs/drivers/     → allowed: core/include/, core/include/hal/
+                     STRICT: unrecognised quote-includes treated as vendor BSP
+  fbs/services/    → allowed: core/include/ only (NO core/include/hal/ — service FBs are platform-agnostic)
                      STRICT: unrecognised quote-includes treated as vendor BSP
 
 Rules:
   - Same-layer includes are always allowed.
   - System headers (#include <...>) are always allowed.
   - Headers in unknown layers (build/, generated/, tools/) are skipped,
-    EXCEPT in strict layers (drivers/) where they are violations.
+    EXCEPT in strict layers (fbs/drivers/, fbs/services/) where they are violations.
 
 Exit codes: 0 = clean, 1 = violations found.
 
@@ -59,7 +61,8 @@ def _layer_of(rel_path):
     if p.startswith('hal/posix/'):         return 'hal/posix'
     if p.startswith('hal/esp32/'):         return 'hal/esp32'
     if p.startswith('hal/stm32/'):         return 'hal/stm32'
-    if p.startswith('drivers/'):           return 'drivers'
+    if p.startswith('fbs/drivers/'):       return 'fbs/drivers'
+    if p.startswith('fbs/services/'):      return 'fbs/services'
     return None  # build/, generated/, tools/, docs/ — not checked
 
 
@@ -71,18 +74,20 @@ _ALLOWED = {
     'platform/posix':  {'core/include', 'core/include/hal', 'osal/posix'},
     'platform/esp32':  {'core/include', 'core/include/hal', 'osal/freertos'},
     'components':      {'core/include', 'core/include/hal'},
-    'examples':        {'core/include', 'core/include/hal', 'components'},
-    'tests':           {'core/include', 'core/include/hal', 'examples'},
+    'examples':        {'core/include', 'core/include/hal', 'fbs/drivers', 'fbs/services'},
+    'tests':           {'core/include', 'core/include/hal', 'examples', 'fbs/drivers', 'fbs/services'},
     # HAL implementation layers — only HAL contracts, nothing else
     'hal/posix':       {'core/include/hal'},
     'hal/esp32':       {'core/include/hal'},
     'hal/stm32':       {'core/include/hal'},
     # Driver FBs — may use all framework contracts (incl. HAL) but not impl paths
-    'drivers':         {'core/include', 'core/include/hal'},
+    'fbs/drivers':     {'core/include', 'core/include/hal'},
+    # Service FBs — platform-agnostic: must NOT include HAL contracts
+    'fbs/services':    {'core/include'},
 }
 
 # Layers where an unresolvable quote-include is a vendor BSP violation
-_VENDOR_BSP_STRICT = {'drivers'}
+_VENDOR_BSP_STRICT = {'fbs/drivers', 'fbs/services'}
 
 # ── Header index (basename → layer) ─────────────────────────────────────────
 
