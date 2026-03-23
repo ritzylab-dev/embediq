@@ -35,12 +35,10 @@ add_executable(test_thermostat_full
 
 target_include_directories(test_thermostat_full PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/platform/posix
     ${CMAKE_SOURCE_DIR}/examples/thermostat
 )
 
 target_link_libraries(test_thermostat_full PRIVATE
-    embediq_platform_posix
     embediq_driver_fbs
     embediq_hal_posix
 )

@@ -22,6 +22,7 @@
 #include "embediq_fb.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
+#include "hal/hal_wdg.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -172,15 +173,71 @@ static void test_wdg_unregister_removes_from_tracking(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * HAL WDG contract tests
+ * ------------------------------------------------------------------------- */
+
+/* test_hal_wdg_init_returns_ok
+ * hal_wdg_init with a valid timeout must return HAL_OK.
+ */
+static void test_hal_wdg_init_returns_ok(void)
+{
+    hal_wdg_deinit();   /* ensure clean state */
+    int rc = hal_wdg_init(500u);
+    ASSERT(rc == HAL_OK, "hal_wdg_init returns HAL_OK");
+    hal_wdg_deinit();
+}
+
+/* test_hal_wdg_kick_returns_ok_after_init
+ * hal_wdg_kick must return HAL_OK after a successful init.
+ */
+static void test_hal_wdg_kick_returns_ok_after_init(void)
+{
+    hal_wdg_deinit();
+    hal_wdg_init(500u);
+    int rc = hal_wdg_kick();
+    ASSERT(rc == HAL_OK, "hal_wdg_kick returns HAL_OK after init");
+    hal_wdg_deinit();
+}
+
+/* test_hal_wdg_deinit_does_not_crash
+ * Calling deinit (even twice) must not crash.
+ */
+static void test_hal_wdg_deinit_does_not_crash(void)
+{
+    hal_wdg_init(500u);
+    hal_wdg_deinit();
+    hal_wdg_deinit();   /* double deinit — must be safe */
+    ASSERT(true, "hal_wdg_deinit does not crash on repeated calls");
+}
+
+/* test_hal_wdg_kick_before_init_returns_error
+ * hal_wdg_kick before init must return HAL_ERR_INVALID.
+ */
+static void test_hal_wdg_kick_before_init_returns_error(void)
+{
+    hal_wdg_deinit();   /* ensure uninitialised */
+    int rc = hal_wdg_kick();
+    ASSERT(rc == HAL_ERR_INVALID,
+           "hal_wdg_kick before init returns HAL_ERR_INVALID");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
 int main(void)
 {
+    /* Watchdog Driver FB tests */
     test_wdg_all_checkin_no_fault();
     test_wdg_missed_checkin_emits_event();
     test_wdg_multiple_fbs_all_must_checkin();
     test_wdg_unregister_removes_from_tracking();
+
+    /* HAL WDG contract tests */
+    test_hal_wdg_init_returns_ok();
+    test_hal_wdg_kick_returns_ok_after_init();
+    test_hal_wdg_deinit_does_not_crash();
+    test_hal_wdg_kick_before_init_returns_error();
 
     printf("\n");
     if (g_tests_failed == 0) {
