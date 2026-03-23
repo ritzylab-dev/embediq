@@ -1,18 +1,15 @@
-#define _POSIX_C_SOURCE 200809L
-
 /*
- * platform/posix/fb_timer.c — Timer Platform FB
+ * fbs/drivers/fb_timer.c — Timer Driver FB (portable)
  *
  * Publishes periodic tick messages at 1 ms, 10 ms, 100 ms, and 1 second
- * intervals.  A background pthread drives the tick loop using CLOCK_MONOTONIC
- * and nanosleep() with absolute-time drift correction — next_fire is tracked
- * as an absolute timespec, not a relative delay, so accumulated error cancels.
+ * intervals.  Uses the HAL timer contract (hal/hal_timer.h) — no POSIX or
+ * platform-specific headers included.
  *
  * Optimisation: MSG_TIMER_1MS is only published if at least one registered FB
  * subscribes to it (checked during init_fn, after all FBs are registered).
  * The other tick periods are always published.
  *
- * Message IDs (platform/posix/embediq_platform_msgs.h):
+ * Message IDs (core/include/embediq_platform_msgs.h):
  *   MSG_TIMER_1MS   = 0x0401
  *   MSG_TIMER_10MS  = 0x0402
  *   MSG_TIMER_100MS = 0x0403
@@ -21,8 +18,8 @@
  * Boot phase: EMBEDIQ_BOOT_PHASE_PLATFORM (1)
  *
  * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
- *   fb_timer__start()         — start tick task without engine_boot
- *   fb_timer__stop_and_wait() — stop task and wait for it to exit
+ *   fb_timer__start()         — init + start HAL timer without engine_boot
+ *   fb_timer__stop_and_wait() — stop + deinit HAL timer
  *   fb_timer__reset_counts()  — zero all tick counters
  *   fb_timer__count_1ms()     — ticks fired since last reset
  *   fb_timer__count_10ms()
@@ -45,14 +42,13 @@
 #include "embediq_osal.h"
 #include "embediq_config.h"
 #include "embediq_obs.h"
+#include "hal/hal_timer.h"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <time.h>
 
-/* Package-internal FB registry accessors — implemented in fb_engine.c.
- * Declared here via extern; no public header needed (package-internal). */
+/* Package-internal FB registry accessors — implemented in fb_engine.c. */
 extern uint8_t fb_engine__reg_count(void);
 extern const EmbedIQ_FB_Config_t *fb_engine__reg_config(uint8_t idx);
 
@@ -60,106 +56,84 @@ extern const EmbedIQ_FB_Config_t *fb_engine__reg_config(uint8_t idx);
  * Module state
  * ------------------------------------------------------------------------- */
 
-static EmbedIQ_FB_Handle_t  g_fb           = NULL;
-static EmbedIQ_Task_t      *g_task         = NULL;
-static volatile bool        g_running      = false;
-static bool                 g_has_1ms_sub  = false;
+static EmbedIQ_FB_Handle_t  g_fb          = NULL;
+static volatile bool        g_running     = false;
+static bool                 g_has_1ms_sub = false;
+static volatile uint32_t    g_tick        = 0u;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
-static volatile uint32_t    g_cnt_1ms      = 0u;
-static volatile uint32_t    g_cnt_10ms     = 0u;
-static volatile uint32_t    g_cnt_100ms    = 0u;
-static volatile uint32_t    g_cnt_1sec     = 0u;
+static volatile uint32_t    g_cnt_1ms     = 0u;
+static volatile uint32_t    g_cnt_10ms    = 0u;
+static volatile uint32_t    g_cnt_100ms   = 0u;
+static volatile uint32_t    g_cnt_1sec    = 0u;
 #endif /* EMBEDIQ_PLATFORM_HOST */
 
 /* ---------------------------------------------------------------------------
- * Tick task
- * Tracks absolute next_fire time; sleep duration is recomputed each iteration
- * so overshoot in one sleep is compensated by a shorter sleep in the next.
+ * HAL timer callback — invoked every 1 ms
  * ------------------------------------------------------------------------- */
 
-static void timer_loop(void *arg)
+static void timer_callback(void *ctx)
 {
-    (void)arg;
+    (void)ctx;
 
-    struct timespec next_fire, now, sleep_dur;
-    clock_gettime(CLOCK_MONOTONIC, &next_fire);
+    if (!g_running) {
+        return;
+    }
 
-    uint32_t tick = 0u;
-
-    while (g_running) {
-        /* Advance the absolute next-fire time by exactly 1 ms. */
-        next_fire.tv_nsec += 1000000L;
-        if (next_fire.tv_nsec >= 1000000000L) {
-            next_fire.tv_nsec -= 1000000000L;
-            next_fire.tv_sec  += 1;
-        }
-
-        /* Drift-corrected sleep: compute remaining nanoseconds to next_fire. */
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        long diff_ns = (long)((next_fire.tv_sec  - now.tv_sec)  * 1000000000L
-                             + (next_fire.tv_nsec - now.tv_nsec));
-        if (diff_ns > 0L) {
-            sleep_dur.tv_sec  = diff_ns / 1000000000L;
-            sleep_dur.tv_nsec = diff_ns % 1000000000L;
-            nanosleep(&sleep_dur, NULL);
-        }
-
-        tick++;
+    uint32_t tick = ++g_tick;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
-        g_cnt_1ms++;
+    g_cnt_1ms++;
 #endif
 
-        /* 1 ms — only publish if a subscriber was found at init. */
-        if (g_has_1ms_sub && g_fb) {
+    /* 1 ms — only publish if a subscriber was found at init. */
+    if (g_has_1ms_sub && g_fb) {
+        EmbedIQ_Msg_t m;
+        memset(&m, 0, sizeof(m));
+        m.msg_id   = MSG_TIMER_1MS;
+        m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
+        embediq_publish(g_fb, &m);
+    }
+
+    /* 10 ms */
+    if ((tick % 10u) == 0u) {
+#ifdef EMBEDIQ_PLATFORM_HOST
+        g_cnt_10ms++;
+#endif
+        if (g_fb) {
             EmbedIQ_Msg_t m;
             memset(&m, 0, sizeof(m));
-            m.msg_id   = MSG_TIMER_1MS;
+            m.msg_id   = MSG_TIMER_10MS;
             m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
             embediq_publish(g_fb, &m);
         }
+    }
 
-        /* 10 ms */
-        if ((tick % 10u) == 0u) {
+    /* 100 ms */
+    if ((tick % 100u) == 0u) {
 #ifdef EMBEDIQ_PLATFORM_HOST
-            g_cnt_10ms++;
+        g_cnt_100ms++;
 #endif
-            if (g_fb) {
-                EmbedIQ_Msg_t m;
-                memset(&m, 0, sizeof(m));
-                m.msg_id   = MSG_TIMER_10MS;
-                m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-                embediq_publish(g_fb, &m);
-            }
+        if (g_fb) {
+            EmbedIQ_Msg_t m;
+            memset(&m, 0, sizeof(m));
+            m.msg_id   = MSG_TIMER_100MS;
+            m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
+            embediq_publish(g_fb, &m);
         }
+    }
 
-        /* 100 ms */
-        if ((tick % 100u) == 0u) {
+    /* 1 s */
+    if ((tick % 1000u) == 0u) {
 #ifdef EMBEDIQ_PLATFORM_HOST
-            g_cnt_100ms++;
+        g_cnt_1sec++;
 #endif
-            if (g_fb) {
-                EmbedIQ_Msg_t m;
-                memset(&m, 0, sizeof(m));
-                m.msg_id   = MSG_TIMER_100MS;
-                m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-                embediq_publish(g_fb, &m);
-            }
-        }
-
-        /* 1 s */
-        if ((tick % 1000u) == 0u) {
-#ifdef EMBEDIQ_PLATFORM_HOST
-            g_cnt_1sec++;
-#endif
-            if (g_fb) {
-                EmbedIQ_Msg_t m;
-                memset(&m, 0, sizeof(m));
-                m.msg_id   = MSG_TIMER_1SEC;
-                m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-                embediq_publish(g_fb, &m);
-            }
+        if (g_fb) {
+            EmbedIQ_Msg_t m;
+            memset(&m, 0, sizeof(m));
+            m.msg_id   = MSG_TIMER_1SEC;
+            m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
+            embediq_publish(g_fb, &m);
         }
     }
 }
@@ -188,13 +162,16 @@ static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     }
 
     g_running = true;
-    g_task = embediq_osal_task_create("fb_timer", timer_loop, NULL, 1, 4096);
+    hal_timer_init(1000u, timer_callback, NULL);
+    hal_timer_start();
 }
 
 static void timer_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
     g_running = false;
+    hal_timer_stop();
+    hal_timer_deinit();
 }
 
 /* ---------------------------------------------------------------------------
@@ -227,27 +204,30 @@ EmbedIQ_FB_Handle_t fb_timer_register(void)
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 
-/** Start the tick task directly without going through embediq_engine_boot(). */
+/** Start the HAL timer directly without going through embediq_engine_boot(). */
 void fb_timer__start(void)
 {
     g_running = true;
-    g_task = embediq_osal_task_create("fb_timer", timer_loop, NULL, 1, 4096);
+    hal_timer_init(1000u, timer_callback, NULL);
+    hal_timer_start();
 }
 
 /**
- * Signal the tick task to stop and wait for it to drain its current iteration.
- * Safe to call even if the task is already stopped.
+ * Stop the HAL timer and wait for any in-flight callback to complete.
+ * Safe to call even if the timer is already stopped.
  */
 void fb_timer__stop_and_wait(void)
 {
     g_running = false;
-    /* One tick is at most 1 ms; 20 ms is ample time for the task to exit. */
+    hal_timer_stop();
     embediq_osal_delay_ms(20u);
+    hal_timer_deinit();
 }
 
-/** Reset all tick counters to zero. */
+/** Reset all tick counters and the tick accumulator to zero. */
 void fb_timer__reset_counts(void)
 {
+    g_tick      = 0u;
     g_cnt_1ms   = 0u;
     g_cnt_10ms  = 0u;
     g_cnt_100ms = 0u;
