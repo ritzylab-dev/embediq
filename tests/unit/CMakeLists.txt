@@ -101,17 +101,21 @@ target_compile_options(test_observatory PRIVATE
 add_test(NAME unit_observatory COMMAND test_observatory)
 
 # ---------------------------------------------------------------------------
-# Watchdog FB unit tests (P1-T6)
+# Watchdog FB unit tests (P1-T6 / Arch-4c)
 # ---------------------------------------------------------------------------
 
 add_executable(test_fb_watchdog test_fb_watchdog.c)
 
 target_include_directories(test_fb_watchdog PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/platform/posix
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
-target_link_libraries(test_fb_watchdog PRIVATE embediq_platform_posix)
+target_link_libraries(test_fb_watchdog PRIVATE
+    embediq_driver_fbs
+    embediq_hal_posix
+)
 
 target_compile_options(test_fb_watchdog PRIVATE
     -Wall
@@ -130,12 +134,10 @@ add_executable(test_fb_timer test_fb_timer.c)
 target_include_directories(test_fb_timer PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
     ${CMAKE_SOURCE_DIR}/core/include/hal
-    ${CMAKE_SOURCE_DIR}/platform/posix
     ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
 target_link_libraries(test_fb_timer PRIVATE
-    embediq_platform_posix
     embediq_driver_fbs
     embediq_hal_posix
 )

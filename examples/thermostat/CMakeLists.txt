@@ -10,12 +10,10 @@ set_target_properties(thermostat PROPERTIES OUTPUT_NAME embediq_thermostat)
 
 target_include_directories(thermostat PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/platform/posix
     ${CMAKE_SOURCE_DIR}/examples/thermostat
 )
 
 target_link_libraries(thermostat PRIVATE
-    embediq_platform_posix
     embediq_driver_fbs
     embediq_hal_posix
 )

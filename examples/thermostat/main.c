@@ -31,7 +31,7 @@
 #include <stdio.h>
 
 /* ---------------------------------------------------------------------------
- * Platform FB register functions (platform/posix/)
+ * Driver FB register functions (fbs/drivers/)
  * ------------------------------------------------------------------------- */
 
 extern EmbedIQ_FB_Handle_t fb_timer_register(void);
