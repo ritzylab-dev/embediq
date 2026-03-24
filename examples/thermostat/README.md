@@ -99,7 +99,7 @@ python3 tools/embediq_obs/embediq_obs.py obs decode /tmp/thermo.iqtrace
 python3 tools/embediq_obs/embediq_obs.py obs stats /tmp/thermo.iqtrace
 ```
 
-**Step 4 — Filter to lifecycle events only:**
+**Step 4 — Filter to STATE-family events (FB lifecycle + FSM transitions):**
 ```bash
 python3 tools/embediq_obs/embediq_obs.py obs filter /tmp/thermo.iqtrace --family STATE
 ```
