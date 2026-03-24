@@ -26,6 +26,7 @@ A PR that breaks any invariant will not merge. No exceptions.
 | I-12 | Developer First Hour test passes before Phase 1 launch                                                        | Manual gate — 3 naive engineer sessions                |
 | I-13 | `sequence` is canonical event ordering — never use `timestamp_us` for ordering or gap detection               | Code review + static analysis on Observatory consumers |
 | I-14 | Core header v1 API surface unchanged after v1 release — CI v1 compatibility shim enforces no breaking changes | `tests/compat/fb_v1_compat.c` compile on every PR      |
+| I-15 | `sizeof(EmbedIQ_Obs_Session_t) == 40` on all targets | `_Static_assert` in `embediq_obs.h` + CI multi-target compile |
 
 ---
 
