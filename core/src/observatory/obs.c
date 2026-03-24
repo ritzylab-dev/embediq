@@ -34,8 +34,8 @@
  *   Default on host builds: STDOUT.
  *
  * LEVEL FILTERING (runtime, host builds):
- *   0: LIFECYCLE and FAULT events only.
- *   1: Level 0 + MSG_TX events.
+ *   0: FAULT family (0x60–0x6F) + SYSTEM family (0x10–0x1F) only.
+ *   1: Level 0 + MESSAGE family (0x20–0x2F) + STATE family (0x30–0x3F).
  *   2+: All events pass.
  *   Initialised from compile-time EMBEDIQ_OBS_LEVEL.
  *
@@ -127,14 +127,19 @@ static void ring_push(const EmbedIQ_Event_t *evt, bool count_overflow)
 static bool passes_level(uint8_t event_type)
 {
     if (g_level >= 2u) return true;
+
+    embediq_obs_family_t fam = embediq_obs_event_family(event_type);
+
     if (g_level >= 1u) {
-        return event_type == EMBEDIQ_OBS_EVT_LIFECYCLE ||
-               event_type == EMBEDIQ_OBS_EVT_FAULT     ||
-               event_type == EMBEDIQ_OBS_EVT_MSG_TX;
+        /* level 1: level 0 + MESSAGE + STATE families */
+        return fam == EMBEDIQ_OBS_FAMILY_FAULT   ||
+               fam == EMBEDIQ_OBS_FAMILY_SYSTEM  ||
+               fam == EMBEDIQ_OBS_FAMILY_MESSAGE ||
+               fam == EMBEDIQ_OBS_FAMILY_STATE;
     }
-    /* level 0: lifecycle and fault only */
-    return event_type == EMBEDIQ_OBS_EVT_LIFECYCLE ||
-           event_type == EMBEDIQ_OBS_EVT_FAULT;
+    /* level 0: FAULT and SYSTEM families only */
+    return fam == EMBEDIQ_OBS_FAMILY_FAULT ||
+           fam == EMBEDIQ_OBS_FAMILY_SYSTEM;
 }
 
 /* ---------------------------------------------------------------------------

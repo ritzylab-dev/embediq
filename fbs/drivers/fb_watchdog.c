@@ -8,7 +8,7 @@
  *
  *   If ALL checked in:
  *     -> hal_wdg_kick() to reset the hardware watchdog
- *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_INFO, ...) sequence counter
+ *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_OVERFLOW, ...) if ring buffer full
  *   If ANY missed:
  *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, ...)
  *     -> embediq_fb_report_fault(g_wdg_fb, WDG_REASON_MISSED_CHECKIN)
