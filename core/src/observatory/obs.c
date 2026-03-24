@@ -90,6 +90,9 @@ static uint32_t g_overflow   = 0u;  /* drops pending overflow report */
 static EmbedIQ_Obs_Transport_t g_transport = EMBEDIQ_OBS_TRANSPORT_STDOUT;
 static uint8_t                 g_level     = EMBEDIQ_OBS_LEVEL;
 
+static EmbedIQ_Obs_Session_t g_session;
+static bool                  g_session_valid = false;
+
 /* Power-of-2 mask: EMBEDIQ_OBS_RING_DEPTH must be a power of 2 (= 256). */
 #define RING_MASK  ((uint32_t)(EMBEDIQ_OBS_RING_DEPTH) - 1u)
 
@@ -348,6 +351,29 @@ void embediq_obs_set_level(uint8_t level)
 }
 
 /* ---------------------------------------------------------------------------
+ * Public: embediq_obs_session_begin() / embediq_obs_session_get()
+ * ------------------------------------------------------------------------- */
+
+void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    g_session       = *session;
+    g_session_valid = true;
+#else
+    (void)session;
+#endif
+}
+
+const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    return g_session_valid ? &g_session : NULL;
+#else
+    return NULL;
+#endif
+}
+
+/* ---------------------------------------------------------------------------
  * Package-internal + test-only API (EMBEDIQ_PLATFORM_HOST)
  * ------------------------------------------------------------------------- */
 
@@ -368,6 +394,8 @@ void obs__reset(void)
     g_overflow   = 0u;
     g_transport  = EMBEDIQ_OBS_TRANSPORT_STDOUT;
     g_level      = EMBEDIQ_OBS_LEVEL;
+    memset(&g_session, 0, sizeof(g_session));
+    g_session_valid = false;
 }
 
 /** Total events written to the ring since last reset. */

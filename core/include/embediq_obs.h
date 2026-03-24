@@ -174,6 +174,62 @@ embediq_obs_event_family(uint8_t event_type) {
     embediq_obs_emit((evt), (src), (tgt), (state), (msg))
 
 /* ---------------------------------------------------------------------------
+ * Platform identifier
+ * Used in EmbedIQ_Obs_Session_t to identify the runtime environment.
+ * ------------------------------------------------------------------------- */
+typedef enum {
+    EMBEDIQ_OBS_PLATFORM_POSIX      = 0, /**< Linux / macOS host build */
+    EMBEDIQ_OBS_PLATFORM_FREERTOS   = 1, /**< FreeRTOS target */
+    EMBEDIQ_OBS_PLATFORM_BAREMETAL  = 2, /**< Bare-metal, no RTOS */
+    EMBEDIQ_OBS_PLATFORM_ZEPHYR     = 3, /**< Zephyr RTOS */
+    EMBEDIQ_OBS_PLATFORM_UNKNOWN    = 0xFF,
+} embediq_obs_platform_t;
+
+/* ---------------------------------------------------------------------------
+ * Session metadata — written once at the start of every .iqtrace capture.
+ *
+ * Caller fills all fields and passes to embediq_obs_session_begin().
+ * The Observatory stores a copy and the transport (Obs-5) writes it as
+ * the first TLV record in the .iqtrace stream.
+ *
+ * fw_version packing:  bits[31:16] = major, bits[15:8] = minor,
+ *                      bits[7:0]   = patch
+ * Use EMBEDIQ_OBS_FW_VERSION(maj, min, pat) to build the packed value.
+ *
+ * build_id: null-terminated string — recommend 8-char git short hash.
+ *           Unused bytes must be zero.
+ *
+ * timestamp_base_us: absolute Unix time in microseconds at session start.
+ *   Set to 0 if wall-clock time is unavailable (bare-metal without RTC).
+ *
+ * session_id: monotonic counter incremented by the caller on each power
+ *   cycle or reboot (e.g. stored in NVM). Set to 0 if not tracked.
+ *
+ * I-14: sizeof(EmbedIQ_Obs_Session_t) == 40, enforced by _Static_assert.
+ * ------------------------------------------------------------------------- */
+
+/** Maximum length of the build_id field (including NUL terminator). */
+#define EMBEDIQ_OBS_BUILD_ID_LEN  16
+
+typedef struct {
+    uint32_t device_id;          /**< Application-assigned device identifier */
+    uint32_t fw_version;         /**< Packed firmware version — see above     */
+    uint64_t timestamp_base_us;  /**< Unix time us at session start (0 = N/A) */
+    uint32_t session_id;         /**< Monotonic per-boot session counter       */
+    uint8_t  platform_id;        /**< embediq_obs_platform_t                  */
+    uint8_t  trace_level;        /**< EMBEDIQ_TRACE_LEVEL at session start     */
+    uint8_t  _pad[2];            /**< Reserved — must be zero                 */
+    char     build_id[EMBEDIQ_OBS_BUILD_ID_LEN]; /**< Null-terminated build tag */
+} EmbedIQ_Obs_Session_t;
+
+_Static_assert(sizeof(EmbedIQ_Obs_Session_t) == 40,
+    "EmbedIQ_Obs_Session_t must be exactly 40 bytes (I-14)");
+
+/* Helper macro — build a packed fw_version value */
+#define EMBEDIQ_OBS_FW_VERSION(maj, min, pat) \
+    (((uint32_t)(maj) << 16) | ((uint32_t)(min) << 8) | (uint32_t)(pat))
+
+/* ---------------------------------------------------------------------------
  * Observatory event record — fixed layout, frozen at v1
  *
  * Fields:
@@ -233,6 +289,22 @@ void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport);
  * No-op on MCU production builds (EMBEDIQ_OBS_LEVEL is compile-time only).
  */
 void embediq_obs_set_level(uint8_t level);
+
+/**
+ * Store the active session record.
+ * Must be called once before the first event is emitted for a session.
+ * The Observatory copies the struct — caller does not need to retain it.
+ * Thread-safe on host builds (single-writer assumption on MCU).
+ */
+void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session);
+
+/**
+ * Return a const pointer to the stored session record.
+ * Returns NULL if embediq_obs_session_begin() has not been called.
+ * The pointer is valid until the next call to embediq_obs_session_begin()
+ * or obs__reset() (host builds only).
+ */
+const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void);
 
 #ifdef __cplusplus
 }
