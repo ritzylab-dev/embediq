@@ -261,6 +261,63 @@ static void test_emit_macro_message_family(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Session metadata tests
+ * ------------------------------------------------------------------------- */
+
+static void test_session_begin_stores_fields(void)
+{
+    EmbedIQ_Obs_Session_t s = {
+        .device_id         = 0xDEADBEEFu,
+        .fw_version        = EMBEDIQ_OBS_FW_VERSION(1, 2, 3),
+        .timestamp_base_us = 1234567890000000ULL,
+        .session_id        = 7u,
+        .platform_id       = EMBEDIQ_OBS_PLATFORM_POSIX,
+        .trace_level       = 1u,
+        ._pad              = {0, 0},
+        .build_id          = "deadbeef",
+    };
+    obs__reset();
+    embediq_obs_session_begin(&s);
+    const EmbedIQ_Obs_Session_t *got = embediq_obs_session_get();
+    ASSERT(got != NULL,                              "session_get must not be NULL after begin");
+    ASSERT(got->device_id == 0xDEADBEEFu,           "device_id must match");
+    ASSERT(got->fw_version == EMBEDIQ_OBS_FW_VERSION(1,2,3), "fw_version must match");
+    ASSERT(got->timestamp_base_us == 1234567890000000ULL, "timestamp_base_us must match");
+    ASSERT(got->session_id == 7u,                   "session_id must match");
+    ASSERT(got->platform_id == EMBEDIQ_OBS_PLATFORM_POSIX, "platform_id must match");
+    ASSERT(got->trace_level == 1u,                  "trace_level must match");
+    ASSERT(got->build_id[0] == 'd',                 "build_id first char must match");
+    ASSERT(got->build_id[7] == 'f',                 "build_id last char must match");
+}
+
+static void test_session_get_null_before_begin(void)
+{
+    obs__reset();
+    ASSERT(embediq_obs_session_get() == NULL,
+           "session_get must return NULL before session_begin is called");
+}
+
+static void test_session_begin_overwrites_previous(void)
+{
+    EmbedIQ_Obs_Session_t s1 = { .device_id = 1u, .session_id = 1u };
+    EmbedIQ_Obs_Session_t s2 = { .device_id = 2u, .session_id = 2u };
+    obs__reset();
+    embediq_obs_session_begin(&s1);
+    embediq_obs_session_begin(&s2);
+    const EmbedIQ_Obs_Session_t *got = embediq_obs_session_get();
+    ASSERT(got->device_id  == 2u, "second begin must overwrite device_id");
+    ASSERT(got->session_id == 2u, "second begin must overwrite session_id");
+}
+
+static void test_fw_version_macro(void)
+{
+    uint32_t v = EMBEDIQ_OBS_FW_VERSION(2, 5, 11);
+    ASSERT((v >> 16) == 2u,        "major must be in bits 31:16");
+    ASSERT(((v >> 8) & 0xFFu) == 5u,  "minor must be in bits 15:8");
+    ASSERT((v & 0xFFu) == 11u,     "patch must be in bits 7:0");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -279,6 +336,10 @@ int main(void)
     test_per_family_flags_from_level_1();
     test_emit_macro_state_family();
     test_emit_macro_message_family();
+    test_session_get_null_before_begin();
+    test_session_begin_stores_fields();
+    test_session_begin_overwrites_previous();
+    test_fw_version_macro();
 
     printf("\n");
     if (g_tests_failed == 0) {
