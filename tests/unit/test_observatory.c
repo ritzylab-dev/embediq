@@ -7,7 +7,7 @@
  * level filtering, transport discard, and stdout format.
  *
  * Run:      ./build/tests/unit/test_observatory
- * Expected: "All 7 tests passed. (0 failed)"
+ * Expected: "All N tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -110,31 +110,33 @@ static void test_ring_overflow_recovery(void)
            "second event must be the original emitted event");
 }
 
-static void test_level_0_only_captures_lifecycle(void)
+static void test_level_0_captures_fault_and_system(void)
 {
     obs__reset();
     obs__set_level(0u);
 
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);  /* pass  */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX,    0u, 1u,    0u, 0x100u); /* drop */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_FSM_TRANS, 0u, 1u,    1u, 0x100u); /* drop */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,     0u, 0xFFu, 3u, 0u);    /* pass (FAULT family) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OVERFLOW,   0u, 0xFFu, 0u, 1u);   /* pass (SYSTEM family) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE,  0u, 0xFFu, 2u, 0u);   /* drop (STATE family) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX,     0u, 1u,    0u, 0x100u); /* drop (MESSAGE family) */
 
-    ASSERT(obs__ring_count() == 1u,
-           "level 0 must capture only LIFECYCLE and FAULT events");
+    ASSERT(obs__ring_count() == 2u,
+           "level 0 must capture only FAULT and SYSTEM family events");
 }
 
-static void test_level_1_captures_msg_tx(void)
+static void test_level_1_captures_message_and_state(void)
 {
     obs__reset();
     obs__set_level(1u);
 
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);    /* pass */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX,    0u, 1u,    0u, 0x100u);  /* pass */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_RX,    0u, 1u,    0u, 0x100u);  /* drop */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_FSM_TRANS, 0u, 1u,    1u, 0x100u);  /* drop */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,     0u, 0xFFu, 3u, 0u);    /* pass (FAULT) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OVERFLOW,   0u, 0xFFu, 0u, 1u);   /* pass (SYSTEM) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE,  0u, 0xFFu, 2u, 0u);   /* pass (STATE) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX,     0u, 1u,    0u, 0x100u); /* pass (MESSAGE) */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FSM_TRANS,  0u, 1u,    1u, 0x100u); /* pass (STATE) */
 
-    ASSERT(obs__ring_count() == 2u,
-           "level 1 must capture LIFECYCLE, FAULT, and MSG_TX only");
+    ASSERT(obs__ring_count() == 5u,
+           "level 1 must capture FAULT, SYSTEM, MESSAGE, and STATE families");
 }
 
 static void test_stdout_format_contains_seq(void)
@@ -167,6 +169,60 @@ static void test_null_transport_discards_all(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Event family band tests
+ * ------------------------------------------------------------------------- */
+
+static void test_event_family_macro(void)
+{
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_LIFECYCLE)  == EMBEDIQ_OBS_FAMILY_STATE,
+           "LIFECYCLE must be in STATE family");
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_MSG_TX)     == EMBEDIQ_OBS_FAMILY_MESSAGE,
+           "MSG_TX must be in MESSAGE family");
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_MSG_RX)     == EMBEDIQ_OBS_FAMILY_MESSAGE,
+           "MSG_RX must be in MESSAGE family");
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_FSM_TRANS)  == EMBEDIQ_OBS_FAMILY_STATE,
+           "FSM_TRANS must be in STATE family");
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_FAULT)      == EMBEDIQ_OBS_FAMILY_FAULT,
+           "FAULT must be in FAULT family");
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_QUEUE_DROP) == EMBEDIQ_OBS_FAMILY_MESSAGE,
+           "QUEUE_DROP must be in MESSAGE family");
+    ASSERT(EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_OVERFLOW)   == EMBEDIQ_OBS_FAMILY_SYSTEM,
+           "OVERFLOW must be in SYSTEM family");
+}
+
+static void test_event_type_values_in_band(void)
+{
+    /* SYSTEM band: 0x10–0x1F */
+    ASSERT(EMBEDIQ_OBS_EVT_OVERFLOW >= EMBEDIQ_OBS_BAND_SYSTEM_START &&
+           EMBEDIQ_OBS_EVT_OVERFLOW <  EMBEDIQ_OBS_BAND_SYSTEM_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "OVERFLOW must be within SYSTEM band");
+
+    /* MESSAGE band: 0x20–0x2F */
+    ASSERT(EMBEDIQ_OBS_EVT_MSG_TX >= EMBEDIQ_OBS_BAND_MESSAGE_START &&
+           EMBEDIQ_OBS_EVT_MSG_TX <  EMBEDIQ_OBS_BAND_MESSAGE_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "MSG_TX must be within MESSAGE band");
+    ASSERT(EMBEDIQ_OBS_EVT_MSG_RX >= EMBEDIQ_OBS_BAND_MESSAGE_START &&
+           EMBEDIQ_OBS_EVT_MSG_RX <  EMBEDIQ_OBS_BAND_MESSAGE_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "MSG_RX must be within MESSAGE band");
+    ASSERT(EMBEDIQ_OBS_EVT_QUEUE_DROP >= EMBEDIQ_OBS_BAND_MESSAGE_START &&
+           EMBEDIQ_OBS_EVT_QUEUE_DROP <  EMBEDIQ_OBS_BAND_MESSAGE_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "QUEUE_DROP must be within MESSAGE band");
+
+    /* STATE band: 0x30–0x3F */
+    ASSERT(EMBEDIQ_OBS_EVT_LIFECYCLE >= EMBEDIQ_OBS_BAND_STATE_START &&
+           EMBEDIQ_OBS_EVT_LIFECYCLE <  EMBEDIQ_OBS_BAND_STATE_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "LIFECYCLE must be within STATE band");
+    ASSERT(EMBEDIQ_OBS_EVT_FSM_TRANS >= EMBEDIQ_OBS_BAND_STATE_START &&
+           EMBEDIQ_OBS_EVT_FSM_TRANS <  EMBEDIQ_OBS_BAND_STATE_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "FSM_TRANS must be within STATE band");
+
+    /* FAULT band: 0x60–0x6F */
+    ASSERT(EMBEDIQ_OBS_EVT_FAULT >= EMBEDIQ_OBS_BAND_FAULT_START &&
+           EMBEDIQ_OBS_EVT_FAULT <  EMBEDIQ_OBS_BAND_FAULT_START + EMBEDIQ_OBS_BAND_STRIDE,
+           "FAULT must be within FAULT band");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -175,10 +231,12 @@ int main(void)
     test_emit_increments_sequence();
     test_sequence_monotonic();
     test_ring_overflow_recovery();
-    test_level_0_only_captures_lifecycle();
-    test_level_1_captures_msg_tx();
+    test_level_0_captures_fault_and_system();
+    test_level_1_captures_message_and_state();
     test_stdout_format_contains_seq();
     test_null_transport_discards_all();
+    test_event_family_macro();
+    test_event_type_values_in_band();
 
     printf("\n");
     if (g_tests_failed == 0) {
