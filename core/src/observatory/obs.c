@@ -417,7 +417,7 @@ int embediq_obs_capture_begin(const char *path)
     if (hal_obs_stream_open(p) != HAL_OBS_STREAM_OK) return -1;
 
     /* 8-byte file header: IQTR + version 1 LE + reserved */
-    static const uint8_t hdr[EMBEDIQ_MAX_BOOT_DEPS] = {
+    static const uint8_t hdr[] = {
         0x49u, 0x51u, 0x54u, 0x52u,
         0x01u, 0x00u,
         0x00u, 0x00u
