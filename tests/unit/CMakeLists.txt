@@ -234,3 +234,27 @@ target_compile_options(test_hal_contracts PRIVATE
 )
 
 add_test(NAME unit_hal_contracts COMMAND test_hal_contracts)
+
+# ---------------------------------------------------------------------------
+# Observatory binary capture tests (Obs-5)
+# ---------------------------------------------------------------------------
+
+add_executable(test_obs_capture test_obs_capture.c)
+
+target_include_directories(test_obs_capture PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_obs_capture PRIVATE
+    embediq_fb_engine
+    embediq_hal_posix
+)
+
+target_compile_options(test_obs_capture PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_obs_capture COMMAND test_obs_capture)

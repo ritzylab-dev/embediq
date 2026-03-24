@@ -13,9 +13,10 @@ add_library(embediq_fb_engine STATIC
 
 target_include_directories(embediq_fb_engine PUBLIC
     ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
 )
 
-target_link_libraries(embediq_fb_engine PUBLIC embediq_osal_posix)
+target_link_libraries(embediq_fb_engine PUBLIC embediq_osal_posix embediq_hal_posix)
 
 target_compile_options(embediq_fb_engine PRIVATE
     -Wall
