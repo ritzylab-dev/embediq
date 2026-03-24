@@ -15,7 +15,6 @@ target_include_directories(thermostat PRIVATE
 
 target_link_libraries(thermostat PRIVATE
     embediq_driver_fbs
-    embediq_hal_posix
 )
 
 target_compile_options(thermostat PRIVATE

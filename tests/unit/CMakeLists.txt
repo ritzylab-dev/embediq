@@ -114,7 +114,6 @@ target_include_directories(test_fb_watchdog PRIVATE
 
 target_link_libraries(test_fb_watchdog PRIVATE
     embediq_driver_fbs
-    embediq_hal_posix
 )
 
 target_compile_options(test_fb_watchdog PRIVATE
@@ -139,7 +138,6 @@ target_include_directories(test_fb_timer PRIVATE
 
 target_link_libraries(test_fb_timer PRIVATE
     embediq_driver_fbs
-    embediq_hal_posix
 )
 
 target_compile_options(test_fb_timer PRIVATE
@@ -204,7 +202,6 @@ target_include_directories(test_fb_nvm PRIVATE
 
 target_link_libraries(test_fb_nvm PRIVATE
     embediq_driver_fbs
-    embediq_hal_posix
 )
 
 target_compile_options(test_fb_nvm PRIVATE
@@ -248,7 +245,6 @@ target_include_directories(test_obs_capture PRIVATE
 
 target_link_libraries(test_obs_capture PRIVATE
     embediq_fb_engine
-    embediq_hal_posix
 )
 
 target_compile_options(test_obs_capture PRIVATE

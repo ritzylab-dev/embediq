@@ -40,7 +40,6 @@ target_include_directories(test_thermostat_full PRIVATE
 
 target_link_libraries(test_thermostat_full PRIVATE
     embediq_driver_fbs
-    embediq_hal_posix
 )
 
 target_compile_options(test_thermostat_full PRIVATE
