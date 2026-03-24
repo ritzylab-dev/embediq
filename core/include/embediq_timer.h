@@ -7,10 +7,10 @@
  * the subscription pattern.
  *
  * Message IDs (from embediq_platform_msgs.h):
- *   MSG_TIMER_1MS    0x0401   Published every 1 ms
- *   MSG_TIMER_10MS   0x0402   Published every 10 ms
- *   MSG_TIMER_100MS  0x0403   Published every 100 ms
- *   MSG_TIMER_1SEC   0x0404   Published every 1 second
+ *   MSG_TIMER_1MS    0x04B0   Published every 1 ms
+ *   MSG_TIMER_10MS   0x04B1   Published every 10 ms
+ *   MSG_TIMER_100MS  0x04B2   Published every 100 ms
+ *   MSG_TIMER_1SEC   0x04B3   Published every 1 second
  *
  * Drift correction: fb_timer uses a drift-corrected sleep loop so that
  * accumulated tick count remains accurate over long run times. Callers

@@ -25,6 +25,7 @@
 #include "embediq_msg.h"
 #include "embediq_bus.h"
 #include "embediq_obs.h"
+#include "embediq_platform_msgs.h"
 
 /* Generated catalog — present only when -I generated/ is on the compile line. */
 #if __has_include("embediq_msg_catalog.h")
@@ -62,8 +63,8 @@ static void my_fb__fault(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
 }
 
 /* Use required macros — never compound literals (R-sub-01). */
-EMBEDIQ_SUBS(my_subs, 0x0401u, 0x0402u);
-EMBEDIQ_PUBS(my_pubs, 0x0403u);
+EMBEDIQ_SUBS(my_subs, MSG_TIMER_1MS, MSG_TIMER_10MS);
+EMBEDIQ_PUBS(my_pubs, MSG_TIMER_100MS);
 
 /* const char * const [] decays to const char * const * — matches depends_on. */
 static const char * const my_deps[] = { "fb_timer" };
@@ -116,7 +117,7 @@ static void my_subfn__exit(EmbedIQ_FB_Handle_t fb, void *fb_data,
     (void)subfn_data;
 }
 
-EMBEDIQ_SUBS(my_subfn_subs, 0x0401u);
+EMBEDIQ_SUBS(my_subfn_subs, MSG_TIMER_1MS);
 
 /* Exercises every field of EmbedIQ_SubFn_Config_t. */
 static const EmbedIQ_SubFn_Config_t my_subfn_config = {
@@ -153,7 +154,7 @@ static void action_noop(const void *msg, void *fb_data)
 }
 
 static const EmbedIQ_SM_Row_t my_sm_table[] = {
-    { STATE_IDLE, 0x0401u, guard_always, action_noop, STATE_ARMED },
+    { STATE_IDLE, MSG_TIMER_1MS, guard_always, action_noop, STATE_ARMED },
     EMBEDIQ_SM_TABLE_END,
 };
 
@@ -177,16 +178,16 @@ int main(void)
 
     /* --- embediq_msg.h: message envelope and priority enum --- */
     EmbedIQ_Msg_t msg = {0};
-    msg.msg_id   = 0x0401u;
+    msg.msg_id   = MSG_TIMER_1MS;
     msg.priority = (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL;
     (void)msg;
 
     /* --- embediq_msg_catalog.h: generated message IDs and payload types --- */
 #ifdef EMBEDIQ_COMPAT_HAS_CATALOG
-    uint16_t tick_id = MSG_TIMER_TICK;
-    MSG_TIMER_TICK_Payload_t tick_payload = { .tick_count = 0u };
-    (void)tick_id;
-    (void)tick_payload;
+    uint16_t ready_id = MSG_SYSTEM_READY;
+    MSG_SYSTEM_READY_Payload_t ready_payload = { .boot_phase = 0u };
+    (void)ready_id;
+    (void)ready_payload;
 #endif
 
     /* --- embediq_obs.h: event record, event type macros, transport enum --- */
