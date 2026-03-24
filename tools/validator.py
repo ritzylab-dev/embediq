@@ -174,6 +174,104 @@ def check_msg_id_ranges(root):
     return violations
 
 
+def check_registry_vs_header(root):
+    """
+    Verify that every header-sourced entry in defined_messages matches
+    the actual #define value in its source header, and that no two
+    defined_messages entries share the same id_hex.
+
+    Returns True if violations were found.
+    """
+    registry_path = root / "messages_registry.json"
+    if not registry_path.exists():
+        return False
+
+    with open(registry_path, encoding="utf-8") as f:
+        registry = json.load(f)
+
+    defined = registry.get("defined_messages", {})
+    if not defined:
+        return False
+
+    violations = False
+
+    # Duplicate id_hex detection across all defined_messages.
+    seen_hex = {}  # id_hex → msg_name
+    for msg_name, info in defined.items():
+        id_hex = info.get("id_hex", "")
+        if id_hex in seen_hex:
+            print(
+                f"messages_registry.json: duplicate id_hex {id_hex} "
+                f"used by {seen_hex[id_hex]} and {msg_name}",
+                file=sys.stderr,
+            )
+            violations = True
+        else:
+            seen_hex[id_hex] = msg_name
+
+    # For header-sourced entries, verify #define value matches registry.
+    _define_re = re.compile(
+        r"^\s*#define\s+(MSG_\w+)\s+0x([0-9A-Fa-f]+)u", re.MULTILINE
+    )
+    header_cache = {}  # source_path → {name: hex_value_int}
+
+    for msg_name, info in defined.items():
+        source = info.get("source", "")
+        if not source.endswith(".h"):
+            continue
+
+        header_path = root / source
+        if not header_path.exists():
+            print(
+                f"messages_registry.json: {msg_name} source file "
+                f"{source} not found",
+                file=sys.stderr,
+            )
+            violations = True
+            continue
+
+        if source not in header_cache:
+            text = header_path.read_text(encoding="utf-8")
+            header_cache[source] = {
+                m.group(1): int(m.group(2), 16)
+                for m in _define_re.finditer(text)
+            }
+
+        header_defines = header_cache[source]
+        registry_hex = info.get("id_hex", "")
+
+        if msg_name not in header_defines:
+            print(
+                f"messages_registry.json: {msg_name} not found in {source}",
+                file=sys.stderr,
+            )
+            violations = True
+            continue
+
+        header_val = header_defines[msg_name]
+        try:
+            registry_val = int(registry_hex, 16)
+        except ValueError:
+            print(
+                f"messages_registry.json: {msg_name} has invalid "
+                f"id_hex {registry_hex!r}",
+                file=sys.stderr,
+            )
+            violations = True
+            continue
+
+        if header_val != registry_val:
+            print(
+                f"messages_registry.json: {msg_name} registry id "
+                f"{registry_hex} does not match header value "
+                f"0x{header_val:04X}",
+                file=sys.stderr,
+            )
+            violations = True
+
+    return violations
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -214,9 +312,20 @@ def main():
         )
         found_violations = True
 
+    # Check registry entries match header values.
+    if check_registry_vs_header(root):
+        print(
+            "\nFAIL: registry/header mismatch detected. "
+            "Reconcile defined_messages in messages_registry.json "
+            "with source headers.",
+            file=sys.stderr,
+        )
+        found_violations = True
+
     if not found_violations:
         print("OK: no hardcoded sizing constants found. "
-              "Message ID ranges verified.")
+              "Message ID ranges verified. "
+              "Registry entries verified against headers.")
 
     return 1 if found_violations else 0
 

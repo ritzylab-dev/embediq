@@ -68,6 +68,113 @@
     }
   },
 
+  "defined_messages": {
+    "MSG_FB_STATE_CHANGE": {
+      "id_hex":     "0x0001",
+      "id_decimal": 1,
+      "fb":         "core",
+      "namespace":  "core",
+      "source":     "messages/core.iq",
+      "description": "FB lifecycle state transition"
+    },
+    "MSG_FB_FAULT": {
+      "id_hex":     "0x0002",
+      "id_decimal": 2,
+      "fb":         "core",
+      "namespace":  "core",
+      "source":     "messages/core.iq",
+      "description": "FB fault report via embediq_fb_report_fault()"
+    },
+    "MSG_SYS_OTA_REQUEST": {
+      "id_hex":     "0x0003",
+      "id_decimal": 3,
+      "fb":         "core",
+      "namespace":  "core",
+      "source":     "messages/core.iq",
+      "description": "OTA update imminent — FBs must flush state"
+    },
+    "MSG_SYS_OTA_READY": {
+      "id_hex":     "0x0004",
+      "id_decimal": 4,
+      "fb":         "core",
+      "namespace":  "core",
+      "source":     "messages/core.iq",
+      "description": "FB state flushed, safe to proceed with OTA"
+    },
+    "MSG_SYS_SHUTDOWN": {
+      "id_hex":     "0x0005",
+      "id_decimal": 5,
+      "fb":         "core",
+      "namespace":  "core",
+      "source":     "messages/core.iq",
+      "description": "System shutdown broadcast before bootloader"
+    },
+    "MSG_SYSTEM_READY": {
+      "id_hex":     "0x0020",
+      "id_decimal": 32,
+      "fb":         "core",
+      "namespace":  "core",
+      "source":     "messages/core.iq",
+      "description": "Boot phase complete — all FBs in phase initialised"
+    },
+    "MSG_WDG_MISSED_CHECKIN": {
+      "id_hex":     "0x047E",
+      "id_decimal": 1150,
+      "fb":         "fb_watchdog",
+      "namespace":  "official",
+      "source":     "core/include/embediq_platform_msgs.h",
+      "description": "A registered FB missed its checkin deadline"
+    },
+    "MSG_WDG_RESET_REASON": {
+      "id_hex":     "0x047F",
+      "id_decimal": 1151,
+      "fb":         "fb_watchdog",
+      "namespace":  "official",
+      "source":     "core/include/embediq_platform_msgs.h",
+      "description": "Reset reason emitted once on startup"
+    },
+    "MSG_TIMER_1MS": {
+      "id_hex":     "0x04B0",
+      "id_decimal": 1200,
+      "fb":         "fb_timer",
+      "namespace":  "official",
+      "source":     "core/include/embediq_platform_msgs.h",
+      "description": "Published every 1 ms"
+    },
+    "MSG_TIMER_10MS": {
+      "id_hex":     "0x04B1",
+      "id_decimal": 1201,
+      "fb":         "fb_timer",
+      "namespace":  "official",
+      "source":     "core/include/embediq_platform_msgs.h",
+      "description": "Published every 10 ms"
+    },
+    "MSG_TIMER_100MS": {
+      "id_hex":     "0x04B2",
+      "id_decimal": 1202,
+      "fb":         "fb_timer",
+      "namespace":  "official",
+      "source":     "core/include/embediq_platform_msgs.h",
+      "description": "Published every 100 ms"
+    },
+    "MSG_TIMER_1SEC": {
+      "id_hex":     "0x04B3",
+      "id_decimal": 1203,
+      "fb":         "fb_timer",
+      "namespace":  "official",
+      "source":     "core/include/embediq_platform_msgs.h",
+      "description": "Published every 1 second"
+    },
+    "MSG_TEMP_READING": {
+      "id_hex":     "0x0420",
+      "id_decimal": 1056,
+      "fb":         "thermostat",
+      "namespace":  "official",
+      "source":     "messages/thermostat.iq",
+      "description": "Temperature reading from fb_temp_sensor"
+    }
+  },
+
   "tombstoned": {
     "_description": "Retired message IDs. These are never recycled. If you encounter these IDs in old firmware, they are no longer valid.",
     "_entries": []
