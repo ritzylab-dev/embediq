@@ -1,8 +1,12 @@
 # EmbedIQ CLI — Command Specification
 
-> **Status:** Contract frozen Phase 2. Implementation target: Phase 2.
-> This document specifies the `embediq` command-line tool that will ship
-> alongside the framework. No implementation exists yet.
+> **Status — Observatory sub-commands:** IMPLEMENTED. `embediq obs decode /
+> stats / filter / export / tail / capture` are shipped at
+> `tools/embediq_obs/embediq_obs.py`. Tests at `tests/cli/test_obs_cli.py`.
+>
+> **Status — Project-management commands:** Phase 2. `embediq init`, `embediq
+> add`, `embediq build`, `embediq flash`, `embediq monitor`, `embediq validate`
+> are specified below but not yet implemented.
 
 ---
 

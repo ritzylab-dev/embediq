@@ -19,7 +19,7 @@ Welcome. Contributions are what make EmbedIQ better for everyone.
 | Contribution type    | Where it goes     | Notes                                             |
 | -------------------- | ----------------- | ------------------------------------------------- |
 | Bug fixes            | Anywhere          | Always welcome. Small and focused.                |
-| New Platform FBs     | `platform/posix/` | Must follow the five-layer pattern below          |
+| New Driver FBs       | `fbs/drivers/` + `hal/<target>/` | Portable FB in `fbs/drivers/`, HAL implementation in `hal/<target>/`. Must follow the five-layer pattern below. |
 | New Component FBs    | `components/`     | Must have full host test coverage                 |
 | OSAL implementations | `osal/`           | For new RTOS targets (Zephyr, bare-metal, RISC-V) |
 | BSP implementations  | `platform/bsp/`   | For new hardware targets                          |
@@ -114,7 +114,7 @@ EmbedIQ has a clear public/private boundary. Contributions must respect it.
 
 ## Review process
 
-1. Open a PR against `main`
+1. Open a PR against `dev`
 2. CI runs automatically: build, lint, host tests, binary analysis, license check
 3. CLA bot checks signature
 4. Maintainer reviews within 5 business days for small PRs, 10 for large

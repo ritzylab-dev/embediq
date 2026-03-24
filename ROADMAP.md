@@ -35,7 +35,15 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 - [x] Core FB engine — FB create/destroy, init sequence, lifecycle
 - [x] Message bus — publish/subscribe, three-queue priority, routing table
 - [x] FSM engine — table-driven dispatch, auto-guard evaluation
-- [x] Observatory — bus tap, event capture, CLI transport
+- [x] Observatory — complete observability system:
+    - 7-family event taxonomy (band encoding, zero runtime overhead)
+    - Compile-time `EMBEDIQ_TRACE_LEVEL` (0–3) + per-family zero-overhead emit macros
+    - `EmbedIQ_Obs_Session_t` 40B session identity record + `session_begin/get` API
+    - `.iqtrace` open binary format — TLV-framed, Apache 2.0 spec (`docs/observability/iqtrace_format.md`)
+    - `tools/embediq_obs/` CLI — `decode / stats / filter / export / tail`
+- [x] HAL refactor — fb_timer, fb_nvm, fb_watchdog split into portable
+    Driver FBs (`fbs/drivers/`) + POSIX HAL implementations (`hal/posix/`).
+    `platform/posix/` retired. Pattern established for all future targets.
 - [ ] (Phase 2) fb_uart — two-zone ISR model, ring buffer, thread delivery
 - [x] fb_watchdog — health-token model, miss detection, reset reason logging
 - [x] fb_nvm — key-value store, journalled write, host volatile backend
@@ -66,7 +74,9 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 - [ ] Industrial sensor gateway example (Modbus reader)
 - [ ] `messages.iq` integration — schema_id verified at runtime in debug builds
 - [ ] EmbedIQ Registry v0 — package manifest format, local registry, `embediq add fb_cloud_mqtt`
-- [ ] `embediq` CLI — project init, FB add, build
+- [ ] `embediq` project-management CLI — `init`, `add`, `build`, `flash`
+    (Note: Observatory sub-commands `embediq obs` are already shipped in
+    `tools/embediq_obs/` — this item covers the project-management CLI only)
 
 **Success criterion:** Smart thermostat running on ESP32 or STM32 with same code as Pi/Linux host. Only the BSP changes.
 
@@ -110,6 +120,9 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 
 - Phase 0: Foundations — complete March 2026
 - Phase 1: Core Engine + thermostat demo — complete March 2026
+- Phase 1 (continued): HAL refactor (PRs #24–#29) — complete March 2026
+- Phase 1 (continued): Observability track Obs-0 through Obs-6 — complete March 2026
+- dev branch ready for dev→main promotion
 
 ---
 
