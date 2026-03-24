@@ -70,7 +70,9 @@
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 #  include <stdio.h>
+#  include <stdlib.h>
 #  include <time.h>
+#  include "hal/hal_obs_stream.h"
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -246,6 +248,25 @@ static void format_event_internal(const EmbedIQ_Event_t *evt,
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * TLV writer — used by capture_begin/end and the FILE transport emit path
+ * ------------------------------------------------------------------------- */
+
+static int write_tlv(uint16_t type, uint16_t length, const void *payload)
+{
+    uint8_t hdr[4];
+    hdr[0] = (uint8_t)(type   & 0xFFu);
+    hdr[1] = (uint8_t)(type   >> 8u);
+    hdr[2] = (uint8_t)(length & 0xFFu);
+    hdr[3] = (uint8_t)(length >> 8u);
+    if (hal_obs_stream_write(hdr, 4u) != HAL_OBS_STREAM_OK) return -1;
+    if (length > 0u && payload != NULL) {
+        if (hal_obs_stream_write(payload, length) != HAL_OBS_STREAM_OK)
+            return -1;
+    }
+    return 0;
+}
+
 #endif /* EMBEDIQ_PLATFORM_HOST */
 
 /* ---------------------------------------------------------------------------
@@ -321,6 +342,10 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
         printf("%s\n", line);
     }
 
+    if (g_transport == EMBEDIQ_OBS_TRANSPORT_FILE) {
+        write_tlv(0x0002u, (uint16_t)sizeof(EmbedIQ_Event_t), &evt);
+    }
+
 #endif /* EMBEDIQ_PLATFORM_HOST */
 }
 
@@ -374,6 +399,60 @@ const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Public: embediq_obs_capture_begin() / embediq_obs_capture_end()
+ * ------------------------------------------------------------------------- */
+
+int embediq_obs_capture_begin(const char *path)
+{
+#ifndef EMBEDIQ_PLATFORM_HOST
+    (void)path;
+    return -1;
+#else
+    const char *p = path ? path : getenv("EMBEDIQ_OBS_PATH");
+    if (!p) p = "/tmp/embediq_capture.iqtrace";
+
+    const EmbedIQ_Obs_Session_t *s = embediq_obs_session_get();
+    if (!s) return -1;
+
+    if (hal_obs_stream_open(p) != HAL_OBS_STREAM_OK) return -1;
+
+    /* 8-byte file header: IQTR + version 1 LE + reserved */
+    static const uint8_t hdr[] = {
+        0x49u, 0x51u, 0x54u, 0x52u,
+        0x01u, 0x00u,
+        0x00u, 0x00u
+    };
+    if (hal_obs_stream_write(hdr, (uint16_t)sizeof(hdr)) != HAL_OBS_STREAM_OK) {
+        hal_obs_stream_close();
+        return -1;
+    }
+
+    /* SESSION TLV */
+    if (write_tlv(0x0001u, (uint16_t)sizeof(*s), s) != 0) {
+        hal_obs_stream_close();
+        return -1;
+    }
+
+    hal_obs_stream_flush();
+    g_transport = EMBEDIQ_OBS_TRANSPORT_FILE;
+    return 0;
+#endif
+}
+
+int embediq_obs_capture_end(void)
+{
+#ifndef EMBEDIQ_PLATFORM_HOST
+    return -1;
+#else
+    int ret = write_tlv(0x0004u, 0u, NULL);  /* STREAM_END */
+    hal_obs_stream_flush();
+    hal_obs_stream_close();
+    g_transport = EMBEDIQ_OBS_TRANSPORT_NULL;
+    return ret;
+#endif
+}
+
+/* ---------------------------------------------------------------------------
  * Package-internal + test-only API (EMBEDIQ_PLATFORM_HOST)
  * ------------------------------------------------------------------------- */
 
@@ -386,6 +465,7 @@ const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void)
  */
 void obs__reset(void)
 {
+    hal_obs_stream_close();   /* safe even if not open */
     memset(g_ring, 0, sizeof(g_ring));
     g_ring_head  = 0u;
     g_ring_count = 0u;

@@ -268,6 +268,7 @@ typedef enum {
     EMBEDIQ_OBS_TRANSPORT_NULL   = 0, /**< Discard all events (production default) */
     EMBEDIQ_OBS_TRANSPORT_STDOUT = 1, /**< Print to stdout (host/debug) */
     EMBEDIQ_OBS_TRANSPORT_TCP    = 2, /**< Stream to EmbedIQ Studio via TCP */
+    EMBEDIQ_OBS_TRANSPORT_FILE   = 3, /**< Write .iqtrace binary capture */
 } EmbedIQ_Obs_Transport_t;
 
 /* ---------------------------------------------------------------------------
@@ -305,6 +306,26 @@ void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session);
  * or obs__reset() (host builds only).
  */
 const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void);
+
+/**
+ * Begin a binary .iqtrace capture.
+ * path: file path to write. If NULL, reads EMBEDIQ_OBS_PATH env var.
+ * Requires embediq_obs_session_begin() to have been called first.
+ * Writes file header (8 bytes) + SESSION TLV (44 bytes).
+ * Sets transport to EMBEDIQ_OBS_TRANSPORT_FILE on success.
+ * Returns 0 on success, -1 if no session set or file open fails.
+ * No-op and returns -1 on MCU builds.
+ */
+int embediq_obs_capture_begin(const char *path);
+
+/**
+ * End the binary .iqtrace capture.
+ * Writes STREAM_END TLV, flushes and closes the file.
+ * Resets transport to EMBEDIQ_OBS_TRANSPORT_NULL.
+ * Returns 0 on success, -1 on error.
+ * No-op and returns -1 on MCU builds.
+ */
+int embediq_obs_capture_end(void);
 
 #ifdef __cplusplus
 }
