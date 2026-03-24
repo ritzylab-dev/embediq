@@ -50,3 +50,33 @@ target_compile_options(test_thermostat_full PRIVATE
 
 add_test(NAME integration_thermostat_full COMMAND test_thermostat_full)
 set_tests_properties(integration_thermostat_full PROPERTIES TIMEOUT 60)
+
+# ---------------------------------------------------------------------------
+# Thermostat .iqtrace capture integration test (Obs-5 E2E)
+# ---------------------------------------------------------------------------
+
+add_executable(test_thermostat_capture
+    test_thermostat_capture.c
+    ${CMAKE_SOURCE_DIR}/examples/thermostat/fb_temp_sensor.c
+    ${CMAKE_SOURCE_DIR}/examples/thermostat/fb_temp_controller.c
+)
+
+target_include_directories(test_thermostat_capture PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/examples/thermostat
+)
+
+target_link_libraries(test_thermostat_capture PRIVATE
+    embediq_driver_fbs
+)
+
+target_compile_definitions(test_thermostat_capture PRIVATE
+    EMBEDIQ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+target_compile_options(test_thermostat_capture PRIVATE
+    -Wall -Wextra -Werror
+)
+
+add_test(NAME integration_thermostat_capture COMMAND test_thermostat_capture)
+set_tests_properties(integration_thermostat_capture PROPERTIES TIMEOUT 30)
