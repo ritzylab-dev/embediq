@@ -111,6 +111,69 @@ embediq_obs_event_family(uint8_t event_type) {
 #define EMBEDIQ_OBS_EVT_FAMILY(event_type)  embediq_obs_event_family(event_type)
 
 /* ---------------------------------------------------------------------------
+ * Compile-time-gated emit macros — one per event family.
+ *
+ * Usage:
+ *   EMBEDIQ_OBS_EMIT_STATE(event_type, source, target, state, msg_id)
+ *   EMBEDIQ_OBS_EMIT_MESSAGE(event_type, source, target, state, msg_id)
+ *   etc.
+ *
+ * Each macro expands to embediq_obs_emit() when its family flag is enabled,
+ * or to ((void)0) when disabled — allowing the compiler to eliminate dead
+ * code completely in production builds.
+ *
+ * FAULT and SYSTEM families are unconditional — use embediq_obs_emit()
+ * directly for those event types.
+ * ------------------------------------------------------------------------- */
+
+/* embediq_obs.h is included from embediq_config.h consumers but also
+ * directly. Include embediq_config.h here only if not already included. */
+#ifndef EMBEDIQ_CONFIG_H
+#  include "embediq_config.h"
+#endif
+
+#if EMBEDIQ_TRACE_MESSAGE
+#  define EMBEDIQ_OBS_EMIT_MESSAGE(evt, src, tgt, state, msg) \
+     embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+#else
+#  define EMBEDIQ_OBS_EMIT_MESSAGE(evt, src, tgt, state, msg)  ((void)0)
+#endif
+
+#if EMBEDIQ_TRACE_STATE
+#  define EMBEDIQ_OBS_EMIT_STATE(evt, src, tgt, state, msg) \
+     embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+#else
+#  define EMBEDIQ_OBS_EMIT_STATE(evt, src, tgt, state, msg)    ((void)0)
+#endif
+
+#if EMBEDIQ_TRACE_RESOURCE
+#  define EMBEDIQ_OBS_EMIT_RESOURCE(evt, src, tgt, state, msg) \
+     embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+#else
+#  define EMBEDIQ_OBS_EMIT_RESOURCE(evt, src, tgt, state, msg) ((void)0)
+#endif
+
+#if EMBEDIQ_TRACE_TIMING
+#  define EMBEDIQ_OBS_EMIT_TIMING(evt, src, tgt, state, msg) \
+     embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+#else
+#  define EMBEDIQ_OBS_EMIT_TIMING(evt, src, tgt, state, msg)   ((void)0)
+#endif
+
+#if EMBEDIQ_TRACE_FUNCTION
+#  define EMBEDIQ_OBS_EMIT_FUNCTION(evt, src, tgt, state, msg) \
+     embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+#else
+#  define EMBEDIQ_OBS_EMIT_FUNCTION(evt, src, tgt, state, msg) ((void)0)
+#endif
+
+/* FAULT and SYSTEM families are always enabled — emit directly */
+#define EMBEDIQ_OBS_EMIT_FAULT(evt, src, tgt, state, msg) \
+    embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+#define EMBEDIQ_OBS_EMIT_SYSTEM(evt, src, tgt, state, msg) \
+    embediq_obs_emit((evt), (src), (tgt), (state), (msg))
+
+/* ---------------------------------------------------------------------------
  * Observatory event record — fixed layout, frozen at v1
  *
  * Fields:

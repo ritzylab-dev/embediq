@@ -223,6 +223,44 @@ static void test_event_type_values_in_band(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Compile-time trace level tests
+ * ------------------------------------------------------------------------- */
+
+static void test_trace_level_defaults(void)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    ASSERT(EMBEDIQ_TRACE_LEVEL == 1, "host default trace level must be 1");
+#else
+    ASSERT(EMBEDIQ_TRACE_LEVEL == 0, "MCU default trace level must be 0");
+#endif
+}
+
+static void test_per_family_flags_from_level_1(void)
+{
+    ASSERT(EMBEDIQ_TRACE_MESSAGE  == 1, "MESSAGE enabled at level 1");
+    ASSERT(EMBEDIQ_TRACE_STATE    == 1, "STATE enabled at level 1");
+    ASSERT(EMBEDIQ_TRACE_RESOURCE == 0, "RESOURCE disabled at level 1");
+    ASSERT(EMBEDIQ_TRACE_TIMING   == 0, "TIMING disabled at level 1");
+    ASSERT(EMBEDIQ_TRACE_FUNCTION == 0, "FUNCTION disabled at level 1");
+}
+
+static void test_emit_macro_state_family(void)
+{
+    obs__reset();
+    EMBEDIQ_OBS_EMIT_STATE(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);
+    ASSERT(obs__ring_count() == 1u,
+           "EMBEDIQ_OBS_EMIT_STATE must emit when TRACE_STATE enabled");
+}
+
+static void test_emit_macro_message_family(void)
+{
+    obs__reset();
+    EMBEDIQ_OBS_EMIT_MESSAGE(EMBEDIQ_OBS_EVT_MSG_TX, 0u, 1u, 0u, 0x100u);
+    ASSERT(obs__ring_count() == 1u,
+           "EMBEDIQ_OBS_EMIT_MESSAGE must emit when TRACE_MESSAGE enabled");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -237,6 +275,10 @@ int main(void)
     test_null_transport_discards_all();
     test_event_family_macro();
     test_event_type_values_in_band();
+    test_trace_level_defaults();
+    test_per_family_flags_from_level_1();
+    test_emit_macro_state_family();
+    test_emit_macro_message_family();
 
     printf("\n");
     if (g_tests_failed == 0) {
