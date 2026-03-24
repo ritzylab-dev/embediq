@@ -2,7 +2,7 @@
 
 **The open-source application framework above the RTOS.**
 
-Apache 2.0 · RTOS-agnostic · Host simulation first · Zero-instrumentation observability
+Apache 2.0 · RTOS-agnostic · Host simulation first · Zero-instrumentation observability · Open .iqtrace format
 
 ---
 
@@ -74,24 +74,54 @@ All tests pass on Linux and macOS without hardware. The thermostat example runs 
 ./build/examples/thermostat/embediq_thermostat
 ```
 
-```
-[ 1.001] BOOT  fb_timer      RUNNING
-[ 1.002] BOOT  fb_watchdog   RUNNING
-[ 2.001] TX    fb_sensor  →  fb_ctrl       MSG_TEMP_READING   seq=3
-[ 2.002] FSM   fb_ctrl.temp_monitor        NORMAL → WARNING   seq=4
-[ 2.003] TX    fb_ctrl    →  fb_cloud      MSG_CLOUD_PUBLISH  seq=5
-[ 2.004] OBS   queue_depth=2 source=fb_ctrl
+No printf. No instrumentation. Every message and FSM transition captured automatically by the Observatory. Write a `.iqtrace` session file and analyse it from your laptop:
+
+```bash
+EMBEDIQ_OBS_PATH=/tmp/thermostat.iqtrace ./build/examples/thermostat/embediq_thermostat
+python3 tools/embediq_obs/embediq_obs.py obs stats /tmp/thermostat.iqtrace
 ```
 
-No printf. No instrumentation. Every message and FSM transition captured automatically by the Observatory.
+```
+File:         /tmp/thermostat.iqtrace
+Device:       0x00000001
+Firmware:     0.1.0  build=dev
+Platform:     POSIX
+Total events: 47
+Seq range:    1 – 47
+
+Events by family:
+  FAULT          2
+  MESSAGE       18
+  STATE         12
+  SYSTEM        15
+
+Events by type:
+  FAULT          2
+  FSM_TRANS     12
+  LIFECYCLE     15
+  MSG_RX         9
+  MSG_TX         9
+```
+
+The event record format, TLV framing, and session structure are open and specified in [`docs/observability/iqtrace_format.md`](docs/observability/iqtrace_format.md). The CLI is Apache 2.0. EmbedIQ Studio adds visual analysis on top — it never owns or restricts the underlying data.
 
 ---
 
 ## What exists today
 
-**Phase 1 — complete.** Core engine, message bus, FSM engine, Observatory, POSIX OSAL, and the thermostat demo run clean. All contracts frozen. `ctest` passes 100%.
+**Phase 1 — complete.** Core engine, message bus, FSM engine, full observability system, POSIX OSAL, and the thermostat demo run clean. All contracts frozen. `ctest` passes 100%.
 
-**Phase 2 — active.** HAL contracts landed. Driver FB refactor underway — `fb_timer`, `fb_nvm`, `fb_watchdog` being split into portable Driver FBs (`fbs/drivers/`) and POSIX HAL implementations (`hal/posix/`). ESP32 and Pi 4 hardware targets next.
+**HAL refactor — complete.** All three Phase 1 Driver FBs (`fb_timer`, `fb_nvm`, `fb_watchdog`) live in `fbs/drivers/` as portable, POSIX-independent source files. POSIX implementations live in `hal/posix/`. `platform/posix/` is retired. The pattern is established for every future hardware target.
+
+**Observability system — complete.** The Observatory is not a printf replacement — it is a structured, machine-readable record of exactly what the firmware did. Every state transition, every message boundary, every fault is automatically captured with zero developer code. The full system includes:
+
+- 7-family event taxonomy (SYSTEM, MESSAGE, STATE, RESOURCE, TIMING, FAULT, FUNCTION) encoded as bands in the event type byte — zero extra runtime overhead, family derived in the decoder
+- Compile-time `EMBEDIQ_TRACE_LEVEL` (0–3) with per-family zero-overhead emit macros — events compile to `(void)0` on constrained MCU builds
+- `EmbedIQ_Obs_Session_t` — 40-byte session identity record (device ID, firmware version, build ID, platform, trace level) prepended to every capture
+- `.iqtrace` open binary format — TLV-framed, little-endian, forward-compatible, fully specified in `docs/observability/iqtrace_format.md` (Apache 2.0)
+- `tools/embediq_obs/` CLI — `embediq obs decode / stats / filter / export` — read any `.iqtrace` file from a laptop, no Studio required
+
+**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, `fb_cloud_mqtt`, `fb_ota`. See [ROADMAP.md](ROADMAP.md).
 
 See [ROADMAP.md](ROADMAP.md) for the full timeline.
 
@@ -113,6 +143,8 @@ Use EmbedIQ in closed-source commercial products at zero cost. No source disclos
 
 QP/C — the closest prior art, 60,000+ downloads per year for 19 years — ships under GPLv3. Commercial use requires either full source disclosure or a paid commercial license. EmbedIQ removes that constraint structurally.
 
+The `.iqtrace` binary format and `embediq obs` CLI are Apache 2.0 forever — the data your firmware produces is permanently open. EmbedIQ Studio (future commercial) adds visual analysis on top; it never owns or restricts the underlying event data.
+
 See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the exact commitment: what is Apache 2.0 forever and what the future commercial layer is.
 
 ---
@@ -130,14 +162,15 @@ Embedded engineers and IoT leads who have shipped production RTOS firmware and r
 
 ## Documentation
 
-| Document                                         | Purpose                                                    |
-| ------------------------------------------------ | ---------------------------------------------------------- |
-| [ARCHITECTURE.md](ARCHITECTURE.md)               | Complete technical reference — Layer Model, contracts, HAL |
-| [AGENTS.md](AGENTS.md)                           | Read before generating any EmbedIQ code with an AI agent   |
-| [CONTRIBUTING.md](CONTRIBUTING.md)               | How to contribute — boundaries, process, CLA               |
-| [CODING_RULES.md](CODING_RULES.md)               | Rules enforced on every PR                                 |
-| [ROADMAP.md](ROADMAP.md)                         | Phase 1→4 public roadmap                                   |
-| [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) | What is free forever vs future commercial                  |
+| Document                                                | Purpose                                                    |
+| ------------------------------------------------------- | ---------------------------------------------------------- |
+| [ARCHITECTURE.md](ARCHITECTURE.md)                      | Complete technical reference — Layer Model, contracts, HAL |
+| [AGENTS.md](AGENTS.md)                                  | Read before generating any EmbedIQ code with an AI agent   |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                      | How to contribute — boundaries, process, CLA               |
+| [CODING_RULES.md](CODING_RULES.md)                      | Rules enforced on every PR                                 |
+| [ROADMAP.md](ROADMAP.md)                                | Phase 1→4 public roadmap                                   |
+| [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md)        | What is free forever vs future commercial                  |
+| [docs/observability/iqtrace_format.md](docs/observability/iqtrace_format.md) | Open `.iqtrace` binary format specification v1.0 |
 
 ---
 
