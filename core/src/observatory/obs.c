@@ -34,8 +34,8 @@
  *   Default on host builds: STDOUT.
  *
  * LEVEL FILTERING (runtime, host builds):
- *   0: LIFECYCLE and FAULT events only.
- *   1: Level 0 + MSG_TX events.
+ *   0: FAULT family (0x60–0x6F) + SYSTEM family (0x10–0x1F) only.
+ *   1: Level 0 + MESSAGE family (0x20–0x2F) + STATE family (0x30–0x3F).
  *   2+: All events pass.
  *   Initialised from compile-time EMBEDIQ_OBS_LEVEL.
  *
@@ -70,7 +70,9 @@
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 #  include <stdio.h>
+#  include <stdlib.h>
 #  include <time.h>
+#  include "hal/hal_obs_stream.h"
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -89,6 +91,9 @@ static uint32_t g_overflow   = 0u;  /* drops pending overflow report */
 
 static EmbedIQ_Obs_Transport_t g_transport = EMBEDIQ_OBS_TRANSPORT_STDOUT;
 static uint8_t                 g_level     = EMBEDIQ_OBS_LEVEL;
+
+static EmbedIQ_Obs_Session_t g_session;
+static bool                  g_session_valid = false;
 
 /* Power-of-2 mask: EMBEDIQ_OBS_RING_DEPTH must be a power of 2 (= 256). */
 #define RING_MASK  ((uint32_t)(EMBEDIQ_OBS_RING_DEPTH) - 1u)
@@ -127,14 +132,19 @@ static void ring_push(const EmbedIQ_Event_t *evt, bool count_overflow)
 static bool passes_level(uint8_t event_type)
 {
     if (g_level >= 2u) return true;
+
+    embediq_obs_family_t fam = embediq_obs_event_family(event_type);
+
     if (g_level >= 1u) {
-        return event_type == EMBEDIQ_OBS_EVT_LIFECYCLE ||
-               event_type == EMBEDIQ_OBS_EVT_FAULT     ||
-               event_type == EMBEDIQ_OBS_EVT_MSG_TX;
+        /* level 1: level 0 + MESSAGE + STATE families */
+        return fam == EMBEDIQ_OBS_FAMILY_FAULT   ||
+               fam == EMBEDIQ_OBS_FAMILY_SYSTEM  ||
+               fam == EMBEDIQ_OBS_FAMILY_MESSAGE ||
+               fam == EMBEDIQ_OBS_FAMILY_STATE;
     }
-    /* level 0: lifecycle and fault only */
-    return event_type == EMBEDIQ_OBS_EVT_LIFECYCLE ||
-           event_type == EMBEDIQ_OBS_EVT_FAULT;
+    /* level 0: FAULT and SYSTEM families only */
+    return fam == EMBEDIQ_OBS_FAMILY_FAULT ||
+           fam == EMBEDIQ_OBS_FAMILY_SYSTEM;
 }
 
 /* ---------------------------------------------------------------------------
@@ -238,6 +248,25 @@ static void format_event_internal(const EmbedIQ_Event_t *evt,
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * TLV writer — used by capture_begin/end and the FILE transport emit path
+ * ------------------------------------------------------------------------- */
+
+static int write_tlv(uint16_t type, uint16_t length, const void *payload)
+{
+    uint8_t hdr[4];
+    hdr[0] = (uint8_t)(type   & 0xFFu);
+    hdr[1] = (uint8_t)(type   >> 8u);
+    hdr[2] = (uint8_t)(length & 0xFFu);
+    hdr[3] = (uint8_t)(length >> 8u);
+    if (hal_obs_stream_write(hdr, 4u) != HAL_OBS_STREAM_OK) return -1;
+    if (length > 0u && payload != NULL) {
+        if (hal_obs_stream_write(payload, length) != HAL_OBS_STREAM_OK)
+            return -1;
+    }
+    return 0;
+}
+
 #endif /* EMBEDIQ_PLATFORM_HOST */
 
 /* ---------------------------------------------------------------------------
@@ -313,6 +342,10 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
         printf("%s\n", line);
     }
 
+    if (g_transport == EMBEDIQ_OBS_TRANSPORT_FILE) {
+        write_tlv(0x0002u, (uint16_t)sizeof(EmbedIQ_Event_t), &evt);
+    }
+
 #endif /* EMBEDIQ_PLATFORM_HOST */
 }
 
@@ -343,6 +376,83 @@ void embediq_obs_set_level(uint8_t level)
 }
 
 /* ---------------------------------------------------------------------------
+ * Public: embediq_obs_session_begin() / embediq_obs_session_get()
+ * ------------------------------------------------------------------------- */
+
+void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    g_session       = *session;
+    g_session_valid = true;
+#else
+    (void)session;
+#endif
+}
+
+const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    return g_session_valid ? &g_session : NULL;
+#else
+    return NULL;
+#endif
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: embediq_obs_capture_begin() / embediq_obs_capture_end()
+ * ------------------------------------------------------------------------- */
+
+int embediq_obs_capture_begin(const char *path)
+{
+#ifndef EMBEDIQ_PLATFORM_HOST
+    (void)path;
+    return -1;
+#else
+    const char *p = path ? path : getenv("EMBEDIQ_OBS_PATH");
+    if (!p) p = "/tmp/embediq_capture.iqtrace";
+
+    const EmbedIQ_Obs_Session_t *s = embediq_obs_session_get();
+    if (!s) return -1;
+
+    if (hal_obs_stream_open(p) != HAL_OBS_STREAM_OK) return -1;
+
+    /* 8-byte file header: IQTR + version 1 LE + reserved */
+    static const uint8_t hdr[] = {
+        0x49u, 0x51u, 0x54u, 0x52u,
+        0x01u, 0x00u,
+        0x00u, 0x00u
+    };
+    if (hal_obs_stream_write(hdr, (uint16_t)sizeof(hdr)) != HAL_OBS_STREAM_OK) {
+        hal_obs_stream_close();
+        return -1;
+    }
+
+    /* SESSION TLV */
+    if (write_tlv(0x0001u, (uint16_t)sizeof(*s), s) != 0) {
+        hal_obs_stream_close();
+        return -1;
+    }
+
+    hal_obs_stream_flush();
+    g_transport = EMBEDIQ_OBS_TRANSPORT_FILE;
+    return 0;
+#endif
+}
+
+int embediq_obs_capture_end(void)
+{
+#ifndef EMBEDIQ_PLATFORM_HOST
+    return -1;
+#else
+    int ret = write_tlv(0x0004u, 0u, NULL);  /* STREAM_END */
+    hal_obs_stream_flush();
+    hal_obs_stream_close();
+    g_transport = EMBEDIQ_OBS_TRANSPORT_NULL;
+    return ret;
+#endif
+}
+
+/* ---------------------------------------------------------------------------
  * Package-internal + test-only API (EMBEDIQ_PLATFORM_HOST)
  * ------------------------------------------------------------------------- */
 
@@ -355,6 +465,7 @@ void embediq_obs_set_level(uint8_t level)
  */
 void obs__reset(void)
 {
+    hal_obs_stream_close();   /* safe even if not open */
     memset(g_ring, 0, sizeof(g_ring));
     g_ring_head  = 0u;
     g_ring_count = 0u;
@@ -363,6 +474,8 @@ void obs__reset(void)
     g_overflow   = 0u;
     g_transport  = EMBEDIQ_OBS_TRANSPORT_STDOUT;
     g_level      = EMBEDIQ_OBS_LEVEL;
+    memset(&g_session, 0, sizeof(g_session));
+    g_session_valid = false;
 }
 
 /** Total events written to the ring since last reset. */

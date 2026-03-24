@@ -1,7 +1,5 @@
-#define _POSIX_C_SOURCE 200809L
-
 /*
- * platform/posix/fb_watchdog.c — Watchdog Platform FB
+ * fbs/drivers/fb_watchdog.c — Watchdog Driver FB (portable)
  *
  * Health-token model: callers register an FB handle with a timeout, then
  * periodically call embediq_wdg_checkin().  A background monitor thread
@@ -9,15 +7,15 @@
  * within its declared timeout window.
  *
  *   If ALL checked in:
- *     → print "WDT kick [seq=N]" to stdout (I-13 compliant sequence counter)
+ *     -> hal_wdg_kick() to reset the hardware watchdog
+ *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_OVERFLOW, ...) if ring buffer full
  *   If ANY missed:
- *     → embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, ...)
- *     → embediq_fb_report_fault(g_wdg_fb, WDG_REASON_MISSED_CHECKIN)
- *     → publish MSG_WDG_MISSED_CHECKIN with the missed FB's endpoint index
- *       in the payload
+ *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, ...)
+ *     -> embediq_fb_report_fault(g_wdg_fb, WDG_REASON_MISSED_CHECKIN)
+ *     -> publish MSG_WDG_MISSED_CHECKIN with the missed FB's endpoint index
  *
- * On startup the FB also publishes MSG_WDG_RESET_REASON.  On a host build
- * the reset reason is always RESET_NORMAL (0).
+ * On startup the FB publishes MSG_WDG_RESET_REASON.  On a host build the
+ * reset reason is always RESET_NORMAL (0).
  *
  * Slot capacity: EMBEDIQ_MAX_ENDPOINTS entries (static, R-02).
  * All slot access is protected by a single mutex.
@@ -35,7 +33,7 @@
  *   wdg__trigger_check() — run one monitor scan synchronously
  *   wdg__fault_count()   — total missed-checkin faults since last init
  *
- * R-02: no malloc in this file.
+ * Zero POSIX headers.  R-02: no malloc in this file.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -50,11 +48,11 @@
 #include "embediq_osal.h"
 #include "embediq_config.h"
 #include "embediq_obs.h"
+#include "hal/hal_wdg.h"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdio.h>
 
 /* Package-internal: get endpoint index for an FB handle. */
 extern uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle);
@@ -136,10 +134,9 @@ static void monitor_scan(void)
 
 #ifdef EMBEDIQ_PLATFORM_HOST
             g_fault_count++;
-            printf("[WDG] MISSED checkin: ep=%u timeout=%ums elapsed=%uus\n",
-                   (unsigned)ep,
-                   (unsigned)g_slots[i].timeout_ms,
-                   (unsigned)elapsed_us);
+            embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,
+                             ep, 0xFFu, g_slots[i].timeout_ms,
+                             MSG_WDG_MISSED_CHECKIN);
 #endif
         }
     }
@@ -147,12 +144,7 @@ static void monitor_scan(void)
     embediq_osal_mutex_unlock(g_mutex);
 
     if (all_ok) {
-#ifdef EMBEDIQ_PLATFORM_HOST
-        static uint32_t kick_count = 0;
-        if (++kick_count % 10 == 0) {
-            printf("[WDG] WDT kick [every-1s count=%u]\n", kick_count / 10);
-        }
-#endif
+        hal_wdg_kick();
         g_kick_seq++;
     }
 }
@@ -186,6 +178,9 @@ static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
         g_mutex = embediq_osal_mutex_create();
     }
 
+    /* Initialise the HAL watchdog with a generous timeout. */
+    hal_wdg_init(5000u);
+
     /* Publish reset reason (NORMAL = 0 on host). */
     EmbedIQ_Msg_t m;
     memset(&m, 0, sizeof(m));
@@ -204,6 +199,7 @@ static void wdg_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
     g_running = false;
+    hal_wdg_deinit();
 }
 
 /* ---------------------------------------------------------------------------

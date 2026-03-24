@@ -1,66 +1,95 @@
 # BUILD_STATUS.md — EmbedIQ Implementation Status
-# Last updated: Phase 1 complete
+# Last updated: Obs-6 complete (all pre-hardware tasks done)
 # Rule: update this file at every phase boundary. Never let it go stale.
 
 ## What Exists vs What Does Not
 
-| Module | Status | What it means |
-|--------|--------|---------------|
-| Core headers (7 files) | STABLE | Contracts declared, compile clean, v1 API frozen |
-| messages.iq generator | STABLE | Python tool, zero deps, generates typed C structs |
-| Core schema (core.iq) | STABLE | Lifecycle, boot, watchdog, timer, observatory messages |
-| CMake build system | STABLE | host + test targets, pre-build generation step |
-| CI pipeline | STABLE | Validates build + validator + compat shim on every PR |
-| validator.py | STABLE | Catches hardcoded sizing constants |
-| fb_v1_compat.c | STABLE | Compile-time API contract enforcement |
-| OSAL posix | STABLE | pthreads + POSIX message queues |
-| OSAL freertos | NOT_STARTED | Phase 2 |
-| FB Registry | STABLE | Phase 1 — embediq_engine_boot(), fb state machine |
-| Message Bus | STABLE | Phase 1 — static routing table, pub/sub queues |
-| Sub-fn Dispatcher | STABLE | Phase 1 — embediq_subfn_register(), dispatch loop |
-| FSM Engine | STABLE | Phase 1 — table-driven FSM with guard/action |
-| Observatory | STABLE | Phase 1 — ring buffer, stdout/UART transport |
-| Test Runner | STABLE | Phase 1 — unit + integration tests via CTest |
-| platform/posix/fb_timer | STABLE | 1 ms background tick, MSG_TIMER_1SEC every 1 s |
-| platform/posix/fb_nvm | STABLE | Filesystem-backed JSON key-value store |
-| platform/posix/fb_watchdog | STABLE | Health-token monitor, 100 ms check interval |
-| examples/thermostat | STABLE | Phase 1 gate demo — all 5 FBs, FSM transitions verified |
-
-## IMPORTANT FOR CONTRIBUTORS
-The Phase 1 platform stack is complete and running.  The thermostat demo binary
-(`embediq_thermostat`) boots all 5 FBs, runs for 30 s, and drives the thermal
-FSM through NORMAL → WARNING → CRITICAL → NORMAL automatically.
-
-The integration test (`test_thermostat_full`) passes all 6 assertions in ~15 s.
-
-Note: Phase 1 dispatch loop uses 1ms polling (acceptable for host demo).
-Phase 2 will replace with blocking OSAL semaphore before FreeRTOS port.
+| Module                          | Status      | Location                                   | Notes                                                    |
+| ------------------------------- | ----------- | ------------------------------------------ | -------------------------------------------------------- |
+| Core headers (all contracts)    | STABLE      | core/include/                              | Contracts frozen. v1 API enforced by fb_v1_compat.c      |
+| HAL contract headers (7)        | STABLE      | core/include/hal/                          | hal_flash, hal_gpio, hal_i2c, hal_spi, hal_timer, hal_uart, hal_wdg |
+| embediq_config.h                | STABLE      | core/include/                              | All sizing constants. Named constants only.              |
+| messages.iq generator           | STABLE      | tools/messages_iq/                         | Python, zero deps. core.iq + thermostat.iq live.         |
+| messages_registry.json          | STABLE      | messages_registry.json                     | 13 active ID allocations, range enforcement in validator |
+| validator.py                    | STABLE      | tools/validator.py                         | Catches hardcoded sizes + namespace range violations     |
+| boundary_checker.py             | STABLE      | tools/boundary_checker.py                  | Enforces layer rules for hal/, fbs/drivers/, fbs/services/ |
+| CMake build system              | STABLE      | CMakeLists.txt                             | host + test targets, pre-build generation step           |
+| CI pipeline                     | STABLE      | .github/workflows/ci.yml                   | build + validator + compat shim + boundary checker       |
+| fb_v1_compat.c                  | STABLE      | tests/compat/                              | Compile-time API contract freeze enforcement             |
+| OSAL posix                      | STABLE      | osal/posix/                                | pthreads + POSIX. Blocking semaphore dispatch.           |
+| OSAL freertos                   | NOT_STARTED | osal/freertos/                             | Phase 2                                                  |
+| FB Registry + Dispatch          | STABLE      | core/src/registry/                         | embediq_engine_boot() + dispatch_shutdown()              |
+| Message Bus                     | STABLE      | core/src/bus/                              | 3-queue routing, overflow policy, observatory drops      |
+| FSM Engine                      | STABLE      | core/src/fsm/                              | Table-driven, guard/action, observatory events           |
+| Observatory — core              | STABLE      | core/src/observatory/obs.c                 | Ring buffer, 7-family event taxonomy, session management |
+| Observatory — event families    | STABLE      | core/include/embediq_obs.h                 | 7 families, band encoding, EMBEDIQ_OBS_EVT_FAMILY() macro |
+| Observatory — trace levels      | STABLE      | core/include/embediq_config.h              | EMBEDIQ_TRACE_LEVEL 0–3, per-family compile-time flags   |
+| Observatory — emit macros       | STABLE      | core/include/embediq_obs.h                 | EMBEDIQ_OBS_EMIT_* compile to (void)0 when disabled     |
+| Observatory — session API       | STABLE      | core/include/embediq_obs.h                 | EmbedIQ_Obs_Session_t 40B (I-14), session_begin/get      |
+| Observatory — HAL stream        | STABLE      | core/include/hal/hal_obs_stream.h          | HAL contract for binary stream output                    |
+| Observatory — POSIX stream impl | STABLE      | hal/posix/hal_obs_stream_posix.c           | fopen/fwrite/fflush/fclose, zero framework deps          |
+| Observatory — .iqtrace capture  | STABLE      | core/src/observatory/obs.c                 | 8B header + SESSION TLV + EVENT TLVs + STREAM_END        |
+| Observatory — format spec       | STABLE      | docs/observability/iqtrace_format.md       | Open spec v1.0, Apache 2.0, TLV-framed                   |
+| Observatory — CLI               | STABLE      | tools/embediq_obs/embediq_obs.py           | decode/stats/filter/export/tail — reads any .iqtrace     |
+| fb_timer (Driver FB)            | STABLE      | fbs/drivers/fb_timer.c                     | Portable. HAL-backed. Drift-corrected tick messages.     |
+| fb_timer (POSIX HAL)            | STABLE      | hal/posix/hal_timer_posix.c                | POSIX clock_gettime implementation                       |
+| fb_nvm (Driver FB)              | STABLE      | fbs/drivers/fb_nvm.c                       | Portable. HAL-backed. Atomic key-value store.            |
+| fb_nvm (POSIX HAL)              | STABLE      | hal/posix/hal_flash_posix.c                | Binary file-backed flash implementation                  |
+| fb_watchdog (Driver FB)         | STABLE      | fbs/drivers/fb_watchdog.c                  | Portable. HAL-backed. Health-token model.                |
+| fb_watchdog (POSIX HAL)         | STABLE      | hal/posix/hal_wdg_posix.c                  | POSIX signal-based watchdog implementation               |
+| platform/posix/                 | RETIRED     | platform/posix/.gitkeep                    | Replaced by fbs/drivers/ + hal/posix/ in PRs #27–#29    |
+| fb_cloud_mqtt                   | NOT_STARTED | fbs/services/                              | Phase 2                                                  |
+| fb_ota                          | NOT_STARTED | fbs/services/                              | Phase 2                                                  |
+| Examples — thermostat           | STABLE      | examples/thermostat/                       | 5 FBs, FSM cycles, Observatory output, zero printf       |
+| Test Runner                     | STABLE      | tests/                                     | 23 C unit tests + 9 Python CLI tests. ctest 100%.        |
 
 ## Phase 0 — COMPLETE
   ✓ P0-T1: Repo scaffold, CMake, CI pipeline
-  ✓ P0-T2: Core FB/SubFn/FSM headers (embediq_fb.h, embediq_subfn.h, embediq_sm.h)
-  ✓ P0-T3: OSAL/Bus/Observatory/Msg headers (embediq_osal.h, embediq_msg.h, embediq_bus.h, embediq_obs.h)
+  ✓ P0-T2: Core FB/SubFn/FSM headers
+  ✓ P0-T3: OSAL/Bus/Observatory/Msg headers
   ✓ P0-T4: messages.iq generator + core.iq schema
   ✓ P0-T5: Full integration verify — all checks green
 
 ## Phase 1 — COMPLETE
-  ✓ P1-T1: OSAL POSIX (pthreads, mqueues, signals, delays) — osal/posix/
-  ✓ P1-T2: FB Engine (register, boot, state machine) — core/src/registry/
-  ✓ P1-T3: Message Bus (pub/sub routing, static table) — core/src/bus/
-  ✓ P1-T4: Sub-fn Dispatcher + FSM Engine — core/src/subfn/, core/src/fsm/
-  ✓ P1-T5: Observatory (ring buffer, stdout transport, CTest) — core/src/obs/
-  ✓ P1-T6: Platform FBs (fb_timer, fb_nvm, fb_watchdog) — platform/posix/
+  ✓ P1-T1: OSAL POSIX — osal/posix/
+  ✓ P1-T2: FB Engine — core/src/registry/
+  ✓ P1-T3: Message Bus — core/src/bus/
+  ✓ P1-T4: Sub-fn Dispatcher + FSM Engine
+  ✓ P1-T5: Observatory — ring buffer, stdout transport
+  ✓ P1-T6: Platform FBs (original) — fb_timer, fb_nvm, fb_watchdog
   ✓ P1-T7: thermostat_msgs.h + message namespace (0x0420)
-  ✓ P1-T8: Thermostat integration (fb_temp_sensor, fb_temp_controller, 5-FB demo,
-            test_thermostat_full — all 6 assertions pass in 15 s real-time run)
+  ✓ P1-T8: Thermostat integration — 5-FB demo, 6 assertions pass
 
-## Phase 2 — NOT STARTED
-  Next: P2-T1 — Replace 1 ms polling dispatch loop with blocking OSAL semaphore
-  Next: P2-T2 — embediq_engine_dispatch_shutdown() for clean task teardown
-  Next: P2-T3 — fb_cloud_mqtt (MQTT 3.1.1) and fb_ota (OTA FSM)
+## Phase 2 Pre-Hardware — COMPLETE
+  ✓ P2-T0:  Blocking OSAL semaphore dispatch (replaces 1ms polling)
+  ✓ P2-T0b: embediq_engine_dispatch_shutdown() — clean teardown
+  ✓ Arch-2: HAL contract headers (7) — core/include/hal/
+  ✓ Arch-3: boundary_checker.py extended for hal/ + fbs/ layers
+  ✓ Arch-3b: fbs/drivers/ + fbs/services/ directories
+  ✓ Arch-4a: fb_timer → fbs/drivers/ + hal/posix/hal_timer_posix.c (PR #27)
+  ✓ Arch-4b: fb_nvm → fbs/drivers/ + hal/posix/hal_flash_posix.c (PR #28)
+  ✓ Arch-4c: fb_watchdog → fbs/drivers/ + hal/posix/hal_wdg_posix.c (PR #29)
+  ✓ Cleanup-2: MSG_ ID namespace reconciliation + validator range enforcement (PR #30)
+  ✓ Cleanup-4: messages_registry.json populated, 13 entries (PR #31)
 
-## Your Next Actions (Human)
-  1. Run final demo: ./build/examples/thermostat/embediq_thermostat
-  2. Merge PR to dev
-  3. Merge dev → main (Phase 1 release tag)
-  4. Start Phase 2 with P2-T0 (blocking dispatch loop)
+## Observability Track — COMPLETE (all pre-hardware obs work done)
+  ✓ Obs-0: Audit — all call sites use named constants, renumbering safe
+  ✓ Obs-1: Event type family bands + EMBEDIQ_OBS_EVT_FAMILY() macro (PR #32)
+  ✓ Obs-2: EMBEDIQ_TRACE_LEVEL + per-family compile-time flags (PR #33)
+  ✓ Obs-3: EmbedIQ_Obs_Session_t (40B) + session_begin/get API (PR #34)
+  ✓ Obs-4: docs/observability/iqtrace_format.md v1.0 open spec (PR #35)
+  ✓ Obs-5: hal_obs_stream.h + hal_obs_stream_posix.c + binary capture in obs.c (PR #36)
+  ✓ Obs-6: tools/embediq_obs/embediq_obs.py CLI + tests/cli/test_obs_cli.py (PR #37)
+
+## Phase 2 Hardware — NOT STARTED
+  Next: P2-T1 — FreeRTOS OSAL (osal/freertos/embediq_osal_freertos.c)
+  Next: P2-T2 — ESP32 CMake target
+  Next: P2-T3 — fb_cloud_mqtt (MQTT 3.1.1)
+  Next: P2-T4 — fb_ota (OTA FSM, dual-bank)
+  Next: P2-T5 — Industrial gateway example
+
+## dev → main sync — READY
+  All pre-hardware tasks complete. Trigger conditions met:
+  - [x] Obs-1 through Obs-6 merged to dev
+  - [x] ctest passes 0 failures on dev
+  - [x] validator.py + boundary_checker.py clean on dev

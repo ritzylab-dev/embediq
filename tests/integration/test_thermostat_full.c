@@ -56,6 +56,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>     /* setenv */
 
 /* ---------------------------------------------------------------------------
  * Package-internal test APIs
@@ -73,7 +74,6 @@ extern void *fb_timer_register(void);
 extern void *fb_nvm_register(void);
 extern void *fb_watchdog_register(void);
 extern void  fb_timer__stop_and_wait(void);
-extern void  nvm__set_path(const char *path);
 
 /* Application FB APIs */
 extern void *   fb_temp_sensor_register(void);
@@ -102,7 +102,7 @@ static int g_tests_failed = 0;
  * NVM redirect — never touches ~/.embediq in tests
  * ------------------------------------------------------------------------- */
 
-#define TEST_NVM_PATH  "/tmp/test_thermostat_nvm.json"
+#define TEST_NVM_PATH  "/tmp/test_thermostat_nvm.bin"
 
 /* ---------------------------------------------------------------------------
  * Shared handles
@@ -157,7 +157,7 @@ static void test_engine_boot_succeeds(void)
 {
     fb_engine__reset();
     obs__set_level(2u);       /* verbose: capture FSM_TRANS events */
-    nvm__set_path(TEST_NVM_PATH);
+    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
 
     g_h_timer  = fb_timer_register();
     g_h_nvm    = fb_nvm_register();

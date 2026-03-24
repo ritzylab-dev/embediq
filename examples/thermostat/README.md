@@ -78,3 +78,36 @@ EmbedIQ Smart Thermostat Demo — Phase 1
 Expected: `All N tests passed. (0 failed)`
 
 Runs the same scenario for 15 seconds and asserts all conditions programmatically.
+
+## Observatory: Capturing a .iqtrace Session
+
+The `--capture` flag writes a binary `.iqtrace` file that can be decoded,
+filtered, and exported with the open-source CLI.
+
+**Step 1 — Run the thermostat with capture enabled:**
+```bash
+./build/examples/thermostat/embediq_thermostat --capture /tmp/thermo.iqtrace
+```
+
+**Step 2 — Decode and inspect events:**
+```bash
+python3 tools/embediq_obs/embediq_obs.py obs decode /tmp/thermo.iqtrace
+```
+
+**Step 3 — Show event statistics:**
+```bash
+python3 tools/embediq_obs/embediq_obs.py obs stats /tmp/thermo.iqtrace
+```
+
+**Step 4 — Filter to STATE-family events (FB lifecycle + FSM transitions):**
+```bash
+python3 tools/embediq_obs/embediq_obs.py obs filter /tmp/thermo.iqtrace --family STATE
+```
+
+**Step 5 — Export to JSON:**
+```bash
+python3 tools/embediq_obs/embediq_obs.py obs export /tmp/thermo.iqtrace
+```
+
+The `.iqtrace` format is open (Apache 2.0) and fully documented at
+`docs/observability/iqtrace_format.md`.

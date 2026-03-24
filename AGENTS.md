@@ -140,18 +140,20 @@ Agents: never add an include that skips a layer.
 ## 4. Repository Structure
 
 ```
-embediq-core/
+embediq/
 │
 ├── AGENTS.md               ← YOU ARE HERE
 ├── CODING_RULES.md         ← read second, always
 ├── CONTRIBUTING.md
-├── CHANGELOG.md
-├── CODEOWNERS
+├── BUILD_STATUS.md
 ├── CMakeLists.txt
-├── embediq_config.h        ← all sizing parameters live here
+├── messages_registry.json  ← authoritative ID namespace allocations
 │
 ├── core/                   ← LOCKED after v1.0 freeze
-│   ├── include/            ← 13 header contracts (never change)
+│   ├── include/            ← all contract headers (never change)
+│   │   └── hal/            ← HAL contract headers (hal_flash, hal_gpio,
+│   │                          hal_i2c, hal_spi, hal_timer, hal_uart,
+│   │                          hal_wdg, hal_obs_stream)
 │   └── src/                ← engine implementation
 │       ├── bus/
 │       ├── registry/
@@ -159,39 +161,37 @@ embediq-core/
 │       ├── dispatcher/
 │       └── observatory/
 │
-├── osal/                   ← threading model only (RTOS-specific, no hardware)
-│   ├── posix/              ← macOS + Linux + WSL (any POSIX-compatible OS)
+├── osal/
+│   ├── posix/              ← macOS + Linux + WSL
 │   └── freertos/           ← FreeRTOS bare-metal (Phase 2)
 │
-├── platform/               ← hardware peripheral FBs + per-target implementations
-│   ├── posix/              ← fb_uart, fb_nvm, fb_timer (POSIX implementations)
-│   └── esp32/              ← fb_uart, fb_nvm, fb_timer (ESP32 — Phase 2)
+├── hal/                    ← HAL implementations (no embediq_*.h allowed)
+│   ├── posix/              ← hal_timer_posix.c · hal_flash_posix.c ·
+│   │                          hal_wdg_posix.c · hal_obs_stream_posix.c
+│   └── esp32/              ← Phase 2
 │
-├── components/             ← reusable application FBs (RTOS-agnostic)
-│   └── fb_*/               ← fb_cloud_mqtt, fb_ota, fb_telemetry, fb_provisioning
-│
-├── contrib/                ← community contributions
-│   ├── platform/
-│   ├── components/
-│   └── CONTRIB_GUIDE.md
+├── fbs/                    ← portable Functional Blocks
+│   ├── drivers/            ← Driver FBs: fb_timer · fb_nvm · fb_watchdog
+│   └── services/           ← Service FBs: fb_cloud_mqtt · fb_ota (Phase 2)
 │
 ├── examples/
-│   ├── thermostat/         ← style reference for application FBs
-│   └── industrial_gateway/
+│   └── thermostat/         ← style reference for application FBs
 │
-├── test/
-│   ├── embediq_test.h      ← test infrastructure (excluded from release)
-│   └── scenarios/
+├── tests/
+│   ├── unit/               ← unit tests (host, no hardware)
+│   ├── integration/        ← integration tests
+│   ├── cli/                ← Python CLI tests (test_obs_cli.py)
+│   └── compat/             ← fb_v1_compat.c — contract freeze CI check
 │
 ├── tools/
-│   ├── check_invariants.sh ← run this before every PR
-│   ├── validator.py        ← validates embediq_config.h
-│   └── gen_msg_catalog.py  ← messages.iq → embediq_msg_catalog.h
+│   ├── validator.py        ← validates embediq_config.h sizing constants
+│   ├── boundary_checker.py ← enforces layer include rules in CI
+│   ├── messages_iq/        ← messages.iq → C struct generator
+│   └── embediq_obs/        ← Observatory CLI (embediq_obs.py)
 │
 └── docs/
-    ├── architecture/
-    ├── getting_started/
-    └── migration/mbed/
+    ├── architecture/       ← cli.md · lifecycle.md
+    └── observability/      ← iqtrace_format.md (open spec v1.0)
 ```
 
 ---
@@ -239,22 +239,22 @@ GATE 12 — Contract before implementation (Principle 2 enforced at task level):
 This table is binding. When implementing any module, use EXACTLY these paths.
 Never place .c files flat in core/src/ — they belong in their subdirectory.
 
-| Module              | File path                                     |
-|---------------------|-----------------------------------------------|
-| FB engine           | core/src/registry/fb_engine.c                 |
-| Message bus         | core/src/bus/message_bus.c                    |
-| FSM engine          | core/src/fsm/fsm_engine.c                     |
-| Dispatcher          | core/src/dispatcher/dispatcher.c              |
-| Observatory         | core/src/observatory/obs.c                    |
-| OSAL POSIX          | osal/posix/embediq_osal_posix.c               |
-| OSAL FreeRTOS       | osal/freertos/embediq_osal_freertos.c         |
-| Platform POSIX FBs  | platform/posix/fb_<name>.c                    |
-| Platform ESP32 FBs  | platform/esp32/fb_<name>.c                    |
-| Driver FBs (portable) | fbs/drivers/fb_<name>.c — calls hal/*.h, no platform code |
-| Service FBs (portable) | fbs/services/fb_<name>.c — no hal/ includes permitted    |
-| HAL implementations | hal/<target>/hal_<peripheral>.c               |
-| Components          | components/<fb_name>/<fb_name>.c              |
-| Unit tests          | tests/unit/test_<module>.c                    |
+| Module                 | File path                                                 |
+| ---------------------- | --------------------------------------------------------- |
+| FB engine              | core/src/registry/fb_engine.c                             |
+| Message bus            | core/src/bus/message_bus.c                                |
+| FSM engine             | core/src/fsm/fsm_engine.c                                 |
+| Dispatcher             | core/src/dispatcher/dispatcher.c                          |
+| Observatory            | core/src/observatory/obs.c                                |
+| OSAL POSIX             | osal/posix/embediq_osal_posix.c                           |
+| OSAL FreeRTOS          | osal/freertos/embediq_osal_freertos.c                     |
+| Driver FBs (portable)  | fbs/drivers/fb_<name>.c — calls hal/*.h, no platform code |
+| Service FBs (portable) | fbs/services/fb_<name>.c — no hal/ includes permitted     |
+| HAL implementations    | hal/<target>/hal_<peripheral>.c                           |
+| Observatory CLI        | tools/embediq_obs/embediq_obs.py                          |
+| CLI tests              | tests/cli/test_<tool>.py                                  |
+| Components             | components/<fb_name>/<fb_name>.c                          |
+| Unit tests             | tests/unit/test_<module>.c                                |
 
 Rule: if you are about to create a .c file directly in core/src/ (not in a
 subdirectory), STOP — wrong location. Check this table first.
@@ -282,26 +282,34 @@ See docs/architecture/lifecycle.md for full protocol description.
 
 ## 8. Current Build Status
 
-> **Last updated:** Phase 1 complete (March 2026)
-> This table is updated at milestone boundaries only.
+> **Last updated:** Obs-6 complete — all pre-hardware tasks done (March 2026)
 
-| Layer | Module | Status | Notes |
-|-------|--------|--------|-------|
-| Core | All 13 headers | STABLE | Contracts frozen. Never change. |
-| Core | messages.iq generator | STABLE | Python, zero deps. core.iq + thermostat.iq live. |
-| Core | embediq_config.h | STABLE | All sizing constants. Use named constants only. |
-| OSAL | posix (macOS + Linux + WSL) | STABLE | pthreads + POSIX. Phase 1 complete. |
-| OSAL | freertos | NOT_STARTED | Phase 2 |
-| Core / Engine | FB Registry + Dispatch | STABLE | embediq_engine_boot() + embediq_engine_dispatch_boot() |
-| Core / Engine | Message Bus | STABLE | 3-queue routing, overflow policy, observatory drops |
-| Core / Engine | FSM Engine | STABLE | Table-driven, guard/action, observatory events |
-| Core / Engine | Observatory | STABLE | Ring buffer, stdout transport, level 0/1/2 filtering |
-| Platform | fb_timer (posix) | STABLE | Drift-corrected, MSG_TIMER_1SEC/100MS/10MS/1MS |
-| Platform | fb_watchdog | STABLE | Health-token model, 100ms check interval |
-| Platform | fb_nvm | STABLE | Atomic JSON key-value store, ~/.embediq/ |
-| Platform | fb_cloud_mqtt | NOT_STARTED | Phase 2 |
-| Platform | fb_ota | NOT_STARTED | Phase 2 |
-| Examples | thermostat | STABLE | 5 FBs, FSM cycles, Observatory output, zero printf |
+| Layer         | Module                         | Status      | Notes                                                        |
+| ------------- | ------------------------------ | ----------- | ------------------------------------------------------------ |
+| Core          | All contract headers           | STABLE      | Frozen. fb_v1_compat.c enforces no breaking changes.         |
+| Core          | HAL contract headers (8)       | STABLE      | hal_flash · hal_gpio · hal_i2c · hal_spi · hal_timer · hal_uart · hal_wdg · hal_obs_stream |
+| Core          | embediq_config.h               | STABLE      | All sizing constants. Use named constants only.              |
+| Core          | messages.iq generator          | STABLE      | Python, zero deps. core.iq + thermostat.iq live.             |
+| Core          | messages_registry.json         | STABLE      | 13 active ID allocations. validator.py range enforcement.    |
+| OSAL          | posix (macOS + Linux + WSL)    | STABLE      | pthreads + POSIX. Blocking semaphore dispatch.               |
+| OSAL          | freertos                       | NOT_STARTED | Phase 2                                                      |
+| Core / Engine | FB Registry + Dispatch         | STABLE      | embediq_engine_boot() + embediq_engine_dispatch_shutdown()   |
+| Core / Engine | Message Bus                    | STABLE      | 3-queue routing, overflow policy, observatory drops          |
+| Core / Engine | FSM Engine                     | STABLE      | Table-driven, guard/action, observatory events               |
+| Core / Engine | Observatory — core             | STABLE      | Ring buffer, 7-family event taxonomy, session management     |
+| Core / Engine | Observatory — event families   | STABLE      | 7 families, band encoding, EMBEDIQ_OBS_EVT_FAMILY() macro    |
+| Core / Engine | Observatory — trace levels     | STABLE      | EMBEDIQ_TRACE_LEVEL 0–3, per-family compile-time flags       |
+| Core / Engine | Observatory — session API      | STABLE      | EmbedIQ_Obs_Session_t 40B (I-14), session_begin/get          |
+| Core / Engine | Observatory — .iqtrace capture | STABLE      | Binary TLV file via hal_obs_stream.h HAL contract            |
+| Core / Engine | Observatory — format spec      | STABLE      | docs/observability/iqtrace_format.md v1.0, Apache 2.0        |
+| Core / Engine | Observatory — CLI              | STABLE      | tools/embediq_obs/embediq_obs.py — decode/stats/filter/export|
+| HAL           | hal/posix/                     | STABLE      | hal_timer · hal_flash · hal_wdg · hal_obs_stream implemented |
+| Driver FBs    | fb_timer                       | STABLE      | fbs/drivers/ + hal/posix/hal_timer_posix.c                   |
+| Driver FBs    | fb_nvm                         | STABLE      | fbs/drivers/ + hal/posix/hal_flash_posix.c                   |
+| Driver FBs    | fb_watchdog                    | STABLE      | fbs/drivers/ + hal/posix/hal_wdg_posix.c                     |
+| Service FBs   | fb_cloud_mqtt                  | NOT_STARTED | Phase 2                                                      |
+| Service FBs   | fb_ota                         | NOT_STARTED | Phase 2                                                      |
+| Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
@@ -355,34 +363,34 @@ the Core header is correct. Update MODULE.md to match.
 
 ## 11. Build System & Key Decisions
 
-| Decision | Choice | Do Not Change |
-|----------|--------|---------------|
-| Build system | CMake | Yes — locked |
-| Core language | C11 | Yes — locked |
-| License | Apache 2.0 | Yes — locked |
-| v1 executor | Dedicated OS thread per FB | Yes — locked |
-| v1 message passing | Copy-by-value | Yes — locked |
-| v1 message priority | 3 queues per FB (HIGH/NORMAL/LOW) | Yes — locked |
-| messages.iq v0 | msg_id + name + payload_size + schema_id | Yes — locked |
-| Timestamp on MCU | uint32_t microseconds, wraps ~71 min | Yes — locked |
-| Core header freeze | After thermostat + Observatory + Test Runner pass on host | Pending |
+| Decision            | Choice                                                    | Do Not Change |
+| ------------------- | --------------------------------------------------------- | ------------- |
+| Build system        | CMake                                                     | Yes — locked  |
+| Core language       | C11                                                       | Yes — locked  |
+| License             | Apache 2.0                                                | Yes — locked  |
+| v1 executor         | Dedicated OS thread per FB                                | Yes — locked  |
+| v1 message passing  | Copy-by-value                                             | Yes — locked  |
+| v1 message priority | 3 queues per FB (HIGH/NORMAL/LOW)                         | Yes — locked  |
+| messages.iq v0      | msg_id + name + payload_size + schema_id                  | Yes — locked  |
+| Timestamp on MCU    | uint32_t microseconds, wraps ~71 min                      | Yes — locked  |
+| Core header freeze  | After thermostat + Observatory + Test Runner pass on host | Pending       |
 
 ---
 
 ## 12. Where to Go Next
 
-| What you need | Where to find it |
-|---------------|-----------------|
-| All coding rules + invariants + forbidden patterns | `CODING_RULES.md` |
-| Layer-specific API surface and status | `{layer}/LAYER.md` |
-| Module-specific contract, tests, dependencies | `{layer}/{module}/MODULE.md` |
-| Complete header contracts with examples | `core/include/*.h` |
-| Style reference for application FBs | `examples/thermostat/` |
-| Style reference for Platform FBs | `platform/posix/fb_uart/` |
-| How to add a new OSAL | `osal/OSAL_GUIDE.md` |
-| How to add a new Platform target | `platform/PLATFORM_GUIDE.md` |
-| How to contribute a new FB | `contrib/CONTRIB_GUIDE.md` |
-| Run invariant checks locally | `tools/check_invariants.sh` |
+| What you need                                      | Where to find it                              |
+| -------------------------------------------------- | --------------------------------------------- |
+| All coding rules + invariants + forbidden patterns | `CODING_RULES.md`                             |
+| Complete header contracts with examples            | `core/include/*.h`                            |
+| HAL contract headers                               | `core/include/hal/`                           |
+| .iqtrace binary format specification               | `docs/observability/iqtrace_format.md`        |
+| Observatory CLI usage                              | `tools/embediq_obs/embediq_obs.py --help`     |
+| Style reference for application FBs               | `examples/thermostat/`                        |
+| Style reference for Driver FBs                    | `fbs/drivers/fb_timer.c`                      |
+| Style reference for HAL implementations           | `hal/posix/hal_timer_posix.c`                 |
+| Run invariant + layer checks locally              | `python3 tools/validator.py` and `python3 tools/boundary_checker.py` |
+| Message ID namespace allocations                  | `messages_registry.json`                      |
 
 ---
 

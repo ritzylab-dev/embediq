@@ -101,17 +101,20 @@ target_compile_options(test_observatory PRIVATE
 add_test(NAME unit_observatory COMMAND test_observatory)
 
 # ---------------------------------------------------------------------------
-# Watchdog FB unit tests (P1-T6)
+# Watchdog FB unit tests (P1-T6 / Arch-4c)
 # ---------------------------------------------------------------------------
 
 add_executable(test_fb_watchdog test_fb_watchdog.c)
 
 target_include_directories(test_fb_watchdog PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/platform/posix
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
-target_link_libraries(test_fb_watchdog PRIVATE embediq_platform_posix)
+target_link_libraries(test_fb_watchdog PRIVATE
+    embediq_driver_fbs
+)
 
 target_compile_options(test_fb_watchdog PRIVATE
     -Wall
@@ -130,14 +133,11 @@ add_executable(test_fb_timer test_fb_timer.c)
 target_include_directories(test_fb_timer PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
     ${CMAKE_SOURCE_DIR}/core/include/hal
-    ${CMAKE_SOURCE_DIR}/platform/posix
     ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
 target_link_libraries(test_fb_timer PRIVATE
-    embediq_platform_posix
     embediq_driver_fbs
-    embediq_hal_posix
 )
 
 target_compile_options(test_fb_timer PRIVATE
@@ -189,17 +189,20 @@ target_compile_options(test_dispatch_shutdown PRIVATE
 add_test(NAME unit_dispatch_shutdown COMMAND test_dispatch_shutdown)
 
 # ---------------------------------------------------------------------------
-# NVM FB unit tests (P1-T6)
+# NVM FB unit tests (P1-T6 / Arch-4b)
 # ---------------------------------------------------------------------------
 
 add_executable(test_fb_nvm test_fb_nvm.c)
 
 target_include_directories(test_fb_nvm PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
-    ${CMAKE_SOURCE_DIR}/platform/posix
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
 )
 
-target_link_libraries(test_fb_nvm PRIVATE embediq_platform_posix)
+target_link_libraries(test_fb_nvm PRIVATE
+    embediq_driver_fbs
+)
 
 target_compile_options(test_fb_nvm PRIVATE
     -Wall
@@ -228,3 +231,26 @@ target_compile_options(test_hal_contracts PRIVATE
 )
 
 add_test(NAME unit_hal_contracts COMMAND test_hal_contracts)
+
+# ---------------------------------------------------------------------------
+# Observatory binary capture tests (Obs-5)
+# ---------------------------------------------------------------------------
+
+add_executable(test_obs_capture test_obs_capture.c)
+
+target_include_directories(test_obs_capture PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_obs_capture PRIVATE
+    embediq_fb_engine
+)
+
+target_compile_options(test_obs_capture PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_obs_capture COMMAND test_obs_capture)

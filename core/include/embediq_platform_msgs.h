@@ -3,17 +3,16 @@
  *
  * Lives in core/include/ so that application FBs can subscribe to timer,
  * watchdog, NVM, and cloud messages without including platform-layer headers
- * (AGENTS.md §3 layer dependency rule — Shell 2 must not be included by Shell 3).
+ * (AGENTS.md §3 layer dependency rule — Layer 2 must not be included by Layer 3).
  *
  * Namespace: 0x0400–0x13FF  Official EmbedIQ components (AGENTS.md §2A)
  *
- * Ranges:
- *   0x0401–0x0404  fb_timer   periodic tick publications
- *   0x0405–0x0406  fb_watchdog health diagnostics
- *   0x0407–0x040F  fb_nvm     store/retrieve notifications (reserved, IDs TBD)
- *   0x0410–0x041F  fb_cloud_mqtt connection + delivery events (reserved, IDs TBD)
- *   0x0420–0x042F  thermostat application messages (see messages/thermostat.iq)
- *   0x0430–0x043F  fb_ota     firmware update lifecycle (reserved, IDs TBD)
+ * Ranges (from messages_registry.json — authoritative):
+ *   fb_nvm          0x044C–0x047D  (1100–1149)  store/retrieve notifications
+ *   fb_watchdog     0x047E–0x04AF  (1150–1199)  health diagnostics
+ *   fb_timer        0x04B0–0x04E1  (1200–1249)  periodic tick publications
+ *   fb_cloud_mqtt   0x0578–0x05DB  (1400–1499)  connection + delivery events
+ *   fb_ota          0x05DC–0x063F  (1500–1599)  firmware update lifecycle
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -29,56 +28,54 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * fb_timer — periodic tick messages (0x0401–0x0404)
- * ------------------------------------------------------------------------- */
-
-#define MSG_TIMER_1MS     0x0401u  /**< Published every 1 ms   */
-#define MSG_TIMER_10MS    0x0402u  /**< Published every 10 ms  */
-#define MSG_TIMER_100MS   0x0403u  /**< Published every 100 ms */
-#define MSG_TIMER_1SEC    0x0404u  /**< Published every 1 second */
-
-/* ---------------------------------------------------------------------------
- * fb_watchdog — health monitoring messages (0x0405–0x0406)
- * ------------------------------------------------------------------------- */
-
-#define MSG_WDG_MISSED_CHECKIN  0x0405u  /**< A registered FB missed its checkin deadline */
-#define MSG_WDG_RESET_REASON    0x0406u  /**< Reset reason emitted once on startup */
-
-/* ---------------------------------------------------------------------------
- * fb_nvm — non-volatile store notifications (0x0407–0x040F, reserved)
+ * fb_nvm — non-volatile store notifications (0x044C–0x047D, reserved)
  *
  * IDs assigned at implementation (P2-T*). Reserve the range now so no
  * other module claims these IDs first.
  * ------------------------------------------------------------------------- */
 
-/* 0x0407 — MSG_NVM_WRITE_DONE      (reserved — P2 implementation) */
-/* 0x0408 — MSG_NVM_FLUSH_DONE      (reserved — P2 implementation) */
-/* 0x0409–0x040F — reserved for additional NVM events              */
+/* 0x044C — MSG_NVM_WRITE_DONE      (reserved — P2 implementation) */
+/* 0x044D — MSG_NVM_FLUSH_DONE      (reserved — P2 implementation) */
+/* 0x044E–0x047D — reserved for additional NVM events              */
 
 /* ---------------------------------------------------------------------------
- * fb_cloud_mqtt — connectivity and delivery events (0x0410–0x041F, reserved)
+ * fb_watchdog — health monitoring messages (0x047E–0x04AF)
+ * ------------------------------------------------------------------------- */
+
+#define MSG_WDG_MISSED_CHECKIN  0x047Eu  /**< A registered FB missed its checkin deadline */
+#define MSG_WDG_RESET_REASON    0x047Fu  /**< Reset reason emitted once on startup */
+
+/* ---------------------------------------------------------------------------
+ * fb_timer — periodic tick messages (0x04B0–0x04E1)
+ * ------------------------------------------------------------------------- */
+
+#define MSG_TIMER_1MS     0x04B0u  /**< Published every 1 ms   */
+#define MSG_TIMER_10MS    0x04B1u  /**< Published every 10 ms  */
+#define MSG_TIMER_100MS   0x04B2u  /**< Published every 100 ms */
+#define MSG_TIMER_1SEC    0x04B3u  /**< Published every 1 second */
+
+/* ---------------------------------------------------------------------------
+ * fb_cloud_mqtt — connectivity and delivery events (0x0578–0x05DB, reserved)
  *
  * IDs assigned at implementation (P2-T4). Reserve range.
  * ------------------------------------------------------------------------- */
 
-/* 0x0410 — MSG_MQTT_CONNECTED      (reserved — P2 implementation) */
-/* 0x0411 — MSG_MQTT_DISCONNECTED   (reserved — P2 implementation) */
-/* 0x0412 — MSG_MQTT_MESSAGE_RX     (reserved — P2 implementation) */
-/* 0x0413–0x041F — reserved for additional MQTT events             */
+/* 0x0578 — MSG_MQTT_CONNECTED      (reserved — P2 implementation) */
+/* 0x0579 — MSG_MQTT_DISCONNECTED   (reserved — P2 implementation) */
+/* 0x057A — MSG_MQTT_MESSAGE_RX     (reserved — P2 implementation) */
+/* 0x057B–0x05DB — reserved for additional MQTT events             */
 
 /* ---------------------------------------------------------------------------
- * fb_ota — firmware update lifecycle (0x0430–0x043F, reserved)
+ * fb_ota — firmware update lifecycle (0x05DC–0x063F, reserved)
  *
- * 0x0420–0x042F is the thermostat application namespace (thermostat.iq).
- * fb_ota starts at 0x0430 to avoid collision.
  * IDs assigned at implementation (P2-T5). Reserve range.
  * ------------------------------------------------------------------------- */
 
-/* 0x0430 — MSG_OTA_STARTED         (reserved — P2 implementation) */
-/* 0x0431 — MSG_OTA_PROGRESS        (reserved — P2 implementation) */
-/* 0x0432 — MSG_OTA_COMPLETE        (reserved — P2 implementation) */
-/* 0x0433 — MSG_OTA_FAILED          (reserved — P2 implementation) */
-/* 0x0434–0x043F — reserved for additional OTA events              */
+/* 0x05DC — MSG_OTA_STARTED         (reserved — P2 implementation) */
+/* 0x05DD — MSG_OTA_PROGRESS        (reserved — P2 implementation) */
+/* 0x05DE — MSG_OTA_COMPLETE        (reserved — P2 implementation) */
+/* 0x05DF — MSG_OTA_FAILED          (reserved — P2 implementation) */
+/* 0x05E0–0x063F — reserved for additional OTA events              */
 
 #ifdef __cplusplus
 }

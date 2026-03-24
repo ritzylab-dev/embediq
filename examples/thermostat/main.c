@@ -29,9 +29,10 @@
 #include "embediq_osal.h"
 
 #include <stdio.h>
+#include <string.h>
 
 /* ---------------------------------------------------------------------------
- * Platform FB register functions (platform/posix/)
+ * Driver FB register functions (fbs/drivers/)
  * ------------------------------------------------------------------------- */
 
 extern EmbedIQ_FB_Handle_t fb_timer_register(void);
@@ -49,8 +50,17 @@ extern EmbedIQ_FB_Handle_t fb_temp_controller_register(void);
  * main
  * ------------------------------------------------------------------------- */
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    /* Parse optional --capture <path> argument. */
+    const char *capture_path = NULL;
+    for (int i = 1; i < argc - 1; i++) {
+        if (strcmp(argv[i], "--capture") == 0) {
+            capture_path = argv[i + 1];
+            break;
+        }
+    }
+
     printf("EmbedIQ Smart Thermostat Demo — Phase 1\n");
     printf("========================================\n\n");
 
@@ -99,6 +109,30 @@ int main(void)
 
     embediq_engine_dispatch_boot();
 
+    /* -----------------------------------------------------------------------
+     * Start .iqtrace file capture if --capture was supplied.
+     * --------------------------------------------------------------------- */
+
+    if (capture_path != NULL) {
+        EmbedIQ_Obs_Session_t session = {
+            .device_id         = 0x00000001u,
+            .fw_version        = EMBEDIQ_OBS_FW_VERSION(1, 0, 0),
+            .timestamp_base_us = 0ULL,
+            .session_id        = 1u,
+            .platform_id       = EMBEDIQ_OBS_PLATFORM_POSIX,
+            .trace_level       = 2u,
+            ._pad              = {0, 0},
+            .build_id          = "thermostat",
+        };
+        embediq_obs_session_begin(&session);
+        if (embediq_obs_capture_begin(capture_path) == 0) {
+            printf("[MAIN] Capturing to %s\n", capture_path);
+        } else {
+            printf("[MAIN] WARNING: capture_begin failed for %s\n", capture_path);
+            capture_path = NULL;  /* disable end call */
+        }
+    }
+
     printf("\n[MAIN] All FBs initialised. Running demo (30 s)...\n\n");
 
     /* -----------------------------------------------------------------------
@@ -108,6 +142,11 @@ int main(void)
      * --------------------------------------------------------------------- */
 
     embediq_osal_delay_ms(30000u);
+
+    if (capture_path != NULL) {
+        embediq_obs_capture_end();
+        printf("[MAIN] Capture written to %s\n", capture_path);
+    }
 
     printf("\n[MAIN] Demo complete.\n");
     return 0;

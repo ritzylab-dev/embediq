@@ -84,9 +84,8 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Observatory verbosity level
  *
- *  0 = silent  — MCU default; minimal runtime overhead.
- *  1 = normal  — host/Linux default; human-readable event stream.
- *  2 = verbose — debug builds only.
+ *  Runtime verbosity gate — see EMBEDIQ_TRACE_LEVEL for the compile-time gate.
+ *  0 = silent, 1 = standard, 2 = verbose — applied to compiled-in events.
  * ------------------------------------------------------------------------- */
 
 #ifndef EMBEDIQ_OBS_LEVEL
@@ -95,6 +94,51 @@ extern "C" {
 #   else
 #       define EMBEDIQ_OBS_LEVEL        0
 #   endif
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Compile-time trace level
+ *
+ *  Controls which event families are compiled into the binary at all.
+ *  This is a COMPILE-TIME gate — separate from EMBEDIQ_OBS_LEVEL which
+ *  is the RUNTIME filter applied to what is already compiled in.
+ *
+ *  0 = Minimal    — FAULT + SYSTEM families only  (production MCU default)
+ *  1 = Standard   — + MESSAGE + STATE families    (host/dev default)
+ *  2 = Diagnostic — + RESOURCE + TIMING families  (profiling builds)
+ *  3 = Deep Trace — + FUNCTION family             (deep debug only)
+ * ------------------------------------------------------------------------- */
+
+#ifndef EMBEDIQ_TRACE_LEVEL
+#   ifdef EMBEDIQ_PLATFORM_HOST
+#       define EMBEDIQ_TRACE_LEVEL      1
+#   else
+#       define EMBEDIQ_TRACE_LEVEL      0
+#   endif
+#endif
+
+/* Per-family compile-time flags — derived from EMBEDIQ_TRACE_LEVEL unless
+ * explicitly overridden before including this header.
+ * FAULT and SYSTEM families are unconditional (always compiled in). */
+
+#ifndef EMBEDIQ_TRACE_MESSAGE
+#   define EMBEDIQ_TRACE_MESSAGE    ((EMBEDIQ_TRACE_LEVEL) >= 1)
+#endif
+
+#ifndef EMBEDIQ_TRACE_STATE
+#   define EMBEDIQ_TRACE_STATE      ((EMBEDIQ_TRACE_LEVEL) >= 1)
+#endif
+
+#ifndef EMBEDIQ_TRACE_RESOURCE
+#   define EMBEDIQ_TRACE_RESOURCE   ((EMBEDIQ_TRACE_LEVEL) >= 2)
+#endif
+
+#ifndef EMBEDIQ_TRACE_TIMING
+#   define EMBEDIQ_TRACE_TIMING     ((EMBEDIQ_TRACE_LEVEL) >= 2)
+#endif
+
+#ifndef EMBEDIQ_TRACE_FUNCTION
+#   define EMBEDIQ_TRACE_FUNCTION   ((EMBEDIQ_TRACE_LEVEL) >= 3)
 #endif
 
 #ifdef __cplusplus

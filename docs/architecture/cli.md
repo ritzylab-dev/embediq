@@ -1,8 +1,12 @@
 # EmbedIQ CLI — Command Specification
 
-> **Status:** Contract frozen Phase 2. Implementation target: Phase 2.
-> This document specifies the `embediq` command-line tool that will ship
-> alongside the framework. No implementation exists yet.
+> **Status — Observatory sub-commands:** IMPLEMENTED. `embediq obs decode /
+> stats / filter / export / tail / capture` are shipped at
+> `tools/embediq_obs/embediq_obs.py`. Tests at `tests/cli/test_obs_cli.py`.
+>
+> **Status — Project-management commands:** Phase 2. `embediq init`, `embediq
+> add`, `embediq build`, `embediq flash`, `embediq monitor`, `embediq validate`
+> are specified below but not yet implemented.
 
 ---
 
@@ -46,10 +50,10 @@ Example: `embediq add fb_nvm`
 
 Build the project for the specified target.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--target` | `host` | Build target: `host` (macOS/Linux), `esp32`, `stm32` |
-| `--type` | `Debug` | CMake build type: `Debug` or `Release` |
+| Flag       | Default | Description                                          |
+| ---------- | ------- | ---------------------------------------------------- |
+| `--target` | `host`  | Build target: `host` (macOS/Linux), `esp32`, `stm32` |
+| `--type`   | `Debug` | CMake build type: `Debug` or `Release`               |
 
 Internally runs:
 ```
@@ -61,10 +65,10 @@ cmake --build build -j$(nproc)
 
 Flash firmware to connected hardware.
 
-| Flag | Required | Description |
-|------|----------|-------------|
-| `--target` | yes | Hardware target: `esp32` or `stm32` |
-| `--port` | yes | Serial port path |
+| Flag       | Required | Description                         |
+| ---------- | -------- | ----------------------------------- |
+| `--target` | yes      | Hardware target: `esp32` or `stm32` |
+| `--port`   | yes      | Serial port path                    |
 
 - ESP32: uses `esptool.py` via `idf.py flash`
 - STM32: uses OpenOCD
@@ -73,10 +77,10 @@ Flash firmware to connected hardware.
 
 Connect to the Observatory event stream.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--port` | stdout | Serial port (hardware) or stdout pipe (host) |
-| `--level` | `1` | Observatory verbosity: 0=silent, 1=normal, 2=verbose |
+| Flag      | Default | Description                                          |
+| --------- | ------- | ---------------------------------------------------- |
+| `--port`  | stdout  | Serial port (hardware) or stdout pipe (host)         |
+| `--level` | `1`     | Observatory verbosity: 0=silent, 1=normal, 2=verbose |
 
 - **Host build:** reads from the process stdout pipe of the running firmware.
 - **Hardware:** reads from the target UART at the Observatory baud rate.

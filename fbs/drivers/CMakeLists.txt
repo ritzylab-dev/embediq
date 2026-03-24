@@ -7,6 +7,8 @@
 
 add_library(embediq_driver_fbs STATIC
     fb_timer.c
+    fb_nvm.c
+    fb_watchdog.c
 )
 
 target_include_directories(embediq_driver_fbs PUBLIC

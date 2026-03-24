@@ -1,136 +1,185 @@
 # EmbedIQ
 
-**The application framework above the RTOS that nobody has built yet.**
+**The open-source application framework above the RTOS.**
 
-Apache 2.0 · RTOS-agnostic · Host simulation first-class · Zero-instrumentation observability
+Apache 2.0 · RTOS-agnostic · Host simulation first · Zero-instrumentation observability · Open .iqtrace format
 
 ---
 
 ## The problem
 
-FreeRTOS, Zephyr, and every other RTOS give you threads, queues, and semaphores. They give you nothing above that. Every team reinvents the same infrastructure — cloud connectivity, OTA updates, structured state management, observability — on every project. Every firmware codebase looks different. Every field failure requires a printf that changes timing and makes the bug disappear.
+Every RTOS gives you threads, queues, and semaphores. Nothing above that. Every firmware team reinvents the same infrastructure — OTA, cloud connectivity, watchdog management, structured state — on every project, under delivery pressure, differently each time.
 
-The one framework that comes closest (QP/C) ships under GPLv3. Commercial firmware must disclose source or buy a paid license.
+The result is firmware that only its original author can safely touch, field failures debugged with printf, and AI tools that generate inconsistent code faster.
 
-EmbedIQ fills the gap. [See the full problem statement →](docs/PROBLEM_STATEMENT.md)
+The problem is structural. The solution has to be structural too.
 
 ---
 
 ## What EmbedIQ is
 
-A structured, message-driven application framework that sits above your RTOS and gives you:
+A message-driven, layered application framework that sits above your RTOS and enforces structure at the architecture level — not through code reviews or guidelines.
 
-- **Functional Blocks (FBs)** — the unit of everything. Owns its state. Communicates only via typed messages. Observable by default.
-- **Message Bus** — all cross-FB communication through one typed, priority-queued channel. No direct calls between FBs.
-- **Table-driven FSM engine** — every state, every event, every transition declared explicitly. Readable from the table alone.
-- **Zero-instrumentation Observatory** — every FB state transition and message captured automatically. No printf. No Percepio.
-- **Host simulation first-class** — run and test complete firmware on Mac or Linux. No hardware required for development or CI.
-- **Reusable component library** — `fb_watchdog`, `fb_nvm`, `fb_timer` (Phase 1 — shipping). `fb_cloud_mqtt`, `fb_ota`, `fb_telemetry` (Phase 2+).
-- **RTOS-agnostic OSAL** — same application code on FreeRTOS, Pi/Linux, Zephyr, and RISC-V targets.
+**The unit of everything is the Function Block (FB).** An FB owns its state. It communicates only via typed messages. It is observable by default. The wrong patterns — direct cross-FB calls, hardware headers in application code, dynamic allocation in the core engine — are structurally prevented. They fail CI, not code review.
 
-**The wrong patterns are structurally prevented.** Cross-FB coupling fails CI rule R-01. Hardware headers in application code fail compilation (Core headers compile standalone). Dynamic allocation in Shell 1 fails binary analysis. Structural discipline is enforced by the architecture, not hoped for.
+**Four layers. Clear contracts between them.**
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Layer 4 · Commercial (future)                                     │
+│  Studio · Cloud connector · AI Coder                               │
+├────────────────────────────────────────────────────────────────────┤
+│  Layer 3 · Ecosystem                                               │
+│  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_provisioning           │
+│  External FBs (Python / Node.js / Java via Bridge)                 │
+├────────────────────────────────────────────────────────────────────┤
+│  Layer 2 · Driver FBs + Service FBs                                │
+│  fb_timer · fb_uart · fb_nvm · fb_watchdog · fb_gpio               │
+│                 ▼  typed messages only  ▼                          │
+├────────────────────────────────────────────────────────────────────┤
+│  Layer 1 · Framework Engine                 ← running on POSIX     │
+│  FB Engine · Message Bus · FSM Engine · Observatory                │
+├────────────────────────────────────────────────────────────────────┤
+│  CONTRACTS  (core/include/ — frozen at v1, CI-enforced)            │
+├────────────────────────────────────────────────────────────────────┤
+│  HAL  (core/include/hal/ contracts · hal/posix/ · hal/esp32/)      │
+├────────────────────────────────────────────────────────────────────┤
+│  OSAL  (osal/posix/ · osal/freertos/)                              │
+├────────────────────────────────────────────────────────────────────┤
+│  Substrate · FreeRTOS · Linux POSIX · Zephyr · bare-metal          │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**A Driver FB wraps one hardware peripheral via the HAL contract.** `fbs/drivers/fb_timer.c` is the same source file whether it runs on POSIX, FreeRTOS, or ESP32. The platform difference lives in `hal/posix/` or `hal/esp32/` — never in the FB.
+
+**A Service FB is platform-agnostic.** `fb_cloud_mqtt` does not know what chip it runs on. It cannot include HAL headers — the boundary checker enforces this in CI on every PR.
 
 ---
 
-## Architecture at a glance
+## Run it now
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  TOOLS                                                              │
-│  messages.iq generator  ·  embediq CLI  ·  EmbedIQ Studio           │
-├─────────────────────────────────────────────────────────────────────┤
-│  COMPONENT FBs                            (all Apache 2.0)          │
-│  fb_cloud_mqtt  ·  fb_ota  ·  fb_telemetry  ·  fb_provisioning      │
-│                  ·  your_fb                                         │
-│                  ▼  messages only  ▼                                │
-├─────────────────────────────────────────────────────────────────────┤
-│  PLATFORM FBs                                                       │
-│  fb_uart  ·  fb_watchdog  ·  fb_nvm  ·  fb_timer  ·  fb_gpio        │
-│                  ▼  subscriptions · publications  ▼                 │
-├─────────────────────────────────────────────────────────────────────┤
-│  CORE ENGINE                                                        │
-│  FB Engine  ·  Message Bus (3-queue)  ·  FSM Engine  ·  Observatory │
-├─────────────────────────────────────────────────────────────────────┤
-│  OSAL  ──────────  EmbedIQ above · your stack below  ──────────     │
-├─────────────────────────────────────────────────────────────────────┤
-│  RTOS / OS                                                          │
-│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr  ·  RISC-V (SHAKTI/VEGA)    │
-├─────────────────────────────────────────────────────────────────────┤
-│  HARDWARE                                                           │
-│  RP2040  ·  STM32  ·  Pi/Linux SBC  ·  ESP32  ·  any target         │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Get started in 5 minutes
-
-**Prerequisites:** CMake 3.18+, a C11 compiler, Git.
+**Prerequisites:** CMake 3.18+, C11 compiler, Git.
 
 ```bash
 git clone https://github.com/ritzylab-dev/embediq.git
 cd embediq
-cmake -B build -DEMBEDIQ_PLATFORM=host
-cmake --build build
-ctest --test-dir build
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j$(nproc)
+cd build && ctest --output-on-failure
 ```
 
-The host platform runs without hardware. Every test exercises real framework code. The smart thermostat example demonstrates a complete FB application with Observable output on your terminal.
+All tests pass on Linux and macOS without hardware. The thermostat example runs a full FB application — sensor, controller, cloud publish — with Observatory output on your terminal.
 
 ```bash
 ./build/examples/thermostat/embediq_thermostat
-# Observatory output: every message, every FSM transition, timestamped
 ```
+
+No printf. No instrumentation. Every message and FSM transition captured automatically by the Observatory. Write a `.iqtrace` session file and analyse it from your laptop:
+
+```bash
+EMBEDIQ_OBS_PATH=/tmp/thermostat.iqtrace ./build/examples/thermostat/embediq_thermostat
+python3 tools/embediq_obs/embediq_obs.py obs stats /tmp/thermostat.iqtrace
+```
+
+```
+File:         /tmp/thermostat.iqtrace
+Device:       0x00000001
+Firmware:     0.1.0  build=dev
+Platform:     POSIX
+Total events: 47
+Seq range:    1 – 47
+
+Events by family:
+  FAULT          2
+  MESSAGE       18
+  STATE         12
+  SYSTEM        15
+
+Events by type:
+  FAULT          2
+  FSM_TRANS     12
+  LIFECYCLE     15
+  MSG_RX         9
+  MSG_TX         9
+```
+
+The event record format, TLV framing, and session structure are open and specified in [`docs/observability/iqtrace_format.md`](docs/observability/iqtrace_format.md). The CLI is Apache 2.0. EmbedIQ Studio adds visual analysis on top — it never owns or restricts the underlying data.
 
 ---
 
-## Why Apache 2.0 matters
+## What exists today
 
-Use EmbedIQ in closed-source commercial products at zero cost. No source disclosure requirement. No license fee. This is a structural advantage over QP/C (GPLv3 — your entire firmware must be open source or you pay for a commercial license).
+**Phase 1 — complete.** Core engine, message bus, FSM engine, full observability system, POSIX OSAL, and the thermostat demo run clean. All contracts frozen. `ctest` passes 100%.
 
-See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the full commitment — what is Apache 2.0 forever and what is commercial.
+**HAL refactor — complete.** All three Phase 1 Driver FBs (`fb_timer`, `fb_nvm`, `fb_watchdog`) live in `fbs/drivers/` as portable, POSIX-independent source files. POSIX implementations live in `hal/posix/`. `platform/posix/` is retired. The pattern is established for every future hardware target.
+
+**Observability system — complete.** The Observatory is not a printf replacement — it is a structured, machine-readable record of exactly what the firmware did. Every state transition, every message boundary, every fault is automatically captured with zero developer code. The full system includes:
+
+- 7-family event taxonomy (SYSTEM, MESSAGE, STATE, RESOURCE, TIMING, FAULT, FUNCTION) encoded as bands in the event type byte — zero extra runtime overhead, family derived in the decoder
+- Compile-time `EMBEDIQ_TRACE_LEVEL` (0–3) with per-family zero-overhead emit macros — events compile to `(void)0` on constrained MCU builds
+- `EmbedIQ_Obs_Session_t` — 40-byte session identity record (device ID, firmware version, build ID, platform, trace level) prepended to every capture
+- `.iqtrace` open binary format — TLV-framed, little-endian, forward-compatible, fully specified in `docs/observability/iqtrace_format.md` (Apache 2.0)
+- `tools/embediq_obs/` CLI — `embediq obs decode / stats / filter / export` — read any `.iqtrace` file from a laptop, no Studio required
+
+**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, `fb_cloud_mqtt`, `fb_ota`. See [ROADMAP.md](ROADMAP.md).
+
+See [ROADMAP.md](ROADMAP.md) for the full timeline.
+
+---
+
+## Why the architecture matters for AI
+
+AI generates reliable React because the framework is well-described — every component, prop, and hook has a type. Embedded firmware has always been the opposite: globals, callbacks, platform ifdefs, no structure an agent can reason about.
+
+EmbedIQ makes every FB, message schema, and FSM transition a typed, machine-readable descriptor. The boundary checker tells an AI agent exactly what it can and cannot include. The contracts tell it exactly what the interfaces are. The Observatory tells it exactly what happened at runtime.
+
+This is not a marketing claim. It is a structural consequence of the architecture.
+
+---
+
+## Why Apache 2.0
+
+Use EmbedIQ in closed-source commercial products at zero cost. No source disclosure. No license fee.
+
+QP/C — the closest prior art, 60,000+ downloads per year for 19 years — ships under GPLv3. Commercial use requires either full source disclosure or a paid commercial license. EmbedIQ removes that constraint structurally.
+
+The `.iqtrace` binary format and `embediq obs` CLI are Apache 2.0 forever — the data your firmware produces is permanently open. EmbedIQ Studio (future commercial) adds visual analysis on top; it never owns or restricts the underlying event data.
+
+See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the exact commitment: what is Apache 2.0 forever and what the future commercial layer is.
 
 ---
 
 ## Who it is for
 
-- Embedded and IoT engineers building connected products in C/C++ on RTOS or Linux
-- Teams tired of reinventing cloud connectivity, OTA, and watchdog management on every project
-- Developers who cannot test firmware without hardware today and want that to change
-- The 60,000+ Mbed OS developers who need a home after ARM archives it in July 2026
-- Engineers building on India's indigenous RISC-V processors (SHAKTI, VEGA) — EmbedIQ runs on RISC-V without modification
+Embedded engineers and IoT leads who have shipped production RTOS firmware and rebuilt the same infrastructure one too many times. Specifically:
+
+- Teams building connected products in C on FreeRTOS, Zephyr, or Linux who want reusable, testable FBs instead of project-specific glue
+- Developers who cannot run firmware tests today without hardware — and need that to change for CI to be real
+- Mbed OS users who need a new architecture home before ARM archives it in July 2026
+- Engineers building on RISC-V (SHAKTI, VEGA) — EmbedIQ runs on RISC-V without modification
 
 ---
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Complete technical reference — read before writing any code |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute — five-layer process, boundaries, CLA |
-| [ROADMAP.md](ROADMAP.md) | Phase 0→3 public roadmap |
-| [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) | What is free forever vs commercial |
-| [AGENTS.md](AGENTS.md) | AI agent primer — read before generating any EmbedIQ code |
-| [CODING_RULES.md](CODING_RULES.md) | Coding rules — verify before every PR |
+| Document                                                | Purpose                                                    |
+| ------------------------------------------------------- | ---------------------------------------------------------- |
+| [ARCHITECTURE.md](ARCHITECTURE.md)                      | Complete technical reference — Layer Model, contracts, HAL |
+| [AGENTS.md](AGENTS.md)                                  | Read before generating any EmbedIQ code with an AI agent   |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                      | How to contribute — boundaries, process, CLA               |
+| [CODING_RULES.md](CODING_RULES.md)                      | Rules enforced on every PR                                 |
+| [ROADMAP.md](ROADMAP.md)                                | Phase 1→4 public roadmap                                   |
+| [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md)        | What is free forever vs future commercial                  |
+| [docs/observability/iqtrace_format.md](docs/observability/iqtrace_format.md) | Open `.iqtrace` binary format specification v1.0 |
 
 ---
 
-## Project status
+## Get involved
 
-**Phase 1 — complete.** Core engine, message bus, FSM, Observatory, Platform FBs,
-and smart thermostat demo all running on Mac/Linux.
-`ctest --test-dir build` passes 100%. Observatory output visible without a single printf.
-Phase 2 (FreeRTOS OSAL + ESP32 target) is next.
-See [ROADMAP.md](ROADMAP.md) for the full timeline.
+The engine is running. Phase 2 is active. GitHub is where the work happens.
+
+Star the repo if you care about the problem. Open a Discussion if you have a hardware target or Driver FB you need. File an issue if something breaks. Read [CONTRIBUTING.md](CONTRIBUTING.md) if you want to contribute code — Phase 2 needs engineers who have shipped production RTOS firmware.
 
 ---
 
-## Built by
-
-[Ritesh Anand](https://www.linkedin.com/in/riteshanand101) · [Ritzy Lab](https://ritzylab.com) · embediq.com
-
-20 years shipping embedded and IoT products. EmbedIQ is the framework I needed on every one of them.
-
----
-
-*Apache 2.0 · embediq.com · © 2026 Ritzy Lab*
+*Apache 2.0 · [embediq.com](https://embediq.com) · Built by [Ritesh Anand](https://www.linkedin.com/in/riteshanand101) · [Ritzy Lab](https://ritzylab.com)*

@@ -15,6 +15,13 @@ No exceptions. No future owner can change this.
 - All Platform FBs — `fb_uart`, `fb_watchdog`, `fb_nvm`, `fb_i2c`, `fb_spi`, `fb_timer`, `fb_gpio`
 - All Component FBs — `fb_cloud_mqtt`, `fb_ota`, `fb_telemetry`, `fb_provisioning`
 - All tools — `messages.iq` generator, `embediq` CLI, FB registry protocol
+- The `.iqtrace` binary file format — the open specification
+  (`docs/observability/iqtrace_format.md`) is Apache 2.0 forever. Any
+  decoder, any tool, any commercial product may read `.iqtrace` files
+  without restriction.
+- `tools/embediq_obs/` — the Observatory CLI (`decode`, `stats`, `filter`,
+  `export`, `tail`) is Apache 2.0 forever. The data your firmware produces
+  is permanently open.
 - All examples — smart thermostat, industrial gateway, and all future examples added to this repo
 
 **You can use EmbedIQ in a closed-source commercial product at zero cost, forever.**
@@ -27,7 +34,7 @@ This is the answer to QP/C's GPLv3: Apache 2.0 means your firmware source code i
 
 Two products built on top of the free core. The framework never requires either of them.
 
-**EmbedIQ Studio** — visual debugging and session replay tool. Turns the Observatory event stream into a visual timeline: FBs as swimlanes, messages as arrows, FSM states as coloured blocks. Live view, session capture, replay, FSM visualiser. Desktop/web application.
+**EmbedIQ Studio** — visual debugging and session replay tool. Turns the Observatory event stream into a visual timeline: FBs as swimlanes, messages as arrows, FSM states as coloured blocks. Live view, session capture, replay, FSM visualiser. Desktop/web application. Studio reads `.iqtrace` files — it does not own them. The same files are readable by `embediq obs` and any tool built on the open format.
 
 **EmbedIQ Cloud** — fleet observability and OTA management platform. Every device's Observatory stream, aggregated. Staged OTA rollouts. Anomaly detection. Remote session capture.
 

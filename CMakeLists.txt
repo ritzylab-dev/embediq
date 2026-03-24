@@ -71,7 +71,14 @@ if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     add_subdirectory(core/src)
     add_subdirectory(hal/posix)
     add_subdirectory(fbs/drivers)
-    add_subdirectory(platform/posix)
     add_subdirectory(tests/unit)
     add_subdirectory(tests/integration)
 endif()
+
+# ---------------------------------------------------------------------------
+# CLI tool tests (Python)
+# ---------------------------------------------------------------------------
+add_test(NAME cli_obs_tool
+    COMMAND ${CMAKE_COMMAND} -E env
+        python3
+        ${CMAKE_SOURCE_DIR}/tests/cli/test_obs_cli.py)
