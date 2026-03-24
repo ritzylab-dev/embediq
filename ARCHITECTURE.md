@@ -164,7 +164,8 @@ not with the layer that implements it.
 | `embediq_meta.h`       | FB metadata                 | Layer 3 Registry      |
 | `embediq_bridge.h`     | External FB bridge          | Layer 3               |
 | `embediq_endpoint.h`   | Endpoint Router contract    | Layer 1, Layer 3      |
-| `core/include/hal/*.h` | HAL peripheral access       | Layer 2 Driver FBs    |
+| `core/include/hal/*.h`              | HAL peripheral access        | Layer 2 Driver FBs    |
+| `core/include/hal/hal_obs_stream.h` | Observatory binary stream    | Layer 1 Observatory   |
 
 ---
 
@@ -399,7 +400,77 @@ typedef struct {
 static_assert(sizeof(EmbedIQ_Event_t) == 14, "Observatory event size mismatch");
 ```
 
-Observable transports: `obs/uart`, `obs/tcp`, `obs/rtt`, `obs/null`.
+### Event Families
+
+Every `event_type` encodes its family in its high nibble — no extra field needed.
+The family is derived in the decoder with zero runtime overhead:
+
+| Band       | Family    | Event types                                   |
+| ---------- | --------- | --------------------------------------------- |
+| 0x10–0x1F  | SYSTEM    | OVERFLOW (0x10)                               |
+| 0x20–0x2F  | MESSAGE   | MSG_TX (0x20), MSG_RX (0x21), QUEUE_DROP (0x22) |
+| 0x30–0x3F  | STATE     | LIFECYCLE (0x30), FSM_TRANS (0x31)            |
+| 0x40–0x4F  | RESOURCE  | (reserved for queue depth, stack high-water)  |
+| 0x50–0x5F  | TIMING    | (reserved for ISR latency, message latency)   |
+| 0x60–0x6F  | FAULT     | FAULT (0x60)                                  |
+| 0x70–0x7F  | FUNCTION  | (reserved for FB CPU slice)                   |
+
+```c
+// Derive family at zero cost — no struct field, no lookup table
+embediq_obs_family_t fam = embediq_obs_event_family(evt.event_type);
+// or at compile time:
+EMBEDIQ_OBS_EVT_FAMILY(EMBEDIQ_OBS_EVT_FSM_TRANS)  // → EMBEDIQ_OBS_FAMILY_STATE
+```
+
+### Compile-time Trace Levels
+
+`EMBEDIQ_TRACE_LEVEL` in `embediq_config.h` — set once at compile time.
+
+| Level | Default for       | Captures                                                       |
+| ----- | ----------------- | -------------------------------------------------------------- |
+| 0     | Constrained MCU   | SYSTEM + FAULT families only (lifecycle, boot, faults)         |
+| 1     | Pi/Linux host     | Level 0 + MESSAGE + STATE families (messages, FSM transitions) |
+| 2     | Debug builds      | Level 1 + RESOURCE + TIMING (queue depth, ISR counters)        |
+| 3     | Lab sessions only | Level 2 + FUNCTION (FB CPU slice, ISR latency)                 |
+
+Per-family flags (`EMBEDIQ_TRACE_MESSAGE`, `EMBEDIQ_TRACE_STATE`, etc.) allow
+fine-grain override of the level defaults. Disabled emit macros compile to
+`(void)0` — zero binary overhead on constrained MCU builds.
+
+### Session Identity
+
+Every `.iqtrace` capture begins with a 40-byte session record:
+```c
+// embediq_obs.h — frozen at v1 (I-14)
+typedef struct {
+    uint32_t  device_id;           // unique device identifier
+    uint32_t  fw_version;          // EMBEDIQ_OBS_FW_VERSION(maj, min, pat)
+    uint64_t  timestamp_base_us;   // wall-clock anchor for sequence numbers
+    uint32_t  session_id;          // monotonic session counter
+    uint8_t   platform_id;         // POSIX=0, FreeRTOS=1, Baremetal=2, Zephyr=3
+    uint8_t   trace_level;         // EMBEDIQ_TRACE_LEVEL at capture time
+    uint8_t   _pad[2];
+    uint8_t   build_id[16];        // null-terminated build string
+} EmbedIQ_Obs_Session_t;
+
+_Static_assert(sizeof(EmbedIQ_Obs_Session_t) == 40, "session struct size mismatch");
+```
+
+### File Capture and Open Format
+
+Binary `.iqtrace` files are written via the `hal_obs_stream.h` HAL contract
+(implementation: `hal/posix/hal_obs_stream_posix.c`). The format is TLV-framed,
+little-endian, and forward-compatible. Full specification:
+`docs/observability/iqtrace_format.md` (Apache 2.0, open).
+```bash
+# Capture a session to file
+EMBEDIQ_OBS_PATH=/tmp/session.iqtrace ./build/examples/thermostat/embediq_thermostat
+
+# Decode, analyse, or export with the open CLI
+python3 tools/embediq_obs/embediq_obs.py obs decode /tmp/session.iqtrace
+python3 tools/embediq_obs/embediq_obs.py obs stats  /tmp/session.iqtrace
+python3 tools/embediq_obs/embediq_obs.py obs export /tmp/session.iqtrace
+```
 
 ---
 
@@ -429,7 +500,10 @@ BRIDGE:      Reliable delivery. v1 = at-most-once.
 OSAL:        Zephyr OSAL. v1 = FreeRTOS + Pi/Linux POSIX.
 HAL:         hal/stm32/, hal/nrf52/ implementations. v1 = hal/posix/ + hal/esp32/ only.
 DRIVER FBs:  fb_i2c, fb_spi, fb_usb. v1 = fb_timer, fb_nvm, fb_watchdog, fb_uart.
-COMMERCIAL:  Studio GUI, Cloud, AI Coder. v1 = framework + Observatory CLI + Test Runner.
+COMMERCIAL:  Studio GUI, Cloud, AI Coder. v1 = framework + Observatory CLI
+             (`tools/embediq_obs/`) + Test Runner. Observatory CLI is
+             SHIPPED in v1. The project-management CLI (`embediq init/add/build`)
+             is Phase 2.
 ```
 
 ---
@@ -458,14 +532,9 @@ Declaration in FB config:
 
 ## Observatory Levels
 
-`EMBEDIQ_OBS_LEVEL` — compile-time constant in `embediq_config.h`.
-
-| Level | Default for       | Captures                                                       |
-| ----- | ----------------- | -------------------------------------------------------------- |
-| 0     | Constrained MCU   | FB lifecycle, boot phases, faults                              |
-| 1     | Pi/Linux host     | Level 0 + every message (msg_id, source, target, sequence)     |
-| 2     | Debug builds      | Level 1 + queue depth, ISR overflow counters, stack high-water |
-| 3     | Lab sessions only | Level 2 + FB CPU slice, ISR latency, message latency           |
+`EMBEDIQ_TRACE_LEVEL` — compile-time constant in `embediq_config.h`.
+See the Trace Levels table in the Observatory section above for the
+full level/family matrix.
 
 Studio and Cloud require Level 1 minimum. Never ship Level 3 to production constrained MCUs.
 
