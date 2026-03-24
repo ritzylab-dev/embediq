@@ -55,17 +55,7 @@ message MSG_SYS_SHUTDOWN id=0x0005 {
 }
 
 // --- Timer ------------------------------------------------------------------
-
-// Emitted by fb_timer on every scheduler tick.
-message MSG_TIMER_TICK id=0x0010 {
-    tick_count : u32
-}
-
-// Emitted by fb_timer every 100 ms. Application FBs subscribe to this
-// for periodic work rather than creating their own timers.
-message MSG_TIMER_100MS id=0x0011 {
-    tick_count : u32
-}
+// Timer messages are in the official fb_timer range — see embediq_platform_msgs.h
 
 // --- Boot -------------------------------------------------------------------
 

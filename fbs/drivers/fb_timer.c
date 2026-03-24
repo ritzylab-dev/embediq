@@ -10,10 +10,10 @@
  * The other tick periods are always published.
  *
  * Message IDs (core/include/embediq_platform_msgs.h):
- *   MSG_TIMER_1MS   = 0x0401
- *   MSG_TIMER_10MS  = 0x0402
- *   MSG_TIMER_100MS = 0x0403
- *   MSG_TIMER_1SEC  = 0x0404
+ *   MSG_TIMER_1MS   = 0x04B0
+ *   MSG_TIMER_10MS  = 0x04B1
+ *   MSG_TIMER_100MS = 0x04B2
+ *   MSG_TIMER_1SEC  = 0x04B3
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_PLATFORM (1)
  *

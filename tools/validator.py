@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -98,6 +99,81 @@ def check_file(path):
     return violations
 
 
+def check_msg_id_ranges(root):
+    """
+    Verify that every MSG_ constant in embediq_platform_msgs.h falls within
+    its FB's registered range in messages_registry.json, and that no two
+    constants share the same ID value.
+
+    Returns True if violations were found.
+    """
+    registry_path = root / "messages_registry.json"
+    header_path = root / "core" / "include" / "embediq_platform_msgs.h"
+
+    if not registry_path.exists() or not header_path.exists():
+        return False
+
+    # 1. Build FB name → (range_min, range_max) from official_allocations.
+    with open(registry_path, encoding="utf-8") as f:
+        registry = json.load(f)
+
+    fb_ranges = {}
+    for fb_name, info in registry.get("official_allocations", {}).items():
+        r = info.get("range")
+        if r and len(r) == 2:
+            fb_ranges[fb_name] = (r[0], r[1])
+
+    # 2. Parse embediq_platform_msgs.h: detect section headers and #define lines.
+    header_text = header_path.read_text(encoding="utf-8")
+    section_re = re.compile(r"/\*\s*-+\s*\n\s*\*\s+(fb_\w+)\s+", re.MULTILINE)
+    define_re = re.compile(
+        r"^\s*#define\s+(MSG_\w+)\s+0x([0-9A-Fa-f]+)u", re.MULTILINE
+    )
+
+    # Map each #define to the most recent section header preceding it.
+    sections = [(m.start(), m.group(1)) for m in section_re.finditer(header_text)]
+    defines = [
+        (m.start(), m.group(1), int(m.group(2), 16))
+        for m in define_re.finditer(header_text)
+    ]
+
+    violations = False
+    seen_ids = {}  # id_value → constant_name
+
+    for def_pos, const_name, id_val in defines:
+        # Find which section this define belongs to.
+        current_fb = None
+        for sec_pos, fb_name in reversed(sections):
+            if sec_pos < def_pos:
+                current_fb = fb_name
+                break
+
+        # 3. Range check.
+        if current_fb and current_fb in fb_ranges:
+            lo, hi = fb_ranges[current_fb]
+            if not (lo <= id_val <= hi):
+                print(
+                    f"embediq_platform_msgs.h: {const_name} = 0x{id_val:04X} "
+                    f"is outside {current_fb} range "
+                    f"[0x{lo:04X}, 0x{hi:04X}]",
+                    file=sys.stderr,
+                )
+                violations = True
+
+        # 4. Duplicate detection.
+        if id_val in seen_ids:
+            print(
+                f"embediq_platform_msgs.h: duplicate ID 0x{id_val:04X} "
+                f"used by {seen_ids[id_val]} and {const_name}",
+                file=sys.stderr,
+            )
+            violations = True
+        else:
+            seen_ids[id_val] = const_name
+
+    return violations
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -128,10 +204,21 @@ def main():
             "Replace with named constants from embediq_config.h.",
             file=sys.stderr,
         )
-        return 1
 
-    print("OK: no hardcoded sizing constants found.")
-    return 0
+    # Check message ID ranges against registry.
+    if check_msg_id_ranges(root):
+        print(
+            "\nFAIL: message ID range violations detected. "
+            "Reconcile embediq_platform_msgs.h with messages_registry.json.",
+            file=sys.stderr,
+        )
+        found_violations = True
+
+    if not found_violations:
+        print("OK: no hardcoded sizing constants found. "
+              "Message ID ranges verified.")
+
+    return 1 if found_violations else 0
 
 
 if __name__ == "__main__":
