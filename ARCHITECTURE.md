@@ -236,7 +236,29 @@ Message priority and FB thread priority are **independent axes**. A high-priorit
 
 ### messages.iq
 
-All payload schemas are declared in `messages.iq`. The generator produces C structs. No hand-written payload structs anywhere in the codebase.
+All payload schemas are declared in `.iq` schema files under `messages/`. The generator
+(`tools/messages_iq/generate.py`) produces C headers committed to `generated/`. No
+hand-written payload structs anywhere in the codebase.
+
+**Two phases — design time and build time:**
+
+Design time (developer action — not cmake):
+- Edit or create a schema in `messages/<name>.iq`
+- Run: `python3 tools/messages_iq/generate.py messages/<name>.iq --out generated/ --output-name <name>_msg_catalog.h`
+- Commit the `.iq` change and the regenerated `.h` in the same PR
+- CI drift-check enforces they match — fails if committed `.h` does not reflect the current `.iq`
+
+Build time (cmake — no Python required):
+- Generated headers are committed and present after `git clone`
+- cmake compiles them directly — generator is never invoked by cmake
+- Works on any platform, any CI container, zero additional tooling
+
+**Why generated headers are committed, not gitignored:**
+Generated headers encode binary wire protocol contracts — message IDs and payload layouts.
+Once firmware ships with a message ID, that ID is frozen for that hardware generation.
+Committing the headers gives a full git-blame audit trail on every ID change and makes
+every protocol change visible in PR diffs. Auto-generation at cmake time would allow
+protocol contracts to change silently without review.
 
 **Versioning rules:**
 - IDs are never reused. A retired message ID is tombstoned.

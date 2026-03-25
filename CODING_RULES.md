@@ -27,6 +27,7 @@ A PR that breaks any invariant will not merge. No exceptions.
 | I-13 | `sequence` is canonical event ordering — never use `timestamp_us` for ordering or gap detection               | Code review + static analysis on Observatory consumers |
 | I-14 | Core header v1 API surface unchanged after v1 release — CI v1 compatibility shim enforces no breaking changes | `tests/compat/fb_v1_compat.c` compile on every PR      |
 | I-15 | `sizeof(EmbedIQ_Obs_Session_t) == 40` on all targets | `_Static_assert` in `embediq_obs.h` + CI multi-target compile |
+| I-16 | Committed `generated/*.h` matches generator output from `.iq` source | CI drift-check: regenerate into `/tmp` and diff against committed files |
 
 ---
 
@@ -314,6 +315,12 @@ uint8_t queue[32];   // 32 must come from EMBEDIQ_FB_QUEUE_DEPTH_NORMAL
 
 // ✗ FORBIDDEN: Timestamp comparison across possible wrap boundary
 if (b.timestamp_us > a.timestamp_us)  // use sequence delta instead
+
+// ✗ FORBIDDEN: Direct edit of any file in generated/
+// generated/embediq_msg_catalog.h    ← never hand-edit
+// generated/thermostat_msg_catalog.h ← never hand-edit
+// Edit the .iq schema in messages/ and run the generator.
+// Hand-edits create silent divergence between the .iq contract and the C binding.
 ```
 
 ---
@@ -336,6 +343,7 @@ as a comment on their own PR.
 [ ] CHANGELOG.md entry added for any public API change
 [ ] clang-format applied: clang-format -i <changed_files>
 [ ] No non-goals (AGENTS.md Section 6) implemented
+[ ] If messages/*.iq changed: generator run, generated/*.h committed in this PR, CI drift-check passes
 ```
 
 ---
