@@ -20,21 +20,25 @@ The problem is structural. The solution has to be structural too.
 
 A message-driven, layered application framework that sits above your RTOS and enforces structure at the architecture level — not through code reviews or guidelines.
 
-**The unit of everything is the Function Block (FB).** An FB owns its state. It communicates only via typed messages. It is observable by default. The wrong patterns — direct cross-FB calls, hardware headers in application code, dynamic allocation in the core engine — are structurally prevented. They fail CI, not code review.
+The structural fix: every firmware concern — a UART driver, an OTA updater, a cloud publisher — is isolated into an independent unit. That unit owns its state privately. It communicates with every other unit only through typed messages on a shared bus. It never calls another unit directly. No shared state across units. No hidden dependencies. The wrong patterns cannot compile.
+
+**That unit is the Functional Block (FB).** An FB owns its state exclusively. It communicates only via typed messages. It is observable by default — every lifecycle transition and message boundary is captured automatically with zero developer code. The wrong patterns — direct cross-FB calls, hardware headers in application code, dynamic allocation in the core engine — are structurally prevented. They fail CI, not code review.
 
 **Four layers. Clear contracts between them.**
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│  Layer 4 · Commercial (future)                                     │
-│  Studio · Cloud connector · AI Coder                               │
+│  Layer 4 · Commercial tools (future)                               │
+│  Visual tooling · Cloud connectivity · IDE and AI integrations     │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 3 · Ecosystem                                               │
-│  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_provisioning           │
-│  External FBs (Python / Node.js / Java via Bridge)                 │
+│  Bridge daemon · bridge/websocket · bridge/unix_socket             │
+│  Registry · Community BSPs · 3rd-party FB wrappers                 │
+│  External FBs (Python · Node.js · Java · any language)            │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 2 · Driver FBs + Service FBs                                │
-│  fb_timer · fb_uart · fb_nvm · fb_watchdog · fb_gpio               │
+│  Driver FBs:  fb_timer · fb_uart · fb_nvm · fb_watchdog · fb_gpio  │
+│  Service FBs: fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger    │
 │                 ▼  typed messages only  ▼                          │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 1 · Framework Engine                 ← running on POSIX     │
@@ -50,6 +54,8 @@ A message-driven, layered application framework that sits above your RTOS and en
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+HAL (Hardware Abstraction Layer) abstracts hardware peripherals — UART, GPIO, flash. OSAL (OS Abstraction Layer) abstracts the RTOS — threads, queues, semaphores. These two layers are the portability seam: the same Driver FB source file runs on POSIX, FreeRTOS, and ESP32 because all platform differences live in `hal/posix/` or `hal/esp32/`, never in the FB.
+
 **A Driver FB wraps one hardware peripheral via the HAL contract.** `fbs/drivers/fb_timer.c` is the same source file whether it runs on POSIX, FreeRTOS, or ESP32. The platform difference lives in `hal/posix/` or `hal/esp32/` — never in the FB.
 
 **A Service FB is platform-agnostic.** `fb_cloud_mqtt` does not know what chip it runs on. It cannot include HAL headers — the boundary checker enforces this in CI on every PR.
@@ -63,10 +69,12 @@ A message-driven, layered application framework that sits above your RTOS and en
 ```bash
 git clone https://github.com/ritzylab-dev/embediq.git
 cd embediq
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DEMBEDIQ_PLATFORM=host
 cmake --build build -j$(nproc)
 cd build && ctest --output-on-failure
 ```
+
+Generated C headers (`generated/*.h`) are committed — no extra tooling needed after clone. If you modify a `.iq` message schema, see [CONTRIBUTING.md](CONTRIBUTING.md) for the two-step workflow.
 
 All tests pass on Linux and macOS without hardware. The thermostat example runs a full FB application — sensor, controller, cloud publish — with Observatory output on your terminal.
 

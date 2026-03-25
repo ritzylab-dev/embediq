@@ -37,8 +37,8 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 4 — COMMERCIAL                                               │
-│  EmbedIQ Studio  ·  EmbedIQ Cloud  ·  MCP Server                   │
+│  LAYER 4 — COMMERCIAL (future)                                      │
+│  Visual tooling  ·  Cloud connectivity  ·  IDE and AI integrations  │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 3 — ECOSYSTEM                                                │
 │  Bridge daemon  ·  bridge/websocket  ·  bridge/unix_socket          │
@@ -558,7 +558,7 @@ Declaration in FB config:
 See the Trace Levels table in the Observatory section above for the
 full level/family matrix.
 
-Studio and Cloud require Level 1 minimum. Never ship Level 3 to production constrained MCUs.
+Commercial tools (Layer 4) require trace Level 1 minimum. Never ship Level 3 to production constrained MCUs.
 
 ---
 
