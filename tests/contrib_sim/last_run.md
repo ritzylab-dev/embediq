@@ -1,12 +1,12 @@
-# contrib_sim run — 2026-03-25 21:23 UTC
+# contrib_sim run — 2026-03-25 23:15 UTC
 
 **Branch:** dev
-**HEAD:** 2ead11ad3315ce290b89df0c465f8586a69a1436
+**HEAD:** 3b3cbf50b3e1ec79da32b3c65eb563a3d4156a1a
 **Clone URL:** https://github.com/ritzylab-dev/embediq.git
 
 ---
 
-Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.pUXUY1LppS/embediq'...
+Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/embediq'...
 -- The C compiler identification is AppleClang 16.0.0.16000026
 -- Detecting C compiler ABI info
 -- Detecting C compiler ABI info - done
@@ -15,16 +15,16 @@ Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.pUXUY1LppS/em
 -- Detecting C compile features - done
 -- Configuring done (0.6s)
 -- Generating done (0.1s)
--- Build files have been written to: /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.pUXUY1LppS/embediq/build
-[  1%] Building C object osal/posix/CMakeFiles/embediq_osal_posix.dir/embediq_osal_posix.c.o
-[  3%] Linking C static library libembediq_osal_posix.a
-[  3%] Built target embediq_osal_posix
-[  5%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_timer_posix.c.o
-[  7%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_flash_posix.c.o
-[  9%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_wdg_posix.c.o
-[ 11%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_obs_stream_posix.c.o
-[ 12%] Linking C static library libembediq_hal_posix.a
-[ 12%] Built target embediq_hal_posix
+-- Build files have been written to: /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/embediq/build
+[  1%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_timer_posix.c.o
+[  3%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_flash_posix.c.o
+[  5%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_wdg_posix.c.o
+[  7%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_obs_stream_posix.c.o
+[  9%] Linking C static library libembediq_hal_posix.a
+[  9%] Built target embediq_hal_posix
+[ 11%] Building C object osal/posix/CMakeFiles/embediq_osal_posix.dir/embediq_osal_posix.c.o
+[ 12%] Linking C static library libembediq_osal_posix.a
+[ 12%] Built target embediq_osal_posix
 [ 14%] Building C object core/src/CMakeFiles/embediq_fb_engine.dir/registry/fb_engine.c.o
 [ 16%] Building C object core/src/CMakeFiles/embediq_fb_engine.dir/bus/message_bus.c.o
 [ 18%] Building C object core/src/CMakeFiles/embediq_fb_engine.dir/fsm/fsm_engine.c.o
@@ -90,11 +90,11 @@ Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.pUXUY1LppS/em
 [ 98%] Building C object tests/integration/CMakeFiles/test_thermostat_capture.dir/__/__/examples/thermostat/fb_temp_controller.c.o
 [100%] Linking C executable test_thermostat_capture
 [100%] Built target test_thermostat_capture
-Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.pUXUY1LppS/embediq/build
+Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/embediq/build
       Start  1: cli_obs_tool
- 1/16 Test  #1: cli_obs_tool ........................   Passed    0.12 sec
+ 1/16 Test  #1: cli_obs_tool ........................   Passed    0.09 sec
       Start  2: unit_osal_posix
- 2/16 Test  #2: unit_osal_posix .....................   Passed    0.48 sec
+ 2/16 Test  #2: unit_osal_posix .....................   Passed    0.46 sec
       Start  3: unit_fb_engine
  3/16 Test  #3: unit_fb_engine ......................   Passed    0.24 sec
       Start  4: unit_message_bus
@@ -102,31 +102,31 @@ Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.pUXUY1LppS/emb
       Start  5: unit_fsm_engine
  5/16 Test  #5: unit_fsm_engine .....................   Passed    0.23 sec
       Start  6: unit_observatory
- 6/16 Test  #6: unit_observatory ....................   Passed    0.22 sec
+ 6/16 Test  #6: unit_observatory ....................   Passed    0.23 sec
       Start  7: unit_fb_watchdog
- 7/16 Test  #7: unit_fb_watchdog ....................   Passed    0.25 sec
+ 7/16 Test  #7: unit_fb_watchdog ....................   Passed    0.24 sec
       Start  8: unit_fb_timer
- 8/16 Test  #8: unit_fb_timer .......................   Passed    2.78 sec
+ 8/16 Test  #8: unit_fb_timer .......................   Passed    2.73 sec
       Start  9: unit_blocking_dispatch
- 9/16 Test  #9: unit_blocking_dispatch ..............   Passed    0.24 sec
+ 9/16 Test  #9: unit_blocking_dispatch ..............   Passed    0.25 sec
       Start 10: unit_dispatch_shutdown
-10/16 Test #10: unit_dispatch_shutdown ..............   Passed    0.23 sec
+10/16 Test #10: unit_dispatch_shutdown ..............   Passed    0.25 sec
       Start 11: unit_fb_nvm
 11/16 Test #11: unit_fb_nvm .........................   Passed    0.23 sec
       Start 12: unit_hal_contracts
-12/16 Test #12: unit_hal_contracts ..................   Passed    0.23 sec
+12/16 Test #12: unit_hal_contracts ..................   Passed    0.22 sec
       Start 13: unit_obs_capture
-13/16 Test #13: unit_obs_capture ....................   Passed    0.23 sec
+13/16 Test #13: unit_obs_capture ....................   Passed    0.22 sec
       Start 14: integration_thermostat_observable
-14/16 Test #14: integration_thermostat_observable ...   Passed    0.22 sec
+14/16 Test #14: integration_thermostat_observable ...   Passed    0.24 sec
       Start 15: integration_thermostat_full
 15/16 Test #15: integration_thermostat_full .........   Passed   15.46 sec
       Start 16: integration_thermostat_capture
-16/16 Test #16: integration_thermostat_capture ......   Passed    0.30 sec
+16/16 Test #16: integration_thermostat_capture ......   Passed    0.33 sec
 
 100% tests passed, 0 tests failed out of 16
 
-Total Test time (real) =  21.73 sec
+Total Test time (real) =  21.70 sec
 
 ---
 
