@@ -37,6 +37,7 @@ Welcome. Contributions are what make EmbedIQ better for everyone.
 - Dynamic allocation (`malloc`/`free`) in Shell 1 or Core
 - Cross-FB function calls — messages only at FB boundaries
 - Changes to Core header contracts (`core/include/*.h`) without an architecture decision record
+- Direct edits to `generated/*.h` files — edit the `.iq` schema in `messages/` and regenerate
 
 ---
 
@@ -69,6 +70,25 @@ Layer 5 — Target Tests  (optional for most contributions)
   Required for Platform FB contributions and BSP additions.
   Human gate — cannot be automated in CI.
 ```
+
+---
+
+## Adding or changing a message schema
+
+If your contribution adds or modifies a `.iq` schema file in `messages/`:
+
+1. Edit the schema: `messages/<name>.iq`
+2. Run the generator:
+   ```
+   python3 tools/messages_iq/generate.py messages/<name>.iq \
+       --out generated/ --output-name <name>_msg_catalog.h
+   ```
+3. Commit both the `.iq` change and the regenerated `.h` in the same PR
+4. CI drift-check will fail if the committed `.h` does not match generator output
+
+Never edit files in `generated/` directly. They are outputs of the `.iq` generator,
+not inputs. Message IDs are binary wire protocol contracts — every ID change must be
+visible in a PR diff and reviewed before merge.
 
 ---
 

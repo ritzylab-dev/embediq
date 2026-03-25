@@ -65,6 +65,8 @@ Substrate
 | #42 | docs/handoff-milestone-update | HANDOFF.md full rewrite for v0.1.0 milestone |
 | #43 | chore/reconcile-main | Reconcile diverged main history into dev (ours strategy, zero file changes) |
 | #44 | dev→main | v0.1.0 milestone promotion — 38 commits, merge commit on main |
+| #45 | docs/project-state-v010 | PM/project_state.md full rewrite — v0.1.0 complete, all PRs #24–#44 recorded |
+| #46 | fix/fix-generated-gitignore | Commit generated headers, add CI drift-check — fixes fresh-clone build failure (reported by external contributor Michael) |
 
 ---
 
@@ -95,6 +97,7 @@ None.
 - PM role is read-only on repo. All changes go through agent prompts.
 - Registry is authoritative for message ID namespacing. validator.py enforces.
 - Gate protocol is 13 gates (13_gate_protocol.md) — Gate 13 added 2026-03-24.
+- generated/*.h files are design-time artifacts (binary wire protocol contracts) — committed to repo, not gitignored. The .iq generator is a design tool, not a build tool. CI drift-check (I-16) enforces .iq → .h consistency on every PR. Decision date: 2026-03-24.
 
 ### Observability decisions (locked 2026-03-23)
 
