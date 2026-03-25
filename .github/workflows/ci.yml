@@ -16,9 +16,20 @@ jobs:
 
       - name: Generate message catalogs (messages.iq → C headers)
         run: |
-          python3 tools/messages_iq/generate.py messages/core.iq --out generated/
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --out generated/ --output-name embediq_msg_catalog.h
           python3 tools/messages_iq/generate.py messages/thermostat.iq \
               --out generated/ --output-name thermostat_msg_catalog.h
+
+      - name: Verify generated headers match .iq source (drift check)
+        run: |
+          mkdir -p /tmp/iq_fresh
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --out /tmp/iq_fresh/ --output-name embediq_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/thermostat.iq \
+              --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h
+          diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h
+          diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
 
       - name: Build (host platform)
         run: |
