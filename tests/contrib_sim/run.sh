@@ -50,7 +50,7 @@ fi
 cd "$WORK_DIR/embediq"
 
 echo "[contrib_sim] Configuring..."
-if ! cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug >> "$OUTFILE" 2>&1; then
+if ! cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DEMBEDIQ_PLATFORM=host >> "$OUTFILE" 2>&1; then
     echo "## Result: FAIL — cmake configure failed" >> "$OUTFILE"
     echo "[contrib_sim] FAIL: cmake configure failed. See $OUTFILE"
     exit 1
