@@ -34,7 +34,8 @@ A message-driven, layered application framework that sits above your RTOS and en
 │  External FBs (Python / Node.js / Java via Bridge)                 │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 2 · Driver FBs + Service FBs                                │
-│  fb_timer · fb_uart · fb_nvm · fb_watchdog · fb_gpio               │
+│  Driver FBs:  fb_timer · fb_uart · fb_nvm · fb_watchdog · fb_gpio  │
+│  Service FBs: fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger    │
 │                 ▼  typed messages only  ▼                          │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 1 · Framework Engine                 ← running on POSIX     │
