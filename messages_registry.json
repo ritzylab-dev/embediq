@@ -57,9 +57,16 @@
 
   "community_allocations": {
     "_instructions": "Add your entry here in a PR. Format: name, range (within 5120–65535), owner (GitHub URL), contact (email or GitHub handle).",
+    "thermostat_example": {
+      "range": [5120, 5135],
+      "owner": "github.com/ritzylab-dev/embediq",
+      "contact": "dev@embediq.com",
+      "description": "Smart thermostat example application (examples/thermostat/). MSG_TEMP_READING = 0x1400.",
+      "license": "Apache-2.0"
+    },
     "_example": {
       "fb_modbus_rtu_example": {
-        "range": [5120, 5179],
+        "range": [5136, 5195],
         "owner": "github.com/example/fb_modbus_rtu",
         "contact": "maintainer@example.com",
         "description": "Modbus RTU over fb_uart. Reads/writes coils and registers.",
@@ -166,12 +173,12 @@
       "description": "Published every 1 second"
     },
     "MSG_TEMP_READING": {
-      "id_hex":     "0x0420",
-      "id_decimal": 1056,
+      "id_hex":     "0x1400",
+      "id_decimal": 5120,
       "fb":         "thermostat",
-      "namespace":  "official",
+      "namespace":  "community",
       "source":     "messages/thermostat.iq",
-      "description": "Temperature reading from fb_temp_sensor"
+      "description": "Temperature reading from fb_temp_sensor (example app)"
     }
   },
 

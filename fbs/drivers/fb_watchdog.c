@@ -100,11 +100,13 @@ static void monitor_scan(void)
     uint32_t now_us = embediq_osal_time_us();
     bool     all_ok = true;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);   /* 0 = wait forever */
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);   /* block forever */
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (!g_slots[i].active) continue;
 
+        /* uint32_t unsigned sub wraps correctly for intervals < ~35 min
+         * (2^31 µs); max watchdog timeout is well under this. */
         uint32_t elapsed_us = now_us - g_slots[i].last_checkin_us;
         uint32_t timeout_us = g_slots[i].timeout_ms * 1000u;
 
@@ -192,7 +194,9 @@ static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 
     /* Start background monitor. */
     g_running = true;
-    g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL, 1, 4096);
+    g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL,
+                                     EMBEDIQ_WDG_TASK_PRIORITY,
+                                     EMBEDIQ_WDG_TASK_STACK_SIZE);
 }
 
 static void wdg_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
@@ -241,7 +245,7 @@ void embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms)
         g_mutex = embediq_osal_mutex_create();
     }
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
 
     /* Check if already registered. */
     for (uint8_t i = 0u; i < g_slot_count; i++) {
@@ -270,7 +274,7 @@ void embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb)
 {
     if (!fb || !g_mutex) return;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (g_slots[i].handle == fb && g_slots[i].active) {
@@ -287,7 +291,7 @@ void embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb)
 {
     if (!fb || !g_mutex) return;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (g_slots[i].handle == fb && g_slots[i].active) {

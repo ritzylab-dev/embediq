@@ -20,6 +20,7 @@
 #include <stddef.h>
 
 /* HAL contracts */
+#include "hal/hal_defs.h"
 #include "hal/hal_timer.h"
 #include "hal/hal_uart.h"
 #include "hal/hal_gpio.h"
@@ -27,6 +28,7 @@
 #include "hal/hal_i2c.h"
 #include "hal/hal_flash.h"
 #include "hal/hal_wdg.h"
+#include "hal/hal_obs_stream.h"
 
 /* Endpoint Router contract */
 #include "embediq_endpoint.h"
@@ -47,19 +49,29 @@ static int g_tests_failed = 0;
     }                                                                          \
 } while (0)
 
-/* ── hal_timer ────────────────────────────────────────────────────── */
+/* ── hal_defs (shared return codes) ───────────────────────────────── */
 
-static void test_hal_timer_ok_is_zero(void)
+static void test_hal_defs_ok_is_zero(void)
 {
     ASSERT(HAL_OK == 0, "HAL_OK must be 0");
 }
 
-static void test_hal_timer_err_values_are_negative(void)
+static void test_hal_defs_err_values_are_negative(void)
 {
     ASSERT(HAL_ERR_INVALID < 0, "HAL_ERR_INVALID must be negative");
     ASSERT(HAL_ERR_BUSY    < 0, "HAL_ERR_BUSY must be negative");
     ASSERT(HAL_ERR_TIMEOUT < 0, "HAL_ERR_TIMEOUT must be negative");
     ASSERT(HAL_ERR_IO      < 0, "HAL_ERR_IO must be negative");
+}
+
+static void test_hal_defs_err_values_are_distinct(void)
+{
+    ASSERT(HAL_ERR_INVALID != HAL_ERR_BUSY,    "HAL_ERR_INVALID != HAL_ERR_BUSY");
+    ASSERT(HAL_ERR_INVALID != HAL_ERR_TIMEOUT, "HAL_ERR_INVALID != HAL_ERR_TIMEOUT");
+    ASSERT(HAL_ERR_INVALID != HAL_ERR_IO,      "HAL_ERR_INVALID != HAL_ERR_IO");
+    ASSERT(HAL_ERR_BUSY    != HAL_ERR_TIMEOUT, "HAL_ERR_BUSY != HAL_ERR_TIMEOUT");
+    ASSERT(HAL_ERR_BUSY    != HAL_ERR_IO,      "HAL_ERR_BUSY != HAL_ERR_IO");
+    ASSERT(HAL_ERR_TIMEOUT != HAL_ERR_IO,      "HAL_ERR_TIMEOUT != HAL_ERR_IO");
 }
 
 /* ── hal_gpio ─────────────────────────────────────────────────────── */
@@ -115,12 +127,22 @@ static void test_hal_i2c_cfg_size_reasonable(void)
     ASSERT(sizeof(hal_i2c_cfg_t) <= 8u, "hal_i2c_cfg_t must be <= 8 bytes");
 }
 
+/* ── hal_obs_stream (shared return codes via hal_defs.h) ──────────── */
+
+static void test_hal_obs_stream_uses_shared_return_codes(void)
+{
+    /* hal_obs_stream.h includes hal_defs.h — verify shared codes are accessible */
+    ASSERT(HAL_OK     == 0,  "HAL_OK accessible via hal_obs_stream.h");
+    ASSERT(HAL_ERR_IO <  0,  "HAL_ERR_IO accessible via hal_obs_stream.h");
+}
+
 /* ── Entry point ──────────────────────────────────────────────────── */
 
 int main(void)
 {
-    test_hal_timer_ok_is_zero();
-    test_hal_timer_err_values_are_negative();
+    test_hal_defs_ok_is_zero();
+    test_hal_defs_err_values_are_negative();
+    test_hal_defs_err_values_are_distinct();
     test_hal_gpio_dir_values();
     test_hal_gpio_pull_values();
     test_hal_uart_parity_values();
@@ -129,6 +151,7 @@ int main(void)
     test_hal_uart_cfg_size_reasonable();
     test_hal_spi_cfg_size_reasonable();
     test_hal_i2c_cfg_size_reasonable();
+    test_hal_obs_stream_uses_shared_return_codes();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

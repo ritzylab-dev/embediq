@@ -35,6 +35,10 @@
 #define HAL_FLASH_PAGE_SIZE   256u
 #define PATH_BUF              PATH_MAX
 
+/* POSIX-only: 64 KiB file buffer for simulating flash erase/write operations.
+ * Never used on MCU targets — real HAL implementations use direct flash access. */
+#define HAL_FLASH_POSIX_MAX_SIZE  (64u * 1024u)
+
 /* ---------------------------------------------------------------------------
  * Path helpers
  * ------------------------------------------------------------------------- */
@@ -125,7 +129,7 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
     memset(buf, 0, len);
 
     /* Read current file contents. */
-    uint8_t file_buf[64u * 1024u];   /* 64 KiB — generous for NVM store */
+    uint8_t file_buf[HAL_FLASH_POSIX_MAX_SIZE];   /* 64 KiB — generous for NVM store */
     size_t file_len = read_file(file_buf, sizeof(file_buf));
 
     if (file_len > (size_t)addr) {
@@ -143,7 +147,7 @@ int hal_flash_write(uint32_t addr, const void *buf, size_t len)
     resolve_paths();
 
     /* Read current file (may be empty). */
-    uint8_t file_buf[64u * 1024u];
+    uint8_t file_buf[HAL_FLASH_POSIX_MAX_SIZE];
     memset(file_buf, 0, sizeof(file_buf));
     size_t file_len = read_file(file_buf, sizeof(file_buf));
 
@@ -163,7 +167,7 @@ int hal_flash_erase(uint32_t addr, size_t len)
     resolve_paths();
 
     /* Read current file. */
-    uint8_t file_buf[64u * 1024u];
+    uint8_t file_buf[HAL_FLASH_POSIX_MAX_SIZE];
     memset(file_buf, 0, sizeof(file_buf));
     size_t file_len = read_file(file_buf, sizeof(file_buf));
 

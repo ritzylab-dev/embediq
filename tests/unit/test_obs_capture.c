@@ -28,6 +28,9 @@
 extern void     obs__reset(void);
 extern uint32_t obs__ring_count(void);
 
+/* POSIX stream ops registration — implemented in hal_obs_stream_posix.c */
+extern void     embediq_obs_stream_posix_register(void);
+
 /* ---------------------------------------------------------------------------
  * Minimal test harness
  * ------------------------------------------------------------------------- */
@@ -207,6 +210,7 @@ static void test_capture_requires_session(void)
 
 int main(void)
 {
+    embediq_obs_stream_posix_register();
     test_capture_file_header();
     test_capture_session_tlv();
     test_capture_stream_end_after_no_events();

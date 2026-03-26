@@ -301,11 +301,15 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
 #ifdef EMBEDIQ_PLATFORM_HOST
 
 /**
- * Reset all bus state.  OSAL queues allocated during a previous boot call are
- * abandoned (v1 OSAL has no queue destroy API — acceptable for test isolation).
+ * Reset all bus state.  Destroys all per-FB queues before zeroing handles.
  */
 void message_bus__reset(void)
 {
+    for (uint8_t i = 0u; i < g_ep_count; i++) {
+        for (uint8_t p = 0u; p < 3u; p++) {
+            embediq_osal_queue_destroy(g_ep[i].q[p]);
+        }
+    }
     memset(g_ep,   0, sizeof(g_ep));
     memset(g_subs, 0, sizeof(g_subs));
     g_sub_count   = 0u;

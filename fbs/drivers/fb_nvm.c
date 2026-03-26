@@ -5,9 +5,9 @@
  * for raw byte storage.  The entire g_nvm[] array is the persistence unit —
  * binary layout, no JSON encoding.
  *
- * In-memory cache: NVM_MAX_KEYS (64) entries, each holding:
- *   - key:       char[NVM_KEY_SIZE]   (max 63 usable chars + NUL)
- *   - val:       uint8_t[NVM_VAL_SIZE] (up to 64 bytes)
+ * In-memory cache: EMBEDIQ_NVM_MAX_KEYS (64) entries, each holding:
+ *   - key:       char[EMBEDIQ_NVM_KEY_SIZE] (max 63 usable chars + NUL)
+ *   - val:       uint8_t[EMBEDIQ_NVM_VAL_SIZE] (up to 64 bytes)
  *   - val_len:   uint16_t
  *   - schema_id: uint16_t
  *
@@ -18,13 +18,13 @@
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE (2)
  *
- * Public API:
- *   fb_nvm_register()                           — register FB
- *   embediq_nvm_get(key, buf, buf_len, ...)      — lookup value
- *   embediq_nvm_set(key, val, len, schema_id)    — store value
- *   embediq_nvm_delete(key)                      — remove key
- *   embediq_nvm_reset_defaults()                 — wipe all entries
- *   embediq_nvm_get_schema_version(key, out)     — query schema ID
+ * Public API (matches embediq_nvm.h contract exactly):
+ *   fb_nvm_register()              — register FB
+ *   embediq_nvm_set(key, val, len) — store value
+ *   embediq_nvm_get(key, val, len) — lookup value
+ *   embediq_nvm_delete(key)        — remove key
+ *   embediq_nvm_flush()            — persist all pending writes
+ *   embediq_nvm_reset()            — wipe all entries
  *
  * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
  *   nvm__init_state()   — clear cache + create mutex
@@ -39,6 +39,7 @@
 
 #include "embediq_platform_msgs.h"
 #include "embediq_fb.h"
+#include "embediq_nvm.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
 #include "embediq_obs.h"
@@ -52,9 +53,9 @@
  * Sizing constants (all derived from embediq_config.h — I-08)
  * ------------------------------------------------------------------------- */
 
-#define NVM_KEY_SIZE      EMBEDIQ_MSG_MAX_PAYLOAD       /* 64: max key length  */
-#define NVM_VAL_SIZE      EMBEDIQ_MSG_MAX_PAYLOAD       /* 64: max value bytes */
-#define NVM_MAX_KEYS      EMBEDIQ_MAX_ENDPOINTS         /* 64: max entries     */
+#define NVM_KEY_SIZE      EMBEDIQ_NVM_KEY_SIZE          /* from embediq_config.h */
+#define NVM_VAL_SIZE      EMBEDIQ_NVM_VAL_SIZE          /* from embediq_config.h */
+#define NVM_MAX_KEYS      EMBEDIQ_NVM_MAX_KEYS          /* from embediq_config.h */
 
 /* ---------------------------------------------------------------------------
  * Internal types
@@ -153,130 +154,103 @@ EmbedIQ_FB_Handle_t fb_nvm_register(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Public NVM API
+ * Public NVM API — signatures must match embediq_nvm.h exactly
  * ------------------------------------------------------------------------- */
 
-/**
- * Get the value for a key.
- * @return  0 on success; -1 if key not found or buf_len too small.
- */
-int embediq_nvm_get(const char *key, uint8_t *buf, uint16_t buf_len,
-                    uint16_t *len_out, uint16_t *schema_out)
+embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
 {
-    if (!key || !buf) return -1;
-    if (!g_mutex) return -1;
+    if (!key || !val)                return EMBEDIQ_ERR;
+    if (len > NVM_VAL_SIZE)          return EMBEDIQ_ERR;
+    if (strlen(key) >= NVM_KEY_SIZE) return EMBEDIQ_ERR;
+    if (!g_mutex)                    return EMBEDIQ_ERR;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
-
-    uint8_t slot = find_slot(key);
-    if (slot == NVM_MAX_KEYS) {
-        embediq_osal_mutex_unlock(g_mutex);
-        return -1;   /* key not found */
-    }
-    if (g_nvm[slot].val_len > buf_len) {
-        embediq_osal_mutex_unlock(g_mutex);
-        return -1;   /* buffer too small */
-    }
-
-    memcpy(buf, g_nvm[slot].val, g_nvm[slot].val_len);
-    if (len_out)    *len_out    = g_nvm[slot].val_len;
-    if (schema_out) *schema_out = g_nvm[slot].schema_id;
-
-    embediq_osal_mutex_unlock(g_mutex);
-    return 0;
-}
-
-/**
- * Store a key-value pair and persist via HAL flash.
- * @return  0 on success; -1 on invalid args or if the store is full.
- */
-int embediq_nvm_set(const char *key, const uint8_t *val, uint16_t len,
-                    uint16_t schema_id)
-{
-    if (!key || !val) return -1;
-    if (len > NVM_VAL_SIZE)            return -1;
-    if (strlen(key) >= NVM_KEY_SIZE)   return -1;
-    if (!g_mutex) return -1;
-
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
         slot = find_free_slot();
         if (slot == NVM_MAX_KEYS) {
             embediq_osal_mutex_unlock(g_mutex);
-            return -1;   /* store full */
+            return EMBEDIQ_ERR;   /* store full */
         }
         strncpy(g_nvm[slot].key, key, NVM_KEY_SIZE - 1u);
         g_nvm[slot].key[NVM_KEY_SIZE - 1u] = '\0';
         g_nvm[slot].active = true;
     }
 
-    memcpy(g_nvm[slot].val, val, len);
-    g_nvm[slot].val_len   = len;
-    g_nvm[slot].schema_id = schema_id;
+    memcpy(g_nvm[slot].val, val, (size_t)len);
+    g_nvm[slot].val_len   = (uint16_t)len;
+    g_nvm[slot].schema_id = 0u;
 
     nvm_persist();
 
     embediq_osal_mutex_unlock(g_mutex);
-    return 0;
+    return EMBEDIQ_OK;
 }
 
-/**
- * Delete a key.
- * @return  0 on success; -1 if key not found.
- */
-int embediq_nvm_delete(const char *key)
+embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len)
 {
-    if (!key) return -1;
-    if (!g_mutex) return -1;
+    if (!key || !val || !len)  return EMBEDIQ_ERR;
+    if (!g_mutex)              return EMBEDIQ_ERR;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
         embediq_osal_mutex_unlock(g_mutex);
-        return -1;
+        return EMBEDIQ_ERR;   /* key not found */
+    }
+    if (g_nvm[slot].val_len > *len) {
+        embediq_osal_mutex_unlock(g_mutex);
+        return EMBEDIQ_ERR;   /* buffer too small */
+    }
+
+    memcpy(val, g_nvm[slot].val, g_nvm[slot].val_len);
+    *len = (uint32_t)g_nvm[slot].val_len;
+
+    embediq_osal_mutex_unlock(g_mutex);
+    return EMBEDIQ_OK;
+}
+
+embediq_err_t embediq_nvm_delete(const char *key)
+{
+    if (!key)     return EMBEDIQ_ERR;
+    if (!g_mutex) return EMBEDIQ_ERR;
+
+    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+
+    uint8_t slot = find_slot(key);
+    if (slot == NVM_MAX_KEYS) {
+        embediq_osal_mutex_unlock(g_mutex);
+        return EMBEDIQ_OK;   /* idempotent per contract */
     }
 
     memset(&g_nvm[slot], 0, sizeof(nvm_entry_t));
     nvm_persist();
 
     embediq_osal_mutex_unlock(g_mutex);
-    return 0;
+    return EMBEDIQ_OK;
 }
 
-/** Remove all key-value pairs and persist the empty store. */
-void embediq_nvm_reset_defaults(void)
+embediq_err_t embediq_nvm_flush(void)
 {
-    if (!g_mutex) return;
+    if (!g_mutex) return EMBEDIQ_ERR;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+    nvm_persist();
+    embediq_osal_mutex_unlock(g_mutex);
+    return EMBEDIQ_OK;
+}
+
+embediq_err_t embediq_nvm_reset(void)
+{
+    if (!g_mutex) return EMBEDIQ_ERR;
+
+    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
     memset(g_nvm, 0, sizeof(g_nvm));
     nvm_persist();
     embediq_osal_mutex_unlock(g_mutex);
-}
-
-/**
- * Get only the schema version for a key (lighter-weight than nvm_get).
- * @return  0 on success; -1 if key not found.
- */
-int embediq_nvm_get_schema_version(const char *key, uint16_t *schema_out)
-{
-    if (!key || !schema_out) return -1;
-    if (!g_mutex) return -1;
-
-    embediq_osal_mutex_lock(g_mutex, 0u);
-
-    uint8_t slot = find_slot(key);
-    if (slot == NVM_MAX_KEYS) {
-        embediq_osal_mutex_unlock(g_mutex);
-        return -1;
-    }
-    *schema_out = g_nvm[slot].schema_id;
-
-    embediq_osal_mutex_unlock(g_mutex);
-    return 0;
+    return EMBEDIQ_OK;
 }
 
 /* ---------------------------------------------------------------------------

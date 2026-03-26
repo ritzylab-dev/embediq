@@ -16,7 +16,7 @@
  *
  * malloc / free policy (OSAL exception to R-02):
  *   malloc/free are used ONLY inside this file to allocate opaque handles.
- *   All other layers (Shell 1 and above) must never call malloc directly.
+ *   All other layers (Layer 1 and above) must never call malloc directly.
  *
  * Struct definitions are private to this file.  Core code sees only the
  * forward-declared opaque types from embediq_osal.h (R-sub-10).
@@ -278,6 +278,16 @@ uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q)
     uint16_t n = q->count;
     pthread_mutex_unlock(&q->mutex);
     return n;
+}
+
+void embediq_osal_queue_destroy(EmbedIQ_Queue_t *q)
+{
+    if (!q) return;
+    pthread_mutex_destroy(&q->mutex);
+    pthread_cond_destroy(&q->not_empty);
+    pthread_cond_destroy(&q->not_full);
+    free(q->buf);
+    free(q);
 }
 
 /* ---------------------------------------------------------------------------

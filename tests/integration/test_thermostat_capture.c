@@ -29,6 +29,9 @@
 extern void     fb_engine__reset(void);
 extern void     obs__set_level(uint8_t level);
 
+/* POSIX stream ops registration */
+extern void     embediq_obs_stream_posix_register(void);
+
 /* Platform FB APIs */
 extern void *fb_timer_register(void);
 extern void *fb_nvm_register(void);
@@ -65,6 +68,7 @@ int main(void)
     int failed = 0;
 
     /* ---- Setup ---- */
+    embediq_obs_stream_posix_register();
     fb_engine__reset();
     obs__set_level(2u);
     setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
@@ -102,8 +106,8 @@ int main(void)
 
     /* ---- Emit events directly so they land in the capture file ---- */
     embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX, 0u, 1u, 0u, 0x0420u);
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_FSM_TRANS, 0u, 1u, 1u, 0x0420u);
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX, 0u, 1u, 0u, 0x1400u);
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FSM_TRANS, 0u, 1u, 1u, 0x1400u);
     embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0u, 0xFFu, 3u, 0u);
 
     /* ---- End capture ---- */

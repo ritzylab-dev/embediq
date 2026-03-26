@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "hal_defs.h"
 
 /** Open (or create) a binary stream at path. Truncates any existing file. */
 int hal_obs_stream_open(const char *path);
@@ -26,9 +27,5 @@ int hal_obs_stream_flush(void);
 
 /** Close the open stream. */
 int hal_obs_stream_close(void);
-
-/* Return codes */
-#define HAL_OBS_STREAM_OK   0
-#define HAL_OBS_STREAM_ERR  (-1)
 
 #endif /* HAL_OBS_STREAM_H */

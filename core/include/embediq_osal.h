@@ -102,6 +102,9 @@ bool embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
 /** Return the number of items currently in the queue. */
 uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q);
 
+/** Destroy a queue and free its resources. Safe to call with NULL. */
+void embediq_osal_queue_destroy(EmbedIQ_Queue_t *q);
+
 /* ---------------------------------------------------------------------------
  * Signal API — used by Platform FB sub-functions to wake on hardware events
  *

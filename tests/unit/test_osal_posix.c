@@ -282,6 +282,25 @@ static void test_mutex_timeout_returns_false(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_queue_destroy
+ * Create a queue, enqueue one item, destroy it. Must not crash.
+ * Also test destroy(NULL) — must return silently.
+ * ------------------------------------------------------------------------- */
+
+static void test_queue_destroy(void)
+{
+    EmbedIQ_Queue_t *q = embediq_osal_queue_create(4, sizeof(uint32_t));
+    uint32_t val = 42u;
+    embediq_osal_queue_send(q, &val, 0u);
+    embediq_osal_queue_destroy(q);
+
+    /* NULL destroy must not crash. */
+    embediq_osal_queue_destroy(NULL);
+
+    ASSERT(1, "queue_destroy must complete without crash");
+}
+
+/* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 
@@ -297,6 +316,7 @@ int main(void)
     test_time_us_increases_monotonically();
     test_mutex_lock_unlock();
     test_mutex_timeout_returns_false();
+    test_queue_destroy();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

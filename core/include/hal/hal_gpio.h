@@ -6,9 +6,16 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#pragma once
+
+#ifndef HAL_GPIO_H
+#define HAL_GPIO_H
+
 #include <stdint.h>
-#include "hal_timer.h"
+#include "hal_defs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef enum {
     HAL_GPIO_DIR_IN  = 0,
@@ -26,3 +33,9 @@ int  hal_gpio_write(uint8_t pin, uint8_t val);
 /** hal_gpio_read — writes the pin level (0 or 1) to *val_out. */
 int  hal_gpio_read(uint8_t pin, uint8_t *val_out);
 void hal_gpio_deinit(uint8_t pin);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* HAL_GPIO_H */

@@ -6,10 +6,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#pragma once
+
+#ifndef HAL_UART_H
+#define HAL_UART_H
+
 #include <stdint.h>
 #include <stddef.h>
-#include "hal_timer.h"   /* for HAL_OK / HAL_ERR_* */
+#include "hal_defs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Parity constants */
 #define HAL_UART_PARITY_NONE  0
@@ -31,3 +38,9 @@ int  hal_uart_tx(const uint8_t *buf, size_t len);
  */
 int  hal_uart_rx(uint8_t *buf, size_t len, uint32_t timeout_ms);
 void hal_uart_deinit(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* HAL_UART_H */

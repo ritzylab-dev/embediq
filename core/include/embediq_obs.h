@@ -82,6 +82,10 @@ extern "C" {
 
 /* ---------------------------------------------------------------------------
  * Family enum
+ *
+ * NOTE: Enum and callback typedefs use lowercase_t naming intentionally —
+ * this is the established convention for non-struct types in EmbedIQ Core.
+ * Struct types use EmbedIQ_PascalCase_t. Do not rename.
  * ------------------------------------------------------------------------- */
 
 typedef enum {
@@ -267,9 +271,35 @@ _Static_assert(sizeof(EmbedIQ_Event_t) == 14,
 typedef enum {
     EMBEDIQ_OBS_TRANSPORT_NULL   = 0, /**< Discard all events (production default) */
     EMBEDIQ_OBS_TRANSPORT_STDOUT = 1, /**< Print to stdout (host/debug) */
-    EMBEDIQ_OBS_TRANSPORT_TCP    = 2, /**< Stream to EmbedIQ Studio via TCP */
+    EMBEDIQ_OBS_TRANSPORT_TCP    = 2, /**< Stream to remote viewer via TCP */
     EMBEDIQ_OBS_TRANSPORT_FILE   = 3, /**< Write .iqtrace binary capture */
 } EmbedIQ_Obs_Transport_t;
+
+/* ---------------------------------------------------------------------------
+ * Stream ops table — pluggable binary transport for .iqtrace file capture
+ *
+ * The Observatory core calls these function pointers for file I/O.
+ * HAL implementations register an ops table at boot via
+ * embediq_obs_set_stream_ops(). If no ops are registered, file capture
+ * is silently disabled (capture_begin returns -1).
+ *
+ * This abstraction removes the Layer 1 Core → HAL dependency: obs.c
+ * never includes any hal/ header.
+ * ------------------------------------------------------------------------- */
+
+typedef struct {
+    int  (*open)(const char *path);          /**< Open/create a binary stream */
+    int  (*write)(const void *data, uint16_t len); /**< Append bytes */
+    int  (*flush)(void);                     /**< Flush buffered bytes */
+    int  (*close)(void);                     /**< Close the stream */
+} embediq_obs_stream_ops_t;
+
+/**
+ * Register the binary stream transport implementation.
+ * Called once at platform init (before any capture_begin call).
+ * The Observatory stores the pointer — ops must remain valid for process lifetime.
+ */
+void embediq_obs_set_stream_ops(const embediq_obs_stream_ops_t *ops);
 
 /* ---------------------------------------------------------------------------
  * Public API — implemented in core/src/observatory/

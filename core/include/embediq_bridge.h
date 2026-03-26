@@ -6,7 +6,7 @@
  * a unix socket or TCP endpoint and exchange EmbedIQ_Msg_t frames.
  *
  * Phase and status:
- *   Implementation target: Phase 3 (AGENTS.md §3 Shell 3 — Ecosystem).
+ *   Implementation target: Phase 3 (AGENTS.md §3 Layer 3 — Ecosystem).
  *   Contract frozen: Phase 2 (this header).
  *   No bridge implementation may be included in Phase 1 or Phase 2 builds
  *   unless EMBEDIQ_BRIDGE is defined (I-09 invariant).

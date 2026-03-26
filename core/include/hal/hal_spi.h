@@ -6,10 +6,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#pragma once
+
+#ifndef HAL_SPI_H
+#define HAL_SPI_H
+
 #include <stdint.h>
 #include <stddef.h>
-#include "hal_timer.h"
+#include "hal_defs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct {
     uint32_t speed_hz;
@@ -24,3 +31,9 @@ int  hal_spi_init(const hal_spi_cfg_t *cfg);
  */
 int  hal_spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len);
 void hal_spi_deinit(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* HAL_SPI_H */

@@ -78,7 +78,7 @@ typedef struct {
  * Controller FSM
  * ------------------------------------------------------------------------- */
 
-#define MSG_TEMP_READING   0x0420u
+#define MSG_TEMP_READING   0x1400u
 #define CTRL_NORMAL        0u
 #define CTRL_WARNING       1u
 

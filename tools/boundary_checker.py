@@ -68,18 +68,19 @@ def _layer_of(rel_path):
 
 # Allowed cross-layer include sets (same-layer is always permitted separately)
 _ALLOWED = {
-    'core/src':        {'core/include', 'core/include/hal'},
+    'core/src':        {'core/include'},
     'osal/posix':      {'core/include', 'core/include/hal'},
     'osal/freertos':   {'core/include', 'core/include/hal'},
+    # RETIRED (PR #29): platform/ layer was removed; rules kept for reference only.
     'platform/posix':  {'core/include', 'core/include/hal', 'osal/posix'},
     'platform/esp32':  {'core/include', 'core/include/hal', 'osal/freertos'},
     'components':      {'core/include', 'core/include/hal'},
     'examples':        {'core/include', 'core/include/hal', 'fbs/drivers', 'fbs/services'},
     'tests':           {'core/include', 'core/include/hal', 'examples', 'fbs/drivers', 'fbs/services'},
-    # HAL implementation layers — only HAL contracts, nothing else
-    'hal/posix':       {'core/include/hal'},
-    'hal/esp32':       {'core/include/hal'},
-    'hal/stm32':       {'core/include/hal'},
+    # HAL implementation layers — HAL contracts + core/include for ops table registration
+    'hal/posix':       {'core/include/hal', 'core/include'},
+    'hal/esp32':       {'core/include/hal', 'core/include'},
+    'hal/stm32':       {'core/include/hal', 'core/include'},
     # Driver FBs — may use all framework contracts (incl. HAL) but not impl paths
     'fbs/drivers':     {'core/include', 'core/include/hal'},
     # Service FBs — platform-agnostic: must NOT include HAL contracts

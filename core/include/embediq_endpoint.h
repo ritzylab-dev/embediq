@@ -12,10 +12,20 @@
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
  *
+ * I-01: Compiles standalone with zero OSAL or BSP dependencies.
+ * R-03: C11. Fixed-width types from <stdint.h> only.
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
-#pragma once
+
+#ifndef EMBEDIQ_ENDPOINT_H
+#define EMBEDIQ_ENDPOINT_H
+
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /** Maximum byte length (including NUL) of a registered endpoint name. */
 #define EMBEDIQ_EP_NAME_MAX   32
@@ -44,3 +54,9 @@ int embediq_endpoint_lookup(const char *name, embediq_ep_id_t *ep_id_out);
  * @return  0 on success, -1 if id was not registered
  */
 int embediq_endpoint_unregister(embediq_ep_id_t ep_id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* EMBEDIQ_ENDPOINT_H */
