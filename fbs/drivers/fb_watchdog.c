@@ -192,7 +192,9 @@ static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 
     /* Start background monitor. */
     g_running = true;
-    g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL, 1, 4096);
+    g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL,
+                                     EMBEDIQ_WDG_TASK_PRIORITY,
+                                     EMBEDIQ_WDG_TASK_STACK_SIZE);
 }
 
 static void wdg_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)

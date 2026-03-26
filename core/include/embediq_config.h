@@ -92,6 +92,35 @@ extern "C" {
 #define EMBEDIQ_DISPATCH_DEFAULT_PRIORITY 2u
 
 /* ---------------------------------------------------------------------------
+ * Watchdog driver task
+ * ------------------------------------------------------------------------- */
+
+/** Stack size in bytes for the watchdog monitor task. */
+#define EMBEDIQ_WDG_TASK_STACK_SIZE       4096u
+
+/** OS thread priority for the watchdog monitor task.
+ *  Lower than dispatch threads (EMBEDIQ_DISPATCH_DEFAULT_PRIORITY = 2) so
+ *  watchdog scanning yields to normal FB work. */
+#define EMBEDIQ_WDG_TASK_PRIORITY         1u
+
+/* ---------------------------------------------------------------------------
+ * NVM driver sizing
+ *
+ * Kept independent of EMBEDIQ_MSG_MAX_PAYLOAD and EMBEDIQ_MAX_ENDPOINTS so
+ * increasing message payload size or endpoint count does not silently double
+ * the NVM flash image and RAM cache.
+ * ------------------------------------------------------------------------- */
+
+/** Maximum byte length of an NVM key string (including NUL terminator). */
+#define EMBEDIQ_NVM_KEY_SIZE              64u
+
+/** Maximum byte length of an NVM value (raw bytes). */
+#define EMBEDIQ_NVM_VAL_SIZE              64u
+
+/** Maximum number of NVM key-value entries in the in-memory cache. */
+#define EMBEDIQ_NVM_MAX_KEYS              64u
+
+/* ---------------------------------------------------------------------------
  * Observatory verbosity level
  *
  *  Runtime verbosity gate — see EMBEDIQ_TRACE_LEVEL for the compile-time gate.

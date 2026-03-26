@@ -5,9 +5,9 @@
  * for raw byte storage.  The entire g_nvm[] array is the persistence unit —
  * binary layout, no JSON encoding.
  *
- * In-memory cache: NVM_MAX_KEYS (64) entries, each holding:
- *   - key:       char[NVM_KEY_SIZE]   (max 63 usable chars + NUL)
- *   - val:       uint8_t[NVM_VAL_SIZE] (up to 64 bytes)
+ * In-memory cache: EMBEDIQ_NVM_MAX_KEYS (64) entries, each holding:
+ *   - key:       char[EMBEDIQ_NVM_KEY_SIZE] (max 63 usable chars + NUL)
+ *   - val:       uint8_t[EMBEDIQ_NVM_VAL_SIZE] (up to 64 bytes)
  *   - val_len:   uint16_t
  *   - schema_id: uint16_t
  *
@@ -53,9 +53,9 @@
  * Sizing constants (all derived from embediq_config.h — I-08)
  * ------------------------------------------------------------------------- */
 
-#define NVM_KEY_SIZE      EMBEDIQ_MSG_MAX_PAYLOAD       /* 64: max key length  */
-#define NVM_VAL_SIZE      EMBEDIQ_MSG_MAX_PAYLOAD       /* 64: max value bytes */
-#define NVM_MAX_KEYS      EMBEDIQ_MAX_ENDPOINTS         /* 64: max entries     */
+#define NVM_KEY_SIZE      EMBEDIQ_NVM_KEY_SIZE          /* from embediq_config.h */
+#define NVM_VAL_SIZE      EMBEDIQ_NVM_VAL_SIZE          /* from embediq_config.h */
+#define NVM_MAX_KEYS      EMBEDIQ_NVM_MAX_KEYS          /* from embediq_config.h */
 
 /* ---------------------------------------------------------------------------
  * Internal types
