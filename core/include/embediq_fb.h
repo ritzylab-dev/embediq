@@ -136,8 +136,7 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t fb, uint32_t reason);
 /** Return the current lifecycle state of an FB. */
 EmbedIQ_FB_State_t embediq_fb_get_state(EmbedIQ_FB_Handle_t fb);
 
-/** Resolve an FB name to its endpoint index. Test harness use only. */
-uint8_t embediq_bus_resolve_name(const char *name);
+/* embediq_bus_resolve_name() is declared in embediq_bus.h */
 
 /**
  * Boot the framework: sort all registered FBs by phase (1→2→3→4), resolve

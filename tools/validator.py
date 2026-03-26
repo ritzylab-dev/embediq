@@ -30,12 +30,14 @@ from pathlib import Path
 # Keyed by literal value; value is the list of macro names that own it.
 # ---------------------------------------------------------------------------
 MAGIC_SIZES = {
-    64:  ["EMBEDIQ_MAX_ENDPOINTS", "EMBEDIQ_MSG_MAX_PAYLOAD"],
+    64:  ["EMBEDIQ_MAX_ENDPOINTS", "EMBEDIQ_MSG_MAX_PAYLOAD",
+          "EMBEDIQ_NVM_KEY_SIZE", "EMBEDIQ_NVM_VAL_SIZE", "EMBEDIQ_NVM_MAX_KEYS"],
     16:  ["EMBEDIQ_HIGH_QUEUE_DEPTH", "EMBEDIQ_LOW_QUEUE_DEPTH",
           "EMBEDIQ_MAX_SUBFNS_PER_FB"],
     32:  ["EMBEDIQ_NORMAL_QUEUE_DEPTH"],
     256: ["EMBEDIQ_OBS_RING_DEPTH"],
     8:   ["EMBEDIQ_MAX_BOOT_DEPS"],
+    512: ["EMBEDIQ_MAX_SUBSCRIPTIONS"],
 }
 
 # Regex: matches magic-number literals in array-sizing or allocation contexts.
@@ -45,9 +47,9 @@ MAGIC_SIZES = {
 #
 _MAGIC_RE = re.compile(
     r"(?:"
-    r"\[\s*(?P<arr>16|32|64|256|8)\s*\]"
+    r"\[\s*(?P<arr>16|32|64|256|512|8)\s*\]"
     r"|"
-    r"(?:malloc|calloc|realloc)\s*\(\s*(?P<alloc>16|32|64|256|8)\s*[,)]"
+    r"(?:malloc|calloc|realloc)\s*\(\s*(?P<alloc>16|32|64|256|512|8)\s*[,)]"
     r")"
 )
 

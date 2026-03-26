@@ -71,6 +71,7 @@ _ALLOWED = {
     'core/src':        {'core/include'},
     'osal/posix':      {'core/include', 'core/include/hal'},
     'osal/freertos':   {'core/include', 'core/include/hal'},
+    # RETIRED (PR #29): platform/ layer was removed; rules kept for reference only.
     'platform/posix':  {'core/include', 'core/include/hal', 'osal/posix'},
     'platform/esp32':  {'core/include', 'core/include/hal', 'osal/freertos'},
     'components':      {'core/include', 'core/include/hal'},

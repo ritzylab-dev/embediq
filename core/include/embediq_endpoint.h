@@ -12,6 +12,9 @@
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
  *
+ * I-01: Compiles standalone with zero OSAL or BSP dependencies.
+ * R-03: C11. Fixed-width types from <stdint.h> only.
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
