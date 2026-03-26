@@ -1,21 +1,21 @@
-# contrib_sim run — 2026-03-25 23:15 UTC
+# contrib_sim run — 2026-03-26 22:07 UTC
 
 **Branch:** dev
-**HEAD:** 3b3cbf50b3e1ec79da32b3c65eb563a3d4156a1a
+**HEAD:** 1d29a946a672af93d2f773df4f876009c33cc6a0
 **Clone URL:** https://github.com/ritzylab-dev/embediq.git
 
 ---
 
-Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/embediq'...
+Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.TWjMF5LSew/embediq'...
 -- The C compiler identification is AppleClang 16.0.0.16000026
 -- Detecting C compiler ABI info
 -- Detecting C compiler ABI info - done
 -- Check for working C compiler: /usr/bin/cc - skipped
 -- Detecting C compile features
 -- Detecting C compile features - done
--- Configuring done (0.6s)
+-- Configuring done (0.8s)
 -- Generating done (0.1s)
--- Build files have been written to: /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/embediq/build
+-- Build files have been written to: /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.TWjMF5LSew/embediq/build
 [  1%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_timer_posix.c.o
 [  3%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_flash_posix.c.o
 [  5%] Building C object hal/posix/CMakeFiles/embediq_hal_posix.dir/hal_wdg_posix.c.o
@@ -90,43 +90,43 @@ Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/em
 [ 98%] Building C object tests/integration/CMakeFiles/test_thermostat_capture.dir/__/__/examples/thermostat/fb_temp_controller.c.o
 [100%] Linking C executable test_thermostat_capture
 [100%] Built target test_thermostat_capture
-Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.WTS9Pl9xYy/embediq/build
+Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.TWjMF5LSew/embediq/build
       Start  1: cli_obs_tool
- 1/16 Test  #1: cli_obs_tool ........................   Passed    0.09 sec
+ 1/16 Test  #1: cli_obs_tool ........................   Passed    0.12 sec
       Start  2: unit_osal_posix
- 2/16 Test  #2: unit_osal_posix .....................   Passed    0.46 sec
+ 2/16 Test  #2: unit_osal_posix .....................   Passed    0.44 sec
       Start  3: unit_fb_engine
- 3/16 Test  #3: unit_fb_engine ......................   Passed    0.24 sec
+ 3/16 Test  #3: unit_fb_engine ......................   Passed    0.35 sec
       Start  4: unit_message_bus
- 4/16 Test  #4: unit_message_bus ....................   Passed    0.26 sec
+ 4/16 Test  #4: unit_message_bus ....................   Passed    0.36 sec
       Start  5: unit_fsm_engine
- 5/16 Test  #5: unit_fsm_engine .....................   Passed    0.23 sec
+ 5/16 Test  #5: unit_fsm_engine .....................   Passed    0.34 sec
       Start  6: unit_observatory
- 6/16 Test  #6: unit_observatory ....................   Passed    0.23 sec
+ 6/16 Test  #6: unit_observatory ....................   Passed    0.32 sec
       Start  7: unit_fb_watchdog
- 7/16 Test  #7: unit_fb_watchdog ....................   Passed    0.24 sec
+ 7/16 Test  #7: unit_fb_watchdog ....................   Passed    0.31 sec
       Start  8: unit_fb_timer
- 8/16 Test  #8: unit_fb_timer .......................   Passed    2.73 sec
+ 8/16 Test  #8: unit_fb_timer .......................   Passed    2.80 sec
       Start  9: unit_blocking_dispatch
- 9/16 Test  #9: unit_blocking_dispatch ..............   Passed    0.25 sec
+ 9/16 Test  #9: unit_blocking_dispatch ..............   Passed    0.23 sec
       Start 10: unit_dispatch_shutdown
-10/16 Test #10: unit_dispatch_shutdown ..............   Passed    0.25 sec
+10/16 Test #10: unit_dispatch_shutdown ..............   Passed    0.29 sec
       Start 11: unit_fb_nvm
-11/16 Test #11: unit_fb_nvm .........................   Passed    0.23 sec
+11/16 Test #11: unit_fb_nvm .........................   Passed    0.30 sec
       Start 12: unit_hal_contracts
-12/16 Test #12: unit_hal_contracts ..................   Passed    0.22 sec
+12/16 Test #12: unit_hal_contracts ..................   Passed    0.33 sec
       Start 13: unit_obs_capture
-13/16 Test #13: unit_obs_capture ....................   Passed    0.22 sec
+13/16 Test #13: unit_obs_capture ....................   Passed    0.30 sec
       Start 14: integration_thermostat_observable
-14/16 Test #14: integration_thermostat_observable ...   Passed    0.24 sec
+14/16 Test #14: integration_thermostat_observable ...   Passed    0.28 sec
       Start 15: integration_thermostat_full
-15/16 Test #15: integration_thermostat_full .........   Passed   15.46 sec
+15/16 Test #15: integration_thermostat_full .........   Passed   15.51 sec
       Start 16: integration_thermostat_capture
-16/16 Test #16: integration_thermostat_capture ......   Passed    0.33 sec
+16/16 Test #16: integration_thermostat_capture ......   Passed    0.39 sec
 
 100% tests passed, 0 tests failed out of 16
 
-Total Test time (real) =  21.70 sec
+Total Test time (real) =  22.68 sec
 
 ---
 
