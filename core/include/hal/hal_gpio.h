@@ -8,7 +8,7 @@
  */
 #pragma once
 #include <stdint.h>
-#include "hal_timer.h"
+#include "hal_defs.h"
 
 typedef enum {
     HAL_GPIO_DIR_IN  = 0,

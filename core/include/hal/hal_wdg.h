@@ -10,7 +10,7 @@
  */
 #pragma once
 #include <stdint.h>
-#include "hal_timer.h"
+#include "hal_defs.h"
 
 int  hal_wdg_init(uint32_t timeout_ms);
 /** hal_wdg_kick — reset the watchdog timer.  Must be called before timeout. */

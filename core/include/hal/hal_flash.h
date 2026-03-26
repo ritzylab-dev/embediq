@@ -12,7 +12,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "hal_timer.h"
+#include "hal_defs.h"
 
 int      hal_flash_read(uint32_t addr, void *buf, size_t len);
 int      hal_flash_write(uint32_t addr, const void *buf, size_t len);

@@ -11,13 +11,7 @@
  */
 #pragma once
 #include <stdint.h>
-
-/* Common HAL return codes — defined here, shared across all hal_*.h */
-#define HAL_OK            0
-#define HAL_ERR_INVALID  (-1)
-#define HAL_ERR_BUSY     (-2)
-#define HAL_ERR_TIMEOUT  (-3)
-#define HAL_ERR_IO       (-4)
+#include "hal_defs.h"
 
 typedef void (*hal_timer_isr_t)(void *ctx);
 
