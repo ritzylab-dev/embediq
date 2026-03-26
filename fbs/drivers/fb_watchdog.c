@@ -100,7 +100,7 @@ static void monitor_scan(void)
     uint32_t now_us = embediq_osal_time_us();
     bool     all_ok = true;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);   /* 0 = wait forever */
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);   /* block forever */
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (!g_slots[i].active) continue;
@@ -241,7 +241,7 @@ void embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms)
         g_mutex = embediq_osal_mutex_create();
     }
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
 
     /* Check if already registered. */
     for (uint8_t i = 0u; i < g_slot_count; i++) {
@@ -270,7 +270,7 @@ void embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb)
 {
     if (!fb || !g_mutex) return;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (g_slots[i].handle == fb && g_slots[i].active) {
@@ -287,7 +287,7 @@ void embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb)
 {
     if (!fb || !g_mutex) return;
 
-    embediq_osal_mutex_lock(g_mutex, 0u);
+    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (g_slots[i].handle == fb && g_slots[i].active) {

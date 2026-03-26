@@ -31,16 +31,10 @@
 #include <stdlib.h>     /* setenv */
 
 /* ---------------------------------------------------------------------------
- * Public NVM API
+ * Public NVM API (matches embediq_nvm.h contract)
  * ------------------------------------------------------------------------- */
 
-extern int  embediq_nvm_get(const char *key, uint8_t *buf, uint16_t buf_len,
-                            uint16_t *len_out, uint16_t *schema_out);
-extern int  embediq_nvm_set(const char *key, const uint8_t *val, uint16_t len,
-                            uint16_t schema_id);
-extern int  embediq_nvm_delete(const char *key);
-extern void embediq_nvm_reset_defaults(void);
-extern int  embediq_nvm_get_schema_version(const char *key, uint16_t *schema_out);
+#include "embediq_nvm.h"
 
 /* ---------------------------------------------------------------------------
  * Package-internal NVM test API
@@ -96,15 +90,14 @@ static void test_nvm_set_and_get_roundtrip(void)
     setup();
 
     const uint8_t expected[] = {0xDE, 0xAD, 0xBE};
-    int rc = embediq_nvm_set("firmware_ver", expected, 3u, 42u);
-    ASSERT(rc == 0, "set succeeds");
+    embediq_err_t rc = embediq_nvm_set("firmware_ver", expected, 3u);
+    ASSERT(rc == EMBEDIQ_OK, "set succeeds");
 
     uint8_t  buf[EMBEDIQ_MSG_MAX_PAYLOAD];
-    uint16_t len    = 0u;
-    uint16_t schema = 0u;
-    rc = embediq_nvm_get("firmware_ver", buf, sizeof(buf), &len, &schema);
+    uint32_t len = sizeof(buf);
+    rc = embediq_nvm_get("firmware_ver", buf, &len);
 
-    ASSERT(rc == 0 && len == 3u && schema == 42u &&
+    ASSERT(rc == EMBEDIQ_OK && len == 3u &&
            memcmp(buf, expected, 3u) == 0,
            "get returns the value stored by set");
 }
@@ -118,7 +111,7 @@ static void test_nvm_set_atomic_write_creates_tmp_then_renames(void)
     setup();
 
     const uint8_t val[] = {0x01, 0x02};
-    embediq_nvm_set("atomic_key", val, 2u, 1u);
+    embediq_nvm_set("atomic_key", val, 2u);
 
     /* .tmp file must NOT be present (it was renamed). */
     FILE *f_tmp = fopen(TEST_NVM_PATH ".tmp", "rb");
@@ -141,71 +134,69 @@ static void test_nvm_delete_removes_key(void)
     setup();
 
     const uint8_t val[] = {0x55};
-    embediq_nvm_set("to_delete", val, 1u, 0u);
+    embediq_nvm_set("to_delete", val, 1u);
 
-    int rc_del = embediq_nvm_delete("to_delete");
-    ASSERT(rc_del == 0, "delete returns 0 for existing key");
+    embediq_err_t rc_del = embediq_nvm_delete("to_delete");
+    ASSERT(rc_del == EMBEDIQ_OK, "delete returns OK for existing key");
 
-    uint8_t buf[EMBEDIQ_MSG_MAX_PAYLOAD];
-    int rc_get = embediq_nvm_get("to_delete", buf, sizeof(buf), NULL, NULL);
-    ASSERT(rc_get == -1,
-           "get returns -1 for a deleted key");
+    uint8_t  buf[EMBEDIQ_MSG_MAX_PAYLOAD];
+    uint32_t len = sizeof(buf);
+    embediq_err_t rc_get = embediq_nvm_get("to_delete", buf, &len);
+    ASSERT(rc_get == EMBEDIQ_ERR,
+           "get returns ERR for a deleted key");
 }
 
 /* test_nvm_reset_defaults_clears_all
  * After reset_defaults, all previously stored keys must be inaccessible.
  */
-static void test_nvm_reset_defaults_clears_all(void)
+static void test_nvm_reset_clears_all(void)
 {
     setup();
 
     const uint8_t v1[] = {0xAA};
     const uint8_t v2[] = {0xBB};
-    embediq_nvm_set("k1", v1, 1u, 0u);
-    embediq_nvm_set("k2", v2, 1u, 0u);
+    embediq_nvm_set("k1", v1, 1u);
+    embediq_nvm_set("k2", v2, 1u);
 
-    embediq_nvm_reset_defaults();
+    embediq_nvm_reset();
 
-    uint8_t buf[EMBEDIQ_MSG_MAX_PAYLOAD];
-    int rc1 = embediq_nvm_get("k1", buf, sizeof(buf), NULL, NULL);
-    int rc2 = embediq_nvm_get("k2", buf, sizeof(buf), NULL, NULL);
+    uint8_t  buf[EMBEDIQ_MSG_MAX_PAYLOAD];
+    uint32_t len = sizeof(buf);
+    embediq_err_t rc1 = embediq_nvm_get("k1", buf, &len);
+    len = sizeof(buf);
+    embediq_err_t rc2 = embediq_nvm_get("k2", buf, &len);
 
-    ASSERT(rc1 == -1 && rc2 == -1,
-           "reset_defaults wipes all keys from the store");
+    ASSERT(rc1 == EMBEDIQ_ERR && rc2 == EMBEDIQ_ERR,
+           "reset wipes all keys from the store");
 }
 
-/* test_nvm_schema_version_stored_with_key
- * The schema version stored with nvm_set must be recoverable via
- * nvm_get_schema_version without retrieving the full value.
+/* test_nvm_flush_succeeds
+ * Flush must return EMBEDIQ_OK after a set.
  */
-static void test_nvm_schema_version_stored_with_key(void)
+static void test_nvm_flush_succeeds(void)
 {
     setup();
 
     const uint8_t val[] = {0xFF};
-    embediq_nvm_set("schema_test", val, 1u, 99u);
+    embediq_nvm_set("flush_test", val, 1u);
 
-    uint16_t schema = 0u;
-    int rc = embediq_nvm_get_schema_version("schema_test", &schema);
-
-    ASSERT(rc == 0 && schema == 99u,
-           "schema version retrieved matches the value passed to nvm_set");
+    embediq_err_t rc = embediq_nvm_flush();
+    ASSERT(rc == EMBEDIQ_OK, "flush returns OK after a set");
 }
 
 /* test_nvm_get_missing_key_returns_error
- * Getting a key that was never stored must return -1.
+ * Getting a key that was never stored must return EMBEDIQ_ERR.
  */
 static void test_nvm_get_missing_key_returns_error(void)
 {
     setup();
 
     uint8_t  buf[EMBEDIQ_MSG_MAX_PAYLOAD];
-    uint16_t len    = 0u;
-    uint16_t schema = 0u;
-    int rc = embediq_nvm_get("does_not_exist", buf, sizeof(buf), &len, &schema);
+    uint32_t len = sizeof(buf);
+    embediq_err_t rc = embediq_nvm_get("does_not_exist", buf, &len);
 
-    ASSERT(rc == -1,
-           "get returns -1 for a key that has never been stored");
+    ASSERT(rc == EMBEDIQ_ERR,
+           "get returns ERR for a key that has never been stored");
 }
 
 /* ---------------------------------------------------------------------------
@@ -298,8 +289,8 @@ int main(void)
     test_nvm_set_and_get_roundtrip();
     test_nvm_set_atomic_write_creates_tmp_then_renames();
     test_nvm_delete_removes_key();
-    test_nvm_reset_defaults_clears_all();
-    test_nvm_schema_version_stored_with_key();
+    test_nvm_reset_clears_all();
+    test_nvm_flush_succeeds();
     test_nvm_get_missing_key_returns_error();
 
     /* HAL flash tests */
