@@ -2,7 +2,9 @@
  * hal/posix/hal_obs_stream_posix.c — POSIX Observatory binary stream
  *
  * Implements hal_obs_stream.h using standard C file I/O.
- * Zero EmbedIQ framework dependencies.
+ * Registers a stream ops table with the Observatory core via
+ * embediq_obs_set_stream_ops() — this is the HAL → Core direction
+ * (allowed by layer rules).
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -11,6 +13,7 @@
  */
 
 #include "hal_obs_stream.h"
+#include "embediq_obs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -49,4 +52,20 @@ int hal_obs_stream_close(void)
     int ret = fclose(g_stream);
     g_stream = NULL;
     return (ret == 0) ? HAL_OK : HAL_ERR_IO;
+}
+
+/* ---------------------------------------------------------------------------
+ * Observatory stream ops registration
+ * ------------------------------------------------------------------------- */
+
+static const embediq_obs_stream_ops_t g_posix_stream_ops = {
+    .open  = hal_obs_stream_open,
+    .write = hal_obs_stream_write,
+    .flush = hal_obs_stream_flush,
+    .close = hal_obs_stream_close,
+};
+
+void embediq_obs_stream_posix_register(void)
+{
+    embediq_obs_set_stream_ops(&g_posix_stream_ops);
 }

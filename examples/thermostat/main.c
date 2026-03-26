@@ -46,6 +46,9 @@ extern EmbedIQ_FB_Handle_t fb_watchdog_register(void);
 extern EmbedIQ_FB_Handle_t fb_temp_sensor_register(void);
 extern EmbedIQ_FB_Handle_t fb_temp_controller_register(void);
 
+/* POSIX stream ops registration for Observatory file capture */
+extern void embediq_obs_stream_posix_register(void);
+
 /* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
@@ -60,6 +63,9 @@ int main(int argc, char *argv[])
             break;
         }
     }
+
+    /* Register POSIX stream ops for Observatory file capture. */
+    embediq_obs_stream_posix_register();
 
     printf("EmbedIQ Smart Thermostat Demo — Phase 1\n");
     printf("========================================\n\n");
