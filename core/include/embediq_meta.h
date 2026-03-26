@@ -62,14 +62,14 @@ typedef struct {
     char     description[EMBEDIQ_META_DESC_MAX];
 
     /** Message IDs this FB publishes (0-terminated or filled to EMBEDIQ_META_MAX_MSGS). */
-    uint32_t msgs_published[EMBEDIQ_META_MAX_MSGS];
+    uint16_t msgs_published[EMBEDIQ_META_MAX_MSGS];
 
     /** Message IDs this FB subscribes to (0-terminated or filled to EMBEDIQ_META_MAX_MSGS). */
-    uint32_t msgs_subscribed[EMBEDIQ_META_MAX_MSGS];
+    uint16_t msgs_subscribed[EMBEDIQ_META_MAX_MSGS];
 
     /** Boot phase declared by this FB (EmbedIQ_BootPhase_t cast to uint8_t). */
     uint8_t  boot_phase;
-} embediq_fb_meta_t;
+} EmbedIQ_FB_Meta_t;
 
 /* ---------------------------------------------------------------------------
  * Registration and lookup
@@ -83,15 +83,15 @@ typedef struct {
  *              valid for the process lifetime (do not pass stack-allocated data).
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if meta is NULL or name is empty.
  */
-embediq_err_t embediq_meta_register(const embediq_fb_meta_t *meta);
+embediq_err_t embediq_meta_register(const EmbedIQ_FB_Meta_t *meta);
 
 /**
  * Look up a registered FB's metadata by name.
  *
- * @param fb_name  NUL-terminated FB name (must match embediq_fb_meta_t.name).
+ * @param fb_name  NUL-terminated FB name (must match EmbedIQ_FB_Meta_t.name).
  * @return Pointer to the registered metadata, or NULL if not found.
  */
-const embediq_fb_meta_t *embediq_meta_get(const char *fb_name);
+const EmbedIQ_FB_Meta_t *embediq_meta_get(const char *fb_name);
 
 #ifdef __cplusplus
 }

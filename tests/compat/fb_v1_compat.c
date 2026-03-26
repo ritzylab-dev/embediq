@@ -1,8 +1,8 @@
 /*
  * tests/compat/fb_v1_compat.c — v1 Core API compatibility shim (Invariant I-14)
  *
- * Exercises every type, macro, enum value, and function declaration in the
- * seven Core headers. Compiled on every CI run to verify the v1 API surface
+ * Exercises every type, macro, enum value, and function declaration in all
+ * 18 Core contract headers. Compiled on every CI run to verify the v1 API surface
  * has not broken. MUST NOT be included in any production binary.
  *
  * CI commands:
@@ -26,6 +26,16 @@
 #include "embediq_bus.h"
 #include "embediq_obs.h"
 #include "embediq_platform_msgs.h"
+#include "embediq_config.h"
+#include "embediq_nvm.h"
+#include "embediq_timer.h"
+#include "embediq_wdg.h"
+#include "embediq_time.h"
+#include "embediq_endpoint.h"
+#include "embediq_meta.h"
+#include "embediq_ota.h"
+#include "embediq_mqtt.h"
+#include "embediq_bridge.h"
 
 /* Generated catalog — present only when -I generated/ is on the compile line. */
 #if __has_include("embediq_msg_catalog.h")
@@ -205,6 +215,47 @@ int main(void)
     EmbedIQ_Mutex_t  *mutex = NULL;
     EmbedIQ_Timer_t  *timer = NULL;
     (void)task; (void)queue; (void)mutex; (void)timer;
+
+    /* --- embediq_config.h: sizing constants --- */
+    (void)EMBEDIQ_MAX_ENDPOINTS;
+    (void)EMBEDIQ_MSG_MAX_PAYLOAD;
+    (void)EMBEDIQ_OBS_RING_DEPTH;
+
+    /* --- embediq_nvm.h: NVM API types --- */
+    embediq_err_t (*nvm_set_fn)(const char *, const void *, uint32_t) = NULL;
+    (void)nvm_set_fn;
+
+    /* --- embediq_timer.h: tick payload struct --- */
+    embediq_timer_tick_t tick = { .tick_count = 0u, .timestamp_us = 0u };
+    (void)tick;
+
+    /* --- embediq_wdg.h: watchdog types --- */
+    embediq_fb_id_t wdg_id = 0u;
+    (void)wdg_id;
+
+    /* --- embediq_time.h: time API types --- */
+    embediq_err_t (*set_epoch_fn)(uint64_t) = NULL;
+    (void)set_epoch_fn;
+
+    /* --- embediq_endpoint.h: endpoint router types --- */
+    embediq_ep_id_t ep = EMBEDIQ_EP_INVALID;
+    (void)ep;
+
+    /* --- embediq_meta.h: FB metadata types --- */
+    const EmbedIQ_FB_Meta_t *meta = NULL;
+    (void)meta;
+
+    /* --- embediq_ota.h: OTA types --- */
+    embediq_ota_state_t ota_state = EMBEDIQ_OTA_STATE_IDLE;
+    (void)ota_state;
+
+    /* --- embediq_mqtt.h: MQTT types --- */
+    embediq_mqtt_state_t mqtt_state = EMBEDIQ_MQTT_STATE_DISCONNECTED;
+    (void)mqtt_state;
+
+    /* --- embediq_bridge.h: bridge types --- */
+    const embediq_bridge_ops_t *bridge_ops = NULL;
+    (void)bridge_ops;
 
     return 0;
 }
