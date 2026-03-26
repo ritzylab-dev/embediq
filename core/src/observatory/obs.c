@@ -100,6 +100,10 @@ static bool                  g_session_valid = false;
 /* Power-of-2 mask: EMBEDIQ_OBS_RING_DEPTH must be a power of 2 (= 256). */
 #define RING_MASK  ((uint32_t)(EMBEDIQ_OBS_RING_DEPTH) - 1u)
 
+/* Local implementation constants — not in embediq_config.h (host-only details). */
+#define OBS_EP_NAME_BUF    12    /* "ep_NNN" + margin */
+#define OBS_LINE_BUF_SIZE  160   /* max formatted Observatory output line */
+
 /* ---------------------------------------------------------------------------
  * Ring helpers
  * ------------------------------------------------------------------------- */
@@ -190,7 +194,7 @@ static const char *fb_name(uint8_t id)
     if (id == 0xFFu) return "N/A";
     const char *n = embediq_bus_resolve_id(id);
     if (n) return n;
-    static char fallback[EMBEDIQ_MAX_SUBFNS_PER_FB];
+    static char fallback[OBS_EP_NAME_BUF];
     snprintf(fallback, sizeof(fallback), "ep_%u", (unsigned)id);
     return fallback;
 }
@@ -319,7 +323,7 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
         g_total++;
 
         if (g_transport == EMBEDIQ_OBS_TRANSPORT_STDOUT) {
-            char line[160];
+            char line[OBS_LINE_BUF_SIZE];
             format_event_internal(&ovf, line, sizeof(line));
             printf("%s\n", line);
         }
@@ -340,7 +344,7 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
     g_total++;
 
     if (g_transport == EMBEDIQ_OBS_TRANSPORT_STDOUT) {
-        char line[160];
+        char line[OBS_LINE_BUF_SIZE];
         format_event_internal(&evt, line, sizeof(line));
         printf("%s\n", line);
     }

@@ -82,6 +82,10 @@ extern "C" {
 
 /* ---------------------------------------------------------------------------
  * Family enum
+ *
+ * NOTE: Enum and callback typedefs use lowercase_t naming intentionally —
+ * this is the established convention for non-struct types in EmbedIQ Core.
+ * Struct types use EmbedIQ_PascalCase_t. Do not rename.
  * ------------------------------------------------------------------------- */
 
 typedef enum {
@@ -267,7 +271,7 @@ _Static_assert(sizeof(EmbedIQ_Event_t) == 14,
 typedef enum {
     EMBEDIQ_OBS_TRANSPORT_NULL   = 0, /**< Discard all events (production default) */
     EMBEDIQ_OBS_TRANSPORT_STDOUT = 1, /**< Print to stdout (host/debug) */
-    EMBEDIQ_OBS_TRANSPORT_TCP    = 2, /**< Stream to EmbedIQ Studio via TCP */
+    EMBEDIQ_OBS_TRANSPORT_TCP    = 2, /**< Stream to remote viewer via TCP */
     EMBEDIQ_OBS_TRANSPORT_FILE   = 3, /**< Write .iqtrace binary capture */
 } EmbedIQ_Obs_Transport_t;
 

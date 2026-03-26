@@ -105,6 +105,8 @@ static void monitor_scan(void)
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (!g_slots[i].active) continue;
 
+        /* uint32_t unsigned sub wraps correctly for intervals < ~35 min
+         * (2^31 µs); max watchdog timeout is well under this. */
         uint32_t elapsed_us = now_us - g_slots[i].last_checkin_us;
         uint32_t timeout_us = g_slots[i].timeout_ms * 1000u;
 

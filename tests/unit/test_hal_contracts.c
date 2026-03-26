@@ -127,6 +127,15 @@ static void test_hal_i2c_cfg_size_reasonable(void)
     ASSERT(sizeof(hal_i2c_cfg_t) <= 8u, "hal_i2c_cfg_t must be <= 8 bytes");
 }
 
+/* ── hal_obs_stream (shared return codes via hal_defs.h) ──────────── */
+
+static void test_hal_obs_stream_uses_shared_return_codes(void)
+{
+    /* hal_obs_stream.h includes hal_defs.h — verify shared codes are accessible */
+    ASSERT(HAL_OK     == 0,  "HAL_OK accessible via hal_obs_stream.h");
+    ASSERT(HAL_ERR_IO <  0,  "HAL_ERR_IO accessible via hal_obs_stream.h");
+}
+
 /* ── Entry point ──────────────────────────────────────────────────── */
 
 int main(void)
@@ -142,6 +151,7 @@ int main(void)
     test_hal_uart_cfg_size_reasonable();
     test_hal_spi_cfg_size_reasonable();
     test_hal_i2c_cfg_size_reasonable();
+    test_hal_obs_stream_uses_shared_return_codes();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);
