@@ -1,7 +1,7 @@
 // messages/thermostat.iq — EmbedIQ Thermostat application messages
 //
 // Schema version 1. Namespace: com.embediq.thermostat
-// Message IDs in the thermostat namespace: 0x0420 – 0x042F.
+// Message IDs in the thermostat example range: 0x1400 – 0x140F (community namespace).
 //
 // Rules:
 //   - Message IDs are never reused. A retired ID is tombstoned here.
@@ -20,6 +20,6 @@ namespace "com.embediq.thermostat"
 // Temperature reading published by fb_temp_sensor every 1 second.
 // Consumed by fb_temp_controller to drive the thermal FSM.
 // Triggered by MSG_TIMER_1SEC.
-message MSG_TEMP_READING id=0x0420 {
+message MSG_TEMP_READING id=0x1400 {
     temperature_c : f32
 }

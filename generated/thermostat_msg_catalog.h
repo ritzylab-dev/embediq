@@ -26,8 +26,8 @@
 extern "C" {
 #endif
 
-/* --- MSG_TEMP_READING (0x0420) --- */
-#define MSG_TEMP_READING  0x0420u
+/* --- MSG_TEMP_READING (0x1400) --- */
+#define MSG_TEMP_READING  0x1400u
 
 typedef struct {
     float  temperature_c;
