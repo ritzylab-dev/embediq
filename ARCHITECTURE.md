@@ -348,6 +348,7 @@ Opaque handle types only. No RTOS headers in Core.
 EmbedIQ_Task_t*  embediq_osal_task_create(const char* name, void(*fn)(void*), void* arg,
                                           uint8_t priority, uint16_t stack_bytes);
 EmbedIQ_Queue_t* embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
+void             embediq_osal_queue_destroy(EmbedIQ_Queue_t* q);
 bool             embediq_osal_queue_send(EmbedIQ_Queue_t* q, const void* item, uint32_t timeout_ms);
 bool             embediq_osal_queue_recv(EmbedIQ_Queue_t* q, void* item, uint32_t timeout_ms);
 EmbedIQ_Signal_t* embediq_osal_signal_create(void);

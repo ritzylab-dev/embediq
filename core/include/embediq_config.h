@@ -82,6 +82,16 @@ extern "C" {
 #define EMBEDIQ_MAX_BOOT_DEPS           8
 
 /* ---------------------------------------------------------------------------
+ * Dispatch thread defaults
+ * ------------------------------------------------------------------------- */
+
+/** Default stack size in bytes for per-FB dispatch threads. */
+#define EMBEDIQ_DISPATCH_STACK_SIZE       4096u
+
+/** Default OS thread priority for dispatch threads when FB config.priority is 0. */
+#define EMBEDIQ_DISPATCH_DEFAULT_PRIORITY 2u
+
+/* ---------------------------------------------------------------------------
  * Observatory verbosity level
  *
  *  Runtime verbosity gate — see EMBEDIQ_TRACE_LEVEL for the compile-time gate.

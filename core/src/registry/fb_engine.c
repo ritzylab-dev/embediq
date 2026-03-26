@@ -469,11 +469,15 @@ void embediq_engine_dispatch_boot(void)
          * Semaphore was already created in embediq_engine_boot(). */
         if (fb->config.subscription_count == 0u) continue;
 
+        uint8_t prio = fb->config.priority;
+        if (prio == 0u) prio = EMBEDIQ_DISPATCH_DEFAULT_PRIORITY;
+
         g_dispatch_args[i].task =
             embediq_osal_task_create(fb->config.name,
                                      fb_dispatch_loop,
                                      &g_dispatch_args[i],
-                                     2u, 4096u);
+                                     prio,
+                                     EMBEDIQ_DISPATCH_STACK_SIZE);
     }
 }
 
