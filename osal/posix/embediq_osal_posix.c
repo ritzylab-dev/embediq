@@ -16,7 +16,7 @@
  *
  * malloc / free policy (OSAL exception to R-02):
  *   malloc/free are used ONLY inside this file to allocate opaque handles.
- *   All other layers (Shell 1 and above) must never call malloc directly.
+ *   All other layers (Layer 1 and above) must never call malloc directly.
  *
  * Struct definitions are private to this file.  Core code sees only the
  * forward-declared opaque types from embediq_osal.h (R-sub-10).

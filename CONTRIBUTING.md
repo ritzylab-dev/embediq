@@ -33,8 +33,8 @@ Welcome. Contributions are what make EmbedIQ better for everyone.
 
 - Code that violates any binding invariant (I-01 through I-12) — CI will reject it
 - Code that requires hardware to test — every contribution must pass host tests
-- GPL or LGPL licensed code — Apache 2.0 only in Core/Shell 1/Shell 2
-- Dynamic allocation (`malloc`/`free`) in Shell 1 or Core
+- GPL or LGPL licensed code — Apache 2.0 only in Core/Layer 1/Layer 2
+- Dynamic allocation (`malloc`/`free`) in Layer 1 or Core
 - Cross-FB function calls — messages only at FB boundaries
 - Changes to Core header contracts (`core/include/*.h`) without an architecture decision record
 - Direct edits to `generated/*.h` files — edit the `.iq` schema in `messages/` and regenerate
@@ -123,7 +123,7 @@ EmbedIQ has a clear public/private boundary. Contributions must respect it.
 
 ## Style guide
 
-- **Language:** C11 for Core and Shell 1. C++ opt-in wrapper only in Shell 3+.
+- **Language:** C11 for Core and Layer 1. C++ opt-in wrapper only in Layer 3+.
 - **Naming:** `embediq_` prefix for all public API. `fb_` prefix for Functional Block files.
 - **Headers:** One interface header per module. One or more implementation files.
 - **Comments:** Document the *why*, not the *what*. Code explains what. Comments explain why a decision was made.

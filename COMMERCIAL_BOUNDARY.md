@@ -71,7 +71,7 @@ The CLA is the standard Apache Individual CLA. It is not exotic or unusual.
 Yes. Apache 2.0 permits this. You can fork, modify, and redistribute — including in commercial products. You must include the Apache 2.0 license notice.
 
 **Can I use EmbedIQ in a safety-certified product (IEC 61508, ISO 26262)?**
-The framework itself does not carry a safety certification. Apache 2.0 permits use in safety-critical products. Certification of your product is your responsibility. EmbedIQ's architecture (deterministic init, no dynamic allocation in Shell 1, observable state) is designed to support — not prevent — safety certification work.
+The framework itself does not carry a safety certification. Apache 2.0 permits use in safety-critical products. Certification of your product is your responsibility. EmbedIQ's architecture (deterministic init, no dynamic allocation in Layer 1, observable state) is designed to support — not prevent — safety certification work.
 
 **Will the core ever change to a non-Apache license?**
 No. This is a permanent, irrevocable commitment made in writing before the first external contributor joined the project.
