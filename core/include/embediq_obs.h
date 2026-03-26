@@ -272,6 +272,32 @@ typedef enum {
 } EmbedIQ_Obs_Transport_t;
 
 /* ---------------------------------------------------------------------------
+ * Stream ops table — pluggable binary transport for .iqtrace file capture
+ *
+ * The Observatory core calls these function pointers for file I/O.
+ * HAL implementations register an ops table at boot via
+ * embediq_obs_set_stream_ops(). If no ops are registered, file capture
+ * is silently disabled (capture_begin returns -1).
+ *
+ * This abstraction removes the Layer 1 Core → HAL dependency: obs.c
+ * never includes any hal/ header.
+ * ------------------------------------------------------------------------- */
+
+typedef struct {
+    int  (*open)(const char *path);          /**< Open/create a binary stream */
+    int  (*write)(const void *data, uint16_t len); /**< Append bytes */
+    int  (*flush)(void);                     /**< Flush buffered bytes */
+    int  (*close)(void);                     /**< Close the stream */
+} embediq_obs_stream_ops_t;
+
+/**
+ * Register the binary stream transport implementation.
+ * Called once at platform init (before any capture_begin call).
+ * The Observatory stores the pointer — ops must remain valid for process lifetime.
+ */
+void embediq_obs_set_stream_ops(const embediq_obs_stream_ops_t *ops);
+
+/* ---------------------------------------------------------------------------
  * Public API — implemented in core/src/observatory/
  * ------------------------------------------------------------------------- */
 

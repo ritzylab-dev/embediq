@@ -72,8 +72,10 @@
 #  include <stdio.h>
 #  include <stdlib.h>
 #  include <time.h>
-#  include "hal/hal_obs_stream.h"
 #endif
+
+/* Stream ops — registered by platform HAL at boot. NULL = no file transport. */
+static const embediq_obs_stream_ops_t *s_stream_ops = NULL;
 
 /* ---------------------------------------------------------------------------
  * Host-only ring buffer state
@@ -254,14 +256,15 @@ static void format_event_internal(const EmbedIQ_Event_t *evt,
 
 static int write_tlv(uint16_t type, uint16_t length, const void *payload)
 {
+    if (!s_stream_ops || !s_stream_ops->write) return -1;
     uint8_t hdr[4];
     hdr[0] = (uint8_t)(type   & 0xFFu);
     hdr[1] = (uint8_t)(type   >> 8u);
     hdr[2] = (uint8_t)(length & 0xFFu);
     hdr[3] = (uint8_t)(length >> 8u);
-    if (hal_obs_stream_write(hdr, 4u) != HAL_OK) return -1;
+    if (s_stream_ops->write(hdr, 4u) != 0) return -1;
     if (length > 0u && payload != NULL) {
-        if (hal_obs_stream_write(payload, length) != HAL_OK)
+        if (s_stream_ops->write(payload, length) != 0)
             return -1;
     }
     return 0;
@@ -402,19 +405,26 @@ const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void)
  * Public: embediq_obs_capture_begin() / embediq_obs_capture_end()
  * ------------------------------------------------------------------------- */
 
+void embediq_obs_set_stream_ops(const embediq_obs_stream_ops_t *ops)
+{
+    s_stream_ops = ops;
+}
+
 int embediq_obs_capture_begin(const char *path)
 {
 #ifndef EMBEDIQ_PLATFORM_HOST
     (void)path;
     return -1;
 #else
+    if (!s_stream_ops || !s_stream_ops->open) return -1;
+
     const char *p = path ? path : getenv("EMBEDIQ_OBS_PATH");
     if (!p) p = "/tmp/embediq_capture.iqtrace";
 
     const EmbedIQ_Obs_Session_t *s = embediq_obs_session_get();
     if (!s) return -1;
 
-    if (hal_obs_stream_open(p) != HAL_OK) return -1;
+    if (s_stream_ops->open(p) != 0) return -1;
 
     /* 8-byte file header: IQTR + version 1 LE + reserved */
     static const uint8_t hdr[] = {
@@ -422,18 +432,18 @@ int embediq_obs_capture_begin(const char *path)
         0x01u, 0x00u,
         0x00u, 0x00u
     };
-    if (hal_obs_stream_write(hdr, (uint16_t)sizeof(hdr)) != HAL_OK) {
-        hal_obs_stream_close();
+    if (s_stream_ops->write(hdr, (uint16_t)sizeof(hdr)) != 0) {
+        s_stream_ops->close();
         return -1;
     }
 
     /* SESSION TLV */
     if (write_tlv(0x0001u, (uint16_t)sizeof(*s), s) != 0) {
-        hal_obs_stream_close();
+        s_stream_ops->close();
         return -1;
     }
 
-    hal_obs_stream_flush();
+    if (s_stream_ops->flush) s_stream_ops->flush();
     g_transport = EMBEDIQ_OBS_TRANSPORT_FILE;
     return 0;
 #endif
@@ -445,8 +455,10 @@ int embediq_obs_capture_end(void)
     return -1;
 #else
     int ret = write_tlv(0x0004u, 0u, NULL);  /* STREAM_END */
-    hal_obs_stream_flush();
-    hal_obs_stream_close();
+    if (s_stream_ops) {
+        if (s_stream_ops->flush) s_stream_ops->flush();
+        if (s_stream_ops->close) s_stream_ops->close();
+    }
     g_transport = EMBEDIQ_OBS_TRANSPORT_NULL;
     return ret;
 #endif
@@ -465,7 +477,7 @@ int embediq_obs_capture_end(void)
  */
 void obs__reset(void)
 {
-    hal_obs_stream_close();   /* safe even if not open */
+    if (s_stream_ops && s_stream_ops->close) s_stream_ops->close();
     memset(g_ring, 0, sizeof(g_ring));
     g_ring_head  = 0u;
     g_ring_count = 0u;

@@ -29,6 +29,9 @@
 extern void     fb_engine__reset(void);
 extern void     obs__set_level(uint8_t level);
 
+/* POSIX stream ops registration */
+extern void     embediq_obs_stream_posix_register(void);
+
 /* Platform FB APIs */
 extern void *fb_timer_register(void);
 extern void *fb_nvm_register(void);
@@ -65,6 +68,7 @@ int main(void)
     int failed = 0;
 
     /* ---- Setup ---- */
+    embediq_obs_stream_posix_register();
     fb_engine__reset();
     obs__set_level(2u);
     setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
