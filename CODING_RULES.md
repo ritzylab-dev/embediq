@@ -18,7 +18,7 @@ A PR that breaks any invariant will not merge. No exceptions.
 | I-04 | `messages.iq` is the only payload schema source                                                               | Grep: no hand-written payload structs                  |
 | I-05 | Zero `test/*` symbols in production binary                                                                    | `nm`/`readelf` on release binary                       |
 | I-06 | `EMBEDIQ_DEBUG_JSON` never defined in release builds                                                          | CMake release config check                             |
-| I-07 | No `malloc`/`free` in Shell 1                                                                                 | Binary analysis: no malloc in Shell 1 objects          |
+| I-07 | No `malloc`/`free` in Layer 1                                                                                 | Binary analysis: no malloc in Layer 1 objects          |
 | I-08 | All sizing parameters in `embediq_config.h`                                                                   | `validator.py` fails build if hardcoded                |
 | I-09 | Native bus compiles without bridge code when flag undefined                                                   | CI build without bridge flag                           |
 | I-10 | Sub-fn registrations only inside FB `init_fn`                                                                 | Code review + static analysis                          |
@@ -39,9 +39,9 @@ Any PR violating these will be rejected.
 | ID   | Rule                                                                                                                                      |             |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | R-01 | No cross-FB function calls. Cross-FB communication = messages only.                                                                       |             |
-| R-02 | No dynamic allocation (`malloc`/`free`/`new`/`delete`) in Shell 1 or Core.                                                                |             |
-| R-03 | C11 for Core and Shell 1. C++ opt-in wrapper only in Shell 3 and above.                                                                   |             |
-| R-04 | Apache 2.0 only in Core/Shell 1/Shell 2. No GPL or LGPL anywhere.                                                                         |             |
+| R-02 | No dynamic allocation (`malloc`/`free`/`new`/`delete`) in Layer 1 or Core.                                                                |             |
+| R-03 | C11 for Core and Layer 1. C++ opt-in wrapper only in Layer 3 and above.                                                                   |             |
+| R-04 | Apache 2.0 only in Core/Layer 1/Layer 2. No GPL or LGPL anywhere.                                                                         |             |
 | R-05 | Every layer: one interface header, one or more impl directories.                                                                          |             |
 | R-06 | Every module: `EmbedIQ_Module_Meta_t` descriptor.                                                                                         |             |
 | R-07 | Test infrastructure compiles to zero bytes in production.                                                                                 |             |
@@ -122,7 +122,7 @@ if (event_b.timestamp_us > event_a.timestamp_us) { ... }
 // ✓ CORRECT — stack allocation
 EmbedIQ_Msg_t msg = { .msg_id = MSG_TEMP_ALERT };
 
-// ✗ WRONG — no malloc in Shell 1 or Core
+// ✗ WRONG — no malloc in Layer 1 or Core
 EmbedIQ_Msg_t *msg = malloc(sizeof(EmbedIQ_Msg_t));
 ```
 
@@ -292,7 +292,7 @@ extern "C" {
 // ✗ FORBIDDEN: Cross-FB direct call
 other_fb_do_something(data);
 
-// ✗ FORBIDDEN: malloc/free anywhere in Shell 1 or Core
+// ✗ FORBIDDEN: malloc/free anywhere in Layer 1 or Core
 void *buf = malloc(size);
 
 // ✗ FORBIDDEN: Compound literal for subscription array
@@ -334,7 +334,7 @@ as a comment on their own PR.
 [ ] tools/check_invariants.sh passes (run locally before push)
 [ ] cmake --build . --config Release succeeds on host
 [ ] All unit tests pass: ctest -C Release
-[ ] Thermostat scenario passes (if Shell 1 or Shell 2 change)
+[ ] Thermostat scenario passes (if Layer 1 or Layer 2 change)
 [ ] No forbidden patterns present (Section 5 above)
 [ ] All new subscription arrays use EMBEDIQ_SUBS() macro
 [ ] No new platform headers added to Core headers
@@ -375,7 +375,7 @@ Open an issue tagged `arch-review` and wait for sign-off.
 - Any change to a Core header (post v0.1.0 freeze)
 - Any change to EmbedIQ_Event_t layout (Observatory binary format)
 - Any change to EmbedIQ_Msg_t layout (bridge protocol)
-- Any new layer dependency direction (e.g. Shell 1 depending on Shell 2)
+- Any new layer dependency direction (e.g. Layer 1 depending on Layer 2)
 - Any new message ID in the framework-reserved range (0x0001–0x00FF)
 - Any new build system dependency
 - Any change to the messages.iq schema format
