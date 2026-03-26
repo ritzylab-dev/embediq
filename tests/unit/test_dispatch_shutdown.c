@@ -72,9 +72,9 @@ static EmbedIQ_Msg_t make_msg(uint16_t id, uint8_t prio)
     return m;
 }
 
-/* Message IDs — official EmbedIQ range, distinct from other test files. */
-#define MSG_SHUTDOWN_A  0x0420u
-#define MSG_SHUTDOWN_B  0x0421u
+/* Message IDs — community range, distinct from other test files. */
+#define MSG_SHUTDOWN_A  0x1410u
+#define MSG_SHUTDOWN_B  0x1411u
 
 /* ---------------------------------------------------------------------------
  * Shared counter sub-fn — incremented each time a message is dispatched.
