@@ -9,7 +9,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "hal_timer.h"   /* for HAL_OK / HAL_ERR_* */
+#include "hal_defs.h"
 
 /* Parity constants */
 #define HAL_UART_PARITY_NONE  0

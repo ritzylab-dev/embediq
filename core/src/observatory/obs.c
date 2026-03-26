@@ -259,9 +259,9 @@ static int write_tlv(uint16_t type, uint16_t length, const void *payload)
     hdr[1] = (uint8_t)(type   >> 8u);
     hdr[2] = (uint8_t)(length & 0xFFu);
     hdr[3] = (uint8_t)(length >> 8u);
-    if (hal_obs_stream_write(hdr, 4u) != HAL_OBS_STREAM_OK) return -1;
+    if (hal_obs_stream_write(hdr, 4u) != HAL_OK) return -1;
     if (length > 0u && payload != NULL) {
-        if (hal_obs_stream_write(payload, length) != HAL_OBS_STREAM_OK)
+        if (hal_obs_stream_write(payload, length) != HAL_OK)
             return -1;
     }
     return 0;
@@ -414,7 +414,7 @@ int embediq_obs_capture_begin(const char *path)
     const EmbedIQ_Obs_Session_t *s = embediq_obs_session_get();
     if (!s) return -1;
 
-    if (hal_obs_stream_open(p) != HAL_OBS_STREAM_OK) return -1;
+    if (hal_obs_stream_open(p) != HAL_OK) return -1;
 
     /* 8-byte file header: IQTR + version 1 LE + reserved */
     static const uint8_t hdr[] = {
@@ -422,7 +422,7 @@ int embediq_obs_capture_begin(const char *path)
         0x01u, 0x00u,
         0x00u, 0x00u
     };
-    if (hal_obs_stream_write(hdr, (uint16_t)sizeof(hdr)) != HAL_OBS_STREAM_OK) {
+    if (hal_obs_stream_write(hdr, (uint16_t)sizeof(hdr)) != HAL_OK) {
         hal_obs_stream_close();
         return -1;
     }

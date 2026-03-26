@@ -9,7 +9,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "hal_timer.h"
+#include "hal_defs.h"
 
 typedef struct {
     uint32_t speed_hz;
