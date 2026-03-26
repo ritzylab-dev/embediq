@@ -280,6 +280,16 @@ uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q)
     return n;
 }
 
+void embediq_osal_queue_destroy(EmbedIQ_Queue_t *q)
+{
+    if (!q) return;
+    pthread_mutex_destroy(&q->mutex);
+    pthread_cond_destroy(&q->not_empty);
+    pthread_cond_destroy(&q->not_full);
+    free(q->buf);
+    free(q);
+}
+
 /* ---------------------------------------------------------------------------
  * Signal API — counting semaphore via mutex + condvar
  *
