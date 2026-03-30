@@ -17,3 +17,11 @@ git tag -a v0.1.2 -m "v0.1.2 — Phase 1 review fixes (PRs #55–#63)"
 git push origin v0.1.2
 ```
 Then re-run Gate 15 to confirm match.
+
+## v0.1.2 — CONFIRMED — 2026-03-26 UTC
+
+- Tag SHA:       398a52d0cebd4668a424ec080d5fb88bd446a697
+- main HEAD SHA: 398a52d0cebd4668a424ec080d5fb88bd446a697
+- Match:         ✅ CONFIRMED — tag corrected by human after Gate 15 mismatch finding
+- dev post-release state: PRs #64 #66 #67 ahead of main (process/docs only — no code)
+- Verified by:   Gate 15 agent pass — second run
