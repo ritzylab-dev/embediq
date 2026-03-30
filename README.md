@@ -1,14 +1,14 @@
 # EmbedIQ
 
-**The open-source application framework above the RTOS.**
+**The AI-first application framework for embedded and edge.**
 
-Apache 2.0 · RTOS-agnostic · Host simulation first · Zero-instrumentation observability · Open .iqtrace format
+Apache 2.0 · AI-first · RTOS-agnostic · Linux gateway · Host simulation first · Zero-instrumentation observability · Open .iqtrace format
 
 ---
 
 ## The problem
 
-Every RTOS gives you threads, queues, and semaphores. Nothing above that. Every firmware team reinvents the same infrastructure — OTA, cloud connectivity, watchdog management, structured state — on every project, under delivery pressure, differently each time.
+Every RTOS gives you threads, queues, and semaphores. Every Linux process gives you sockets and file descriptors. Nothing above that — not for firmware, not for Linux gateways. Every team reinvents the same infrastructure — OTA, cloud connectivity, watchdog management, structured state — on every project, under delivery pressure, differently each time.
 
 The result is firmware that only its original author can safely touch, field failures debugged with printf, and AI tools that generate inconsistent code faster.
 
@@ -18,7 +18,7 @@ The problem is structural. The solution has to be structural too.
 
 ## What EmbedIQ is
 
-A message-driven, layered application framework that sits above your RTOS and enforces structure at the architecture level — not through code reviews or guidelines.
+A message-driven, layered application framework that sits above your substrate — RTOS, bare-metal, or Linux — and enforces structure at the architecture level, not through code reviews or guidelines.
 
 The structural fix: every firmware concern — a UART driver, an OTA updater, a cloud publisher — is isolated into an independent unit. That unit owns its state privately. It communicates with every other unit only through typed messages on a shared bus. It never calls another unit directly. No shared state across units. No hidden dependencies. The wrong patterns cannot compile.
 

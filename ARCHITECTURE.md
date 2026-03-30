@@ -73,7 +73,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 │  Implementations: osal/posix/ · osal/freertos/ · osal/zephyr/      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  SUBSTRATE                                                          │
-│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr  ·  bare-metal MCU         │
+│  FreeRTOS  ·  Linux (gateway/edge)  ·  Zephyr  ·  bare-metal MCU  ·  POSIX         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
