@@ -64,6 +64,13 @@
       "description": "Smart thermostat example application (examples/thermostat/). MSG_TEMP_READING = 0x1400.",
       "license": "Apache-2.0"
     },
+    "gateway_example": {
+      "range": [5136, 5151],
+      "owner": "github.com/ritzylab-dev/embediq",
+      "contact": "dev@embediq.com",
+      "description": "Industrial edge gateway example (examples/gateway/). MSG_FIELD_READING=0x1410, MSG_ALERT=0x1411, MSG_TELEMETRY=0x1412.",
+      "license": "Apache-2.0"
+    },
     "_example": {
       "fb_modbus_rtu_example": {
         "range": [5136, 5195],

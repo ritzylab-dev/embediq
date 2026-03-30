@@ -80,3 +80,30 @@ target_compile_options(test_thermostat_capture PRIVATE
 
 add_test(NAME integration_thermostat_capture COMMAND test_thermostat_capture)
 set_tests_properties(integration_thermostat_capture PROPERTIES TIMEOUT 30)
+
+# ---------------------------------------------------------------------------
+# Gateway full integration test
+# ---------------------------------------------------------------------------
+
+add_executable(test_gateway_full
+    test_gateway_full.c
+    ${CMAKE_SOURCE_DIR}/examples/gateway/fb_field_receiver.c
+    ${CMAKE_SOURCE_DIR}/examples/gateway/fb_policy_engine.c
+    ${CMAKE_SOURCE_DIR}/examples/gateway/fb_north_bridge.c
+)
+
+target_include_directories(test_gateway_full PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/examples/gateway
+)
+
+target_link_libraries(test_gateway_full PRIVATE
+    embediq_driver_fbs
+)
+
+target_compile_options(test_gateway_full PRIVATE
+    -Wall -Wextra -Werror
+)
+
+add_test(NAME integration_gateway_full COMMAND test_gateway_full)
+set_tests_properties(integration_gateway_full PROPERTIES TIMEOUT 60)
