@@ -1,0 +1,43 @@
+// messages/gateway.iq — EmbedIQ Industrial Edge Gateway messages
+//
+// Schema version 1. Namespace: com.embediq.gateway
+// Message IDs in the gateway example range: 0x1410 – 0x141F (community namespace).
+//
+// Rules:
+//   - Message IDs are never reused. A retired ID is tombstoned here.
+//   - Fields are append-only. Never remove or reorder an existing field.
+//
+// @author  Ritesh Anand
+// @company embediq.com | ritzylab.com
+//
+// SPDX-License-Identifier: Apache-2.0
+
+version 1
+namespace "com.embediq.gateway"
+
+// Field sensor reading published by fb_field_receiver on each poll cycle.
+// sensor_id: 0=Tank_Temp, 1=Tank_Pressure, 2=Pump_Flow
+// unit_id:   0=CELSIUS, 1=BAR, 2=LPM
+message MSG_FIELD_READING id=0x1410 {
+    sensor_id : u8
+    unit_id   : u8
+    raw_value : f32
+}
+
+// Alert published by fb_policy_engine when a sensor threshold is crossed.
+// active=true: alert firing. active=false: alert cleared.
+// No duplicate alerts — published only on state change.
+message MSG_ALERT id=0x1411 {
+    sensor_id : u8
+    active    : bool
+    value     : f32
+    threshold : f32
+}
+
+// Throttled telemetry published by fb_policy_engine (1 per 2 field readings).
+// Consumed by fb_north_bridge for cloud publish or local buffering.
+message MSG_TELEMETRY id=0x1412 {
+    sensor_id : u8
+    seq_num   : u16
+    value     : f32
+}
