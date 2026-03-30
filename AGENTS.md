@@ -10,15 +10,17 @@ creating any task, or making any architectural decision.
 ## 1. What EmbedIQ Is (3 Sentences)
 
 EmbedIQ is an open-source, Apache 2.0 licensed **application framework for
-embedded/IoT firmware** — the layer that sits above the RTOS and gives developers
-clean, reusable structure for building production firmware.
+embedded and edge** — the layer that sits above the substrate (RTOS, bare-metal, or
+Linux) and gives developers clean, reusable structure for building production firmware
+and Linux gateway applications.
 
 It provides a message-driven actor model (Functional Blocks), a reusable component
 library (cloud, OTA, telemetry, observability), and hardware abstraction that enables
 host/Linux simulation without physical hardware.
 
-It is **RTOS-agnostic, hardware-vendor independent, and forever free** — with no
-cloud-vendor lock-in.
+It is **substrate-agnostic, hardware-vendor independent, and forever free** — with no
+cloud-vendor lock-in. Runs on FreeRTOS, bare-metal MCUs, and Linux gateway devices
+from the same codebase.
 
 ---
 
