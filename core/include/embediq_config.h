@@ -180,6 +180,16 @@ extern "C" {
 #   define EMBEDIQ_TRACE_FUNCTION   ((EMBEDIQ_TRACE_LEVEL) >= 3)
 #endif
 
+/* ---------------------------------------------------------------------------
+ * FB Metadata
+ * ------------------------------------------------------------------------- */
+
+/** Maximum byte length of a Functional Block safety class string,
+ *  including the NUL terminator.
+ *  Format: 'STD:LEVEL' — e.g. 'ISO26262:ASIL-B', 'IEC61508:SIL-2', 'NONE'.
+ *  16 bytes covers all standard encodings with room for NUL. */
+#define EMBEDIQ_FB_SAFETY_CLASS_LEN     16u
+
 #ifdef __cplusplus
 }
 #endif

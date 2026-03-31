@@ -62,6 +62,40 @@ add_custom_target(run_tests
 )
 
 # ---------------------------------------------------------------------------
+# libembediq_obs — standalone Observatory INTERFACE target (Decision E)
+#
+# Zero-dependency target: consumers can link only the Observatory header
+# without pulling in the FB engine, OSAL, HAL, or any other EmbedIQ component.
+#
+# Usage in an external project:
+#   find_package(embediq REQUIRED)
+#   target_link_libraries(my_app PRIVATE embediq_obs)
+#
+# The INTERFACE target exposes only the public header directory. The actual
+# obs.c implementation (which depends on OSAL) is in embediq_fb_engine for
+# full EmbedIQ builds, and is expected to be provided as a thin shim by the
+# consumer in standalone / Observatory-only deployments.
+#
+# Zero-dependency contract (E2-06): this target MUST NOT link against
+# embediq_osal_posix, embediq_hal_posix, embediq_fb_engine, or any other
+# EmbedIQ component. Any violation of this constraint is a build error
+# in existing product retrofit ("Observatory Only") deployments.
+# ---------------------------------------------------------------------------
+add_library(embediq_obs INTERFACE)
+target_include_directories(embediq_obs INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/core/include>
+    $<INSTALL_INTERFACE:include>
+)
+
+# Verify zero-dependency contract at configure time
+get_target_property(_obs_deps embediq_obs INTERFACE_LINK_LIBRARIES)
+if(_obs_deps)
+    message(FATAL_ERROR
+        "embediq_obs INTERFACE target must have zero dependencies. "
+        "Found: ${_obs_deps}. Decision E zero-dependency constraint violated.")
+endif()
+
+# ---------------------------------------------------------------------------
 # Subdirectories
 # ---------------------------------------------------------------------------
 add_subdirectory(examples/thermostat)

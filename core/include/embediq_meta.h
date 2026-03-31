@@ -24,7 +24,8 @@
 #ifndef EMBEDIQ_META_H
 #define EMBEDIQ_META_H
 
-#include "embediq_osal.h"  /* embediq_err_t */
+#include "embediq_osal.h"   /* embediq_err_t */
+#include "embediq_config.h" /* EMBEDIQ_FB_SAFETY_CLASS_LEN */
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -69,6 +70,29 @@ typedef struct {
 
     /** Boot phase declared by this FB (EmbedIQ_BootPhase_t cast to uint8_t). */
     uint8_t  boot_phase;
+
+    /**
+     * Safety standard and level for this FB — Decision D.
+     *
+     * Canonical encoding: "STD:LEVEL" format (max 15 chars + NUL).
+     *
+     * Single-standard examples:
+     *   "ISO26262:ASIL-B"   — ISO 26262 Automotive Safety Integrity Level B
+     *   "IEC61508:SIL-2"    — IEC 61508 Safety Integrity Level 2
+     *   "IEC62443:SL-2"     — IEC 62443 Security Level 2
+     *   "IEC62304:CLASS-B"  — IEC 62304 Software Safety Class B
+     *   "DO178C:DAL-C"      — DO-178C Design Assurance Level C
+     *   "EN50128:SIL-1"     — EN 50128 Safety Integrity Level 1
+     *   "NONE"              — Not safety-classified (default for non-safety FBs)
+     *
+     * Multi-standard FBs: put the primary standard here; list all applicable
+     * standards in the compliance manifest's safety_standards[] array.
+     *
+     * This field is read by offline tools and manifest generators — it is NOT
+     * queried at runtime by the embedded system. String parsing cost is zero
+     * on-device. CON-01 resolution: single string, not split fields.
+     */
+    char     safety_class[EMBEDIQ_FB_SAFETY_CLASS_LEN];
 } EmbedIQ_FB_Meta_t;
 
 /* ---------------------------------------------------------------------------
