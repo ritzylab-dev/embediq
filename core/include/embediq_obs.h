@@ -56,29 +56,118 @@ extern "C" {
 #define EMBEDIQ_OBS_BAND_STRIDE          0x10u
 
 /* ---------------------------------------------------------------------------
- * Event type constants — renumbered into family bands
+ * Event type constants — organised by family band
+ *
+ * Decision A  — existing constants (0x10, 0x20–0x22, 0x30–0x31, 0x60): FROZEN.
+ *               These map directly to EmbedIQ_Event_t.event_type.
+ *               Do NOT renumber. Do NOT remove. Binary compatibility.
+ *
+ * Decision B  — 14 new constants across SYSTEM, FAULT, and FUNCTION bands.
+ *               Additive only — no existing constant is changed.
+ *
+ * Decision J  — 4 AI Phase-1 constants in SYSTEM band (0x17–0x1A).
+ *               CON-05: AI block wins 0x17–0x1A; system-ops shifted to 0x1B–0x1D.
+ *
+ * Phase-3 AI family band (0x80–0x8F): reserved by comment — see bottom of section.
  * ------------------------------------------------------------------------- */
 
-/* SYSTEM family (0x10–0x1F) */
-#define EMBEDIQ_OBS_EVT_OVERFLOW   0x10u  /**< Observatory ring buffer overflowed */
+/* SYSTEM family (0x10–0x1F) ----------------------------------------------- */
 
-/* MESSAGE family (0x20–0x2F) */
-#define EMBEDIQ_OBS_EVT_MSG_TX     0x20u  /**< Message published */
-#define EMBEDIQ_OBS_EVT_MSG_RX     0x21u  /**< Message delivered to sub-fn */
-#define EMBEDIQ_OBS_EVT_QUEUE_DROP 0x22u  /**< Message dropped: queue full */
+/* Existing — FROZEN */
+#define EMBEDIQ_OBS_EVT_OVERFLOW            0x10u /**< Observatory ring buffer overflowed.
+                                                        An overflow event IS an audit gap record — by design. */
+/* New — Decision B: system lifecycle */
+#define EMBEDIQ_OBS_EVT_BOOT                0x11u /**< Boot event.
+                                                        state_or_flag: 0=normal, 1=watchdog, 2=power-on, 3=SW-reset */
+#define EMBEDIQ_OBS_EVT_SHUTDOWN            0x12u /**< Controlled, clean shutdown */
+#define EMBEDIQ_OBS_EVT_WATCHDOG_RST        0x13u /**< Unclean watchdog reset.
+                                                        Distinct from SHUTDOWN — diagnostic coverage evidence
+                                                        for IEC 61508 / ISO 26262. */
+#define EMBEDIQ_OBS_EVT_HEARTBEAT           0x14u /**< Periodic liveness heartbeat.
+                                                        Diagnostic coverage (IEC 61508 Table A.12). */
+#define EMBEDIQ_OBS_EVT_OTA_UPDATE          0x15u /**< OTA firmware update.
+                                                        fw_version in session header captures before/after (R156). */
+#define EMBEDIQ_OBS_EVT_CONFIG_CHANGE       0x16u /**< Configuration parameter changed.
+                                                        Audit trail for NERC CIP-010 / IEC 62443. */
 
-/* STATE family (0x30–0x3F) */
-#define EMBEDIQ_OBS_EVT_LIFECYCLE  0x30u  /**< FB lifecycle state transition */
-#define EMBEDIQ_OBS_EVT_FSM_TRANS  0x31u  /**< FSM state transition */
+/* New — Decision J: AI Phase-1 block (CON-05: AI wins 0x17–0x1A) */
+#define EMBEDIQ_OBS_EVT_AI_INFERENCE_START  0x17u /**< AI model inference begins.
+                                                        EU AI Act Art.12 logging requirement. */
+#define EMBEDIQ_OBS_EVT_AI_INFERENCE_END    0x18u /**< AI model inference completes.
+                                                        Pair with AI_INFERENCE_START for latency measurement. */
+#define EMBEDIQ_OBS_EVT_AI_MODEL_LOAD       0x19u /**< AI model loaded into memory.
+                                                        session_id links all subsequent inferences to this load. */
+#define EMBEDIQ_OBS_EVT_AI_CONFIDENCE_THRESHOLD 0x1Au /**< AI confidence dropped below threshold.
+                                                        EU AI Act Art.13 explainability event.
+                                                        state_or_flag: threshold value (0–255 = 0–100%). */
+
+/* New — Decision B: system operations (shifted from 0x17–0x1D per CON-05) */
+#define EMBEDIQ_OBS_EVT_MAINTENANCE_MODE    0x1Bu /**< Device entered maintenance mode */
+#define EMBEDIQ_OBS_EVT_FW_START            0x1Cu /**< Firmware execution start (post-bootloader) */
+#define EMBEDIQ_OBS_EVT_CONFIG_LOAD         0x1Du /**< Configuration loaded from persistent storage */
+
+/* 0x1E–0x1F: reserved — future SYSTEM band expansion */
+
+/* MESSAGE family (0x20–0x2F) ---------------------------------------------- */
+
+/* Existing — FROZEN */
+#define EMBEDIQ_OBS_EVT_MSG_TX              0x20u /**< Message published to bus */
+#define EMBEDIQ_OBS_EVT_MSG_RX              0x21u /**< Message delivered to subscriber FB */
+#define EMBEDIQ_OBS_EVT_QUEUE_DROP          0x22u /**< Message dropped — queue full */
+
+/* STATE family (0x30–0x3F) ------------------------------------------------ */
+
+/* Existing — FROZEN */
+#define EMBEDIQ_OBS_EVT_LIFECYCLE           0x30u /**< FB lifecycle state transition */
+#define EMBEDIQ_OBS_EVT_FSM_TRANS           0x31u /**< FSM state machine transition */
 
 /* RESOURCE family (0x40–0x4F) — reserved, not yet emitted */
 
 /* TIMING family (0x50–0x5F) — reserved, not yet emitted */
 
-/* FAULT family (0x60–0x6F) */
-#define EMBEDIQ_OBS_EVT_FAULT      0x60u  /**< FB entered FAULT state */
+/* FAULT family (0x60–0x6F) ------------------------------------------------ */
 
-/* FUNCTION family (0x70–0x7F) — reserved, not yet emitted */
+/* Existing — FROZEN */
+#define EMBEDIQ_OBS_EVT_FAULT               0x60u /**< FB entered FAULT state */
+
+/* New — Decision B: security and fault lifecycle */
+#define EMBEDIQ_OBS_EVT_SECURITY_INCIDENT   0x61u /**< Security incident detected.
+                                                        IEC 62443 / R155 CSMS / EU CRA / PCI DSS. */
+#define EMBEDIQ_OBS_EVT_AUTH_EVENT          0x62u /**< Authentication event (login/logout/fail).
+                                                        PCI DSS Req.10 / IEC 62443 / ISO 27001. */
+#define EMBEDIQ_OBS_EVT_FAULT_CLEARED       0x63u /**< Previously reported fault cleared.
+                                                        Closes the fault lifecycle. */
+
+/* FUNCTION family (0x70–0x7F) --------------------------------------------- */
+
+/* New — Decision B: certification test markers */
+#define EMBEDIQ_OBS_EVT_TEST_START          0x70u /**< Certification test case start.
+                                                        DO-178C / EN 50128 test evidence in audit trail.
+                                                        msg_id = test case ID. */
+#define EMBEDIQ_OBS_EVT_TEST_END            0x71u /**< Certification test case end.
+                                                        state_or_flag: 0=pass, 1=fail, 2=inconclusive. */
+
+/* 0x72–0x7F: reserved — future FUNCTION band expansion */
+
+/*
+ * AI EVENT FAMILY BAND — PHASE 3 RESERVATION
+ * -------------------------------------------
+ * 0x80–0x8F: reserved for the AI event family (Phase 3).
+ *
+ * DO NOT allocate constants in this range before the Phase 3 AI event
+ * taxonomy specification is published. Reservation prevents third-party
+ * squatting on this range.
+ *
+ * Planned Phase-3 constants (taxonomy TBD):
+ *   AI_POLICY_ALLOW, AI_POLICY_BLOCK, AI_MODEL_UPDATE,
+ *   AI_DRIFT_DETECTED, AI_EXPLAINABILITY_LOG, and others.
+ *
+ * Prerequisite: ≥2 production deployments using Phase-1 AI constants
+ * (0x17–0x1A) before Phase-3 band is finalised.
+ *
+ * See: docs/architecture/AI_FIRST_ARCHITECTURE.md
+ *      ROADMAP.md — Phase 3: Full AI Event Family Band
+ */
 
 /* ---------------------------------------------------------------------------
  * Family enum

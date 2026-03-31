@@ -77,6 +77,8 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 - [ ] `embediq` project-management CLI — `init`, `add`, `build`, `flash`
     (Note: Observatory sub-commands `embediq obs` are already shipped in
     `tools/embediq_obs/` — this item covers the project-management CLI only)
+- [ ] AI-08: AI_CODER_SESSION TLV CI plugin — auto-emits TLV and triggers AI Code Review Gate for safety-classified FBs
+- [ ] P2-SIGN-01 through P2-SIGN-05: TRACE_SIGNATURE TLV device key provisioning, HSM integration, ECDSA-P256 signing, offline verification (see `COMPLIANCE.md §8`)
 
 **Success criterion:** Smart thermostat running on ESP32 or STM32 with same code as Pi/Linux host. Only the BSP changes.
 
@@ -99,6 +101,29 @@ This roadmap is updated when phases complete or plans change. Dates are estimate
 **Success criterion:** External FB (Python) communicating with Native FBs via Bridge. Zephyr OSAL — same thermostat example on nRF52840.
 
 **Estimated completion:** ~4 weeks after Phase 2.
+
+---
+
+## Phase 3 (continued) — Full AI Event Family Band
+
+**Goal:** Deliver the Phase-3 AI event taxonomy for the reserved 0x80–0x8F band and implement the AI policy layer.
+
+**Gate criteria (must be met before this phase begins):**
+- ≥2 production deployments using Phase-1 AI constants (0x17–0x1A) for ≥6 months
+- Phase-3 specification document reviewed and accepted via the EmbedIQ decision process
+- Feedback from Phase-1 production deployments incorporated into the taxonomy draft
+
+**Deliverables:**
+- [ ] Phase-3 AI band specification document (replaces illustrative names in `AI_FIRST_ARCHITECTURE.md §5.2`)
+- [ ] Constants in 0x80–0x8F range: `AI_POLICY_ALLOW`, `AI_POLICY_BLOCK`, `AI_MODEL_UPDATE`, `AI_DRIFT_DETECTED`, `AI_EXPLAINABILITY_LOG`, and others (taxonomy TBD from production feedback)
+- [ ] AI-07: AI Policy Layer — runtime policy engine ALLOW/BLOCK based on `safety_class` and Observatory state
+- [ ] AI-09: Fleet analytics reference implementation — `.iqtrace` stream join across N devices using `device_id`/`session_id` correlation keys
+- [ ] AI-10: Finalised Phase-3 constant table (replaces RESERVED comment block in `embediq_obs.h`)
+
+**Owner:** TBD (requires production deployment input)
+**Status:** PLANNED — gate criteria not yet met
+
+**References:** `docs/architecture/AI_FIRST_ARCHITECTURE.md §5`, `embediq_obs.h` (0x80–0x8F reservation comment)
 
 ---
 
