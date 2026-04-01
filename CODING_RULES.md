@@ -332,14 +332,13 @@ as a comment on their own PR.
 
 ```
 [ ] tools/check_invariants.sh passes (run locally before push)
-[ ] cmake --build . --config Release succeeds on host
-[ ] All unit tests pass: ctest -C Release
+[ ] cmake --build build succeeds on host (cmake -B build -DEMBEDIQ_PLATFORM=host first if needed)
+[ ] All tests pass: ctest --test-dir build --output-on-failure (17 entries: 12 unit + 4 integration + 1 CLI)
 [ ] Thermostat scenario passes (if Layer 1 or Layer 2 change)
 [ ] No forbidden patterns present (Section 5 above)
 [ ] All new subscription arrays use EMBEDIQ_SUBS() macro
 [ ] No new platform headers added to Core headers
-[ ] MODULE.md status updated if module status changed
-[ ] LAYER.md updated if layer surface changed
+[ ] BUILD_STATUS.md updated if module status changed (MODULE.md not used in this repo)
 [ ] CHANGELOG.md entry added for any public API change
 [ ] clang-format applied: clang-format -i <changed_files>
 [ ] No non-goals (AGENTS.md Section 6) implemented

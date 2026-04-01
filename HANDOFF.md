@@ -2,11 +2,11 @@ PHASE_COMPLETE: Phase 1 + HAL Refactor + Observability Track
 MILESTONE: v0.1.0 — dev branch cleared, pending dev→main promotion
 NEXT_SESSION: P2-T1 — FreeRTOS OSAL (osal/freertos/embediq_osal_freertos.c)
 
-CURRENT STATE (as of 2026-03-24):
-  Branch: dev @ ec195c2
-  Tests:  16/16 ctest pass. 28/28 Python CLI assertions pass.
+CURRENT STATE (as of 2026-03-31):
+  Branch: main @ 10f408f
+  Tests:  17/17 ctest pass (12 unit + 4 integration + 1 CLI). Python CLI assertions pass.
   Build:  0 errors, 0 warnings.
-  E2E:    Full pipeline validated — thermostat --capture → .iqtrace → CLI decode/stats/filter/export/tail.
+  E2E:    Full pipeline validated — thermostat + gateway --capture → .iqtrace → CLI decode/stats/filter/export/tail.
 
 WHAT WAS BUILT (complete record):
 
@@ -56,6 +56,23 @@ Observability Track (PRs #32–#37)
       tools/embediq_obs/embediq_obs.py  (Apache 2.0 open format, forever)
       tests/cli/test_obs_cli.py         28 assertions, 9 test functions
 
+Final Decision Set v2.0 (PR #73)
+  ✓ 11 decisions implemented (A–K): event constants, TLV types, safety_class field,
+    libembediq_obs INTERFACE target, SBOM formats, migration patterns, AI-first architecture,
+    India market positioning, compliance table (ASIL A/B, SIL 1/2, SL 1/2, IEC 62304 A/B)
+  ✓ New files: COMPLIANCE.md, docs/MIGRATION.md, docs/architecture/AI_FIRST_ARCHITECTURE.md
+  ✓ iqtrace_format.md promoted to v1.1 (5 new TLV types documented)
+  ✓ AI Phase-1 constants: AI_INFERENCE_START/END (0x17/0x18), AI_MODEL_LOAD (0x19),
+    AI_CONFIDENCE_THRESHOLD (0x1A) — EU AI Act Art.12/13 compliance
+  ✓ AI Code Review Gate documented in AGENTS.md §14
+  ✓ safety_class[EMBEDIQ_FB_SAFETY_CLASS_LEN] in EmbedIQ_FB_Meta_t (canonical "STD:LEVEL")
+
+Industrial Gateway Example (PR #73)
+  ✓ examples/gateway/ — 6-FB edge-to-cloud pipeline (water treatment plant simulation)
+  ✓ fb_field_receiver, fb_policy_engine, fb_north_bridge (2 sub-functions)
+  ✓ Offline buffering, deduplication, FSM-driven connectivity
+  ✓ integration_gateway_full ctest — 30-second scenario, all assertions pass
+
 Documentation Passes (PRs #38–#41)
   ✓ PR #38: README.md + BUILD_STATUS.md — reflect HAL refactor + Obs track
   ✓ PR #39: AGENTS.md + ARCHITECTURE.md — full repo topology + Observatory API
@@ -72,6 +89,7 @@ LAYER TOPOLOGY (current, authoritative):
   fbs/drivers/         — portable Driver FBs (no POSIX headers)
   fbs/services/        — reserved for Service FBs (Phase 2)
   examples/thermostat/ — reference application
+  examples/gateway/    — industrial edge gateway reference application (6 FBs)
   tools/               — validator.py, boundary_checker.py, embediq_obs/
   tests/unit/          — 12 C unit test binaries
   tests/integration/   — 3 C integration test binaries (incl. capture E2E)
@@ -80,7 +98,7 @@ LAYER TOPOLOGY (current, authoritative):
   docs/observability/  — iqtrace_format.md
   PM/                  — project_state.md, e2e reports (not shipped)
 
-TEST INVENTORY (16 ctest entries):
+TEST INVENTORY (17 ctest entries):
   cli_obs_tool                    — Python, 28 assertions
   unit_osal_posix                 — OSAL threading
   unit_fb_engine                  — FB registry + lifecycle
@@ -97,6 +115,7 @@ TEST INVENTORY (16 ctest entries):
   integration_thermostat_observable — Observatory events in live run
   integration_thermostat_full     — 5-FB boot + 15s run
   integration_thermostat_capture  — --capture → .iqtrace → CLI decode exit 0
+  integration_gateway_full        — 6-FB boot + 30s scenario, offline buffering verified
 
 ARCHITECTURE DECISIONS LOCKED (do not revisit without RFC):
   HAL contract model:
@@ -130,8 +149,8 @@ KNOWN FUTURE IMPROVEMENTS (not blockers for v0.1.0):
     Fix: call embediq_obs_capture_begin before embediq_engine_boot().
 
 PHASE 2 MUST DO (in order):
+  [DONE] P2-T5: Industrial gateway example — examples/gateway/ (COMPLETE, PR #73)
   1. P2-T1: FreeRTOS OSAL — osal/freertos/embediq_osal_freertos.c
   2. P2-T2: ESP32 platform target
   3. P2-T3: fb_cloud_mqtt — MQTT 3.1.1 pure C
   4. P2-T4: fb_ota — OTA FSM, dual-bank atomic write
-  5. P2-T5: Industrial gateway example

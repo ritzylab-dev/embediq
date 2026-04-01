@@ -30,6 +30,8 @@ Supporting FBs: `fb_timer`, `fb_nvm`, `fb_watchdog` (from `fbs/drivers/`).
 - **Offline resilience** — fb_north_bridge buffers telemetry locally during a 10-second connectivity outage and automatically flushes on reconnect. Alerts always go through (never buffered).
 - **Observable by default** — every message, every FSM transition, every lifecycle event is captured by the Observatory. Zero instrumentation code in any application FB.
 - **Runs on Linux today** — no hardware required. Same `cmake -B build` command as the thermostat.
+- **IEC 62443 SL1/2 ready** — `SECURITY_INCIDENT` (0x61) and `AUTH_EVENT` (0x62) Observatory events are defined for industrial cybersecurity audit trail requirements. The edge gateway pattern is a natural IEC 62443 zone/conduit boundary. See `COMPLIANCE.md §2`.
+- **India / AIS-190 alignment** — Industrial edge gateways are a primary deployment target for India's manufacturing and water/energy sectors. The gateway's tamper-evident Observatory output satisfies AIS-190 (aligned ISO 26262 ASIL A/B) audit logging requirements for connected systems. See `COMPLIANCE.md §2`.
 
 ---
 
@@ -100,6 +102,38 @@ ctest --test-dir build -R integration_gateway_full -V --timeout 60
 ```
 
 Boots all 6 FBs on real POSIX threads, runs the full 30-second scenario, exits 0 on success.
+
+---
+
+## AI Event Constants
+
+If your gateway FB wraps an AI inference call (e.g. anomaly detection on field sensor data),
+use the Phase-1 AI Observatory constants to satisfy EU AI Act Art.12/13 logging requirements:
+
+| Constant | Value | When to emit |
+|---|---|---|
+| `EMBEDIQ_OBS_EVT_AI_INFERENCE_START` | `0x17` | Before inference |
+| `EMBEDIQ_OBS_EVT_AI_INFERENCE_END` | `0x18` | After inference returns |
+| `EMBEDIQ_OBS_EVT_AI_CONFIDENCE_THRESHOLD` | `0x1A` | If confidence drops below threshold |
+
+All events land in the same `.iqtrace` ring buffer as message bus, FSM, and fault events.
+No separate AI logging pipeline. See `docs/architecture/AI_FIRST_ARCHITECTURE.md §2`.
+
+## FB Metadata and safety_class
+
+Register metadata for each FB to enable Registry introspection. Set `safety_class` to the
+applicable standard. For IEC 62443 SL1/2 industrial deployments:
+```c
+static const EmbedIQ_FB_Meta_t fb_meta = {
+    .name        = "fb_policy_engine",
+    .version     = "1.0.0",
+    .description = "Threshold policy engine for field sensor alerts.",
+    .boot_phase  = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    .safety_class = "IEC62443:SL-1",   /* or "IEC62443:SL-2" */
+};
+```
+
+See `COMPLIANCE.md §5` for all canonical safety_class encodings.
 
 ---
 

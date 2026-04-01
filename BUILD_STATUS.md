@@ -29,7 +29,7 @@
 | Observatory — HAL stream        | STABLE      | core/include/hal/hal_obs_stream.h          | HAL contract for binary stream output                    |
 | Observatory — POSIX stream impl | STABLE      | hal/posix/hal_obs_stream_posix.c           | fopen/fwrite/fflush/fclose, zero framework deps          |
 | Observatory — .iqtrace capture  | STABLE      | core/src/observatory/obs.c                 | 8B header + SESSION TLV + EVENT TLVs + STREAM_END        |
-| Observatory — format spec       | STABLE      | docs/observability/iqtrace_format.md       | Open spec v1.0, Apache 2.0, TLV-framed                   |
+| Observatory — format spec       | STABLE      | docs/observability/iqtrace_format.md       | Open spec v1.1, Apache 2.0, TLV-framed                   |
 | Observatory — CLI               | STABLE      | tools/embediq_obs/embediq_obs.py           | decode/stats/filter/export/tail — reads any .iqtrace     |
 | fb_timer (Driver FB)            | STABLE      | fbs/drivers/fb_timer.c                     | Portable. HAL-backed. Drift-corrected tick messages.     |
 | fb_timer (POSIX HAL)            | STABLE      | hal/posix/hal_timer_posix.c                | POSIX clock_gettime implementation                       |
@@ -41,7 +41,8 @@
 | fb_cloud_mqtt                   | NOT_STARTED | fbs/services/                              | Phase 2                                                  |
 | fb_ota                          | NOT_STARTED | fbs/services/                              | Phase 2                                                  |
 | Examples — thermostat           | STABLE      | examples/thermostat/                       | 5 FBs, FSM cycles, Observatory output, zero printf       |
-| Test Runner                     | STABLE      | tests/                                     | 23 C unit tests + 9 Python CLI tests. ctest 100%.        |
+| Examples — gateway              | STABLE      | examples/gateway/                          | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
+| Test Runner                     | STABLE      | tests/                                     | 17 ctest entries: 12 unit + 4 integration (incl. gateway) + 1 CLI. 100%.  |
 
 ## Phase 0 — COMPLETE
   ✓ P0-T1: Repo scaffold, CMake, CI pipeline
@@ -81,15 +82,34 @@
   ✓ Obs-5: hal_obs_stream.h + hal_obs_stream_posix.c + binary capture in obs.c (PR #36)
   ✓ Obs-6: tools/embediq_obs/embediq_obs.py CLI + tests/cli/test_obs_cli.py (PR #37)
 
-## Phase 2 Hardware — NOT STARTED
+## Final Decision Set v2.0 (PR #73) — COMPLETE
+  ✓ Decision A: Frozen struct invariants verified — no regressions
+  ✓ Decision B: 14 new event constants across SYSTEM (0x11–0x1D), FAULT (0x61–0x63), FUNCTION (0x70–0x71) bands
+  ✓ Decision C: 5 new TLV types — HASH_CHAIN (0x0005), COMPLIANCE_EVENT (0x0006), DEVICE_CERT (0x0007), AI_CODER_SESSION (0x0008), TRACE_SIGNATURE (0x0009 Phase 2 placeholder)
+  ✓ Decision D: safety_class[EMBEDIQ_FB_SAFETY_CLASS_LEN] field in EmbedIQ_FB_Meta_t — canonical "STD:LEVEL" format
+  ✓ Decision E: libembediq_obs INTERFACE CMake target — zero-dependency Observatory-only deployment
+  ✓ Decision F: SBOM format — CycloneDX primary + SPDX via Protobom + ML-BOM
+  ✓ Decision G: Fixed 14-byte ring buffer documented with full field breakdown and compliance rationale
+  ✓ Decision H: Industry coverage table — corrections applied (Space + Nuclear → Not supported; DO-178C DAL C/D only)
+  ✓ Decision I: Four migration entry points (Strangler Fig restricted to IEC 62304 Class A/B only)
+  ✓ Decision J: AI-First Architecture — 4 Phase-1 constants (0x17–0x1A), AI_CODER_SESSION TLV, AI Code Review Gate
+  ✓ Decision K: India market positioning — IndiaAI Mission, Missing Middle thesis, PLI, AIS-190, CDSCO, RISC-V
+
+  New files added:
+  ✓ COMPLIANCE.md — Industry coverage table, MISRA stance, tamper evidence tiers, SBOM rationale
+  ✓ docs/MIGRATION.md — Four migration patterns, Strangler Fig IEC 62304 Class C restriction
+  ✓ docs/architecture/AI_FIRST_ARCHITECTURE.md — Full AI-first architecture spec
+  ✓ iqtrace_format.md promoted to v1.1
+
+## Phase 2 Hardware — IN PROGRESS
+  ✓ P2-T5: Industrial gateway example — COMPLETE (examples/gateway/, 6 FBs, integration_gateway_full ctest)
   Next: P2-T1 — FreeRTOS OSAL (osal/freertos/embediq_osal_freertos.c)
   Next: P2-T2 — ESP32 CMake target
   Next: P2-T3 — fb_cloud_mqtt (MQTT 3.1.1)
   Next: P2-T4 — fb_ota (OTA FSM, dual-bank)
-  Next: P2-T5 — Industrial gateway example
 
-## dev → main sync — READY
-  All pre-hardware tasks complete. Trigger conditions met:
-  - [x] Obs-1 through Obs-6 merged to dev
-  - [x] ctest passes 0 failures on dev
-  - [x] validator.py + boundary_checker.py clean on dev
+## dev → main sync — COMPLETE (v0.1.0)
+  Phase 1 milestone promoted to main.
+  PR #73 (Final Decision Set v2.0) merged to dev, then dev promoted to main as v0.1.0.
+  17/17 ctest on main. validator.py + boundary_checker.py clean.
+  Next sync target: v0.2.0 — after FreeRTOS OSAL (P2-T1) + ESP32 target (P2-T2) land on dev.

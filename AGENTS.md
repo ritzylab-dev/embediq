@@ -146,6 +146,7 @@ embediq/
 │
 ├── AGENTS.md               ← YOU ARE HERE
 ├── CODING_RULES.md         ← read second, always
+├── COMPLIANCE.md           ← industry coverage table, SBOM, tamper evidence, safety_class encoding
 ├── CONTRIBUTING.md
 ├── BUILD_STATUS.md
 ├── CMakeLists.txt
@@ -177,7 +178,8 @@ embediq/
 │   └── services/           ← Service FBs: fb_cloud_mqtt · fb_ota (Phase 2)
 │
 ├── examples/
-│   └── thermostat/         ← style reference for application FBs
+│   ├── thermostat/         ← style reference for application FBs (Phase 1)
+│   └── gateway/            ← industrial edge gateway reference (Phase 1, 6 FBs)
 │
 ├── tests/
 │   ├── unit/               ← unit tests (host, no hardware)
@@ -192,6 +194,7 @@ embediq/
 │   └── embediq_obs/        ← Observatory CLI (embediq_obs.py)
 │
 └── docs/
+    ├── MIGRATION.md        ← four migration patterns: Greenfield, Add-Observatory, Strangler Fig, Module-Only
     ├── architecture/       ← cli.md · lifecycle.md · AI_FIRST_ARCHITECTURE.md
     └── observability/      ← iqtrace_format.md (open spec v1.1)
 ```
@@ -330,8 +333,9 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Core / Engine | Observatory — trace levels     | STABLE      | EMBEDIQ_TRACE_LEVEL 0–3, per-family compile-time flags       |
 | Core / Engine | Observatory — session API      | STABLE      | EmbedIQ_Obs_Session_t 40B (I-14), session_begin/get          |
 | Core / Engine | Observatory — .iqtrace capture | STABLE      | Binary TLV file via hal_obs_stream.h HAL contract            |
-| Core / Engine | Observatory — format spec      | STABLE      | docs/observability/iqtrace_format.md v1.0, Apache 2.0        |
+| Core / Engine | Observatory — format spec      | STABLE      | docs/observability/iqtrace_format.md v1.1, Apache 2.0        |
 | Core / Engine | Observatory — CLI              | STABLE      | tools/embediq_obs/embediq_obs.py — decode/stats/filter/export|
+| Build         | libembediq_obs INTERFACE target | STABLE     | CMake INTERFACE target — zero-dependency Observatory-only deployment |
 | HAL           | hal/posix/                     | STABLE      | hal_timer · hal_flash · hal_wdg · hal_obs_stream implemented |
 | Driver FBs    | fb_timer                       | STABLE      | fbs/drivers/ + hal/posix/hal_timer_posix.c                   |
 | Driver FBs    | fb_nvm                         | STABLE      | fbs/drivers/ + hal/posix/hal_flash_posix.c                   |
@@ -339,6 +343,7 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Service FBs   | fb_cloud_mqtt                  | NOT_STARTED | Phase 2                                                      |
 | Service FBs   | fb_ota                         | NOT_STARTED | Phase 2                                                      |
 | Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
+| Examples      | gateway                        | STABLE      | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
@@ -417,9 +422,12 @@ the Core header is correct. Update MODULE.md to match.
 | AI-first architecture, AI Code Review Gate         | `docs/architecture/AI_FIRST_ARCHITECTURE.md`  |
 | Observatory CLI usage                              | `tools/embediq_obs/embediq_obs.py --help`     |
 | Style reference for application FBs               | `examples/thermostat/`                        |
+| Style reference for edge/gateway applications              | `examples/gateway/`                           |
 | Style reference for Driver FBs                    | `fbs/drivers/fb_timer.c`                      |
 | Style reference for HAL implementations           | `hal/posix/hal_timer_posix.c`                 |
 | Run invariant + layer checks locally              | `python3 tools/validator.py` and `python3 tools/boundary_checker.py` |
+| Industry compliance table, SBOM formats, safety_class      | `COMPLIANCE.md`                               |
+| Migration patterns — Greenfield/Add-Observatory/Strangler  | `docs/MIGRATION.md`                           |
 | Message ID namespace allocations                  | `messages_registry.json`                      |
 
 ---
