@@ -1,6 +1,6 @@
 # EmbedIQ Observability Format Specification
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Stable
 **License:** Apache 2.0
 **Authors:** Ritesh Anand
@@ -68,6 +68,19 @@ explicitly. The band map is:
 **Ordering invariant (I-13):** Always use `sequence` for ordering and gap
 detection. `timestamp_us` is informational only and wraps at ~71 minutes.
 
+**Ring buffer size guarantee (Decision G):** The ring buffer record size is
+**always exactly 14 bytes per record on every device, regardless of compliance
+level, platform, or trace verbosity setting.** A Cortex-M0 thermostat and a
+medical infusion pump produce identical 14-byte records. This guarantee is
+enforced by `_Static_assert(sizeof(EmbedIQ_Event_t) == 14)` in
+`core/include/embediq_obs.h` and must never be broken.
+
+**Overflow events as tamper-evident gap records:** When the ring buffer
+overflows, an `EMBEDIQ_OBS_EVT_OVERFLOW` event (0x10) is emitted. This event
+IS the audit gap record — by design. An overflow event tells the auditor:
+"audit data was lost here, and this loss is itself recorded." Decoders and
+compliance tools must surface overflow events, not suppress them.
+
 ---
 
 ## 4. Session Metadata Record
@@ -110,19 +123,25 @@ Offset  Size  Field
 
 ### 5.1 Record Type Registry
 
-| Type (hex) | Name          | Payload size | Description |
-|-----------|---------------|-------------|-------------|
-| `0x0000`  | INVALID       | -           | Must never appear. Decoder: treat as corruption. |
-| `0x0001`  | SESSION       | 40 bytes    | `EmbedIQ_Obs_Session_t` - must be first TLV in file |
-| `0x0002`  | EVENT         | 14 bytes    | Single `EmbedIQ_Event_t` |
-| `0x0003`  | EVENT_BATCH   | 2 + (Nx14)  | `uint16_t count` (LE) + count x `EmbedIQ_Event_t` |
-| `0x0004`  | STREAM_END    | 0 bytes     | Optional clean-close marker |
-| `0x00FF`  | PADDING       | any         | Ignored by decoder - alignment or future use |
-| `0xFFFF`  | RESERVED      | -           | Reserved for future use; decoder must skip |
+| Type (hex) | Name                | Payload size | Status      | Description |
+|-----------|---------------------|-------------|-------------|-------------|
+| `0x0000`  | INVALID             | -           | Existing    | Must never appear. Decoder: treat as corruption. |
+| `0x0001`  | SESSION             | 40 bytes    | **FROZEN**  | `EmbedIQ_Obs_Session_t` — must be first TLV. (I-14) |
+| `0x0002`  | EVENT               | 14 bytes    | **FROZEN**  | Single `EmbedIQ_Event_t`. (I-02) |
+| `0x0003`  | EVENT_BATCH         | 2 + (Nx14)  | **FROZEN**  | `uint16_t count` (LE) + N × `EmbedIQ_Event_t` |
+| `0x0004`  | STREAM_END          | 0 bytes     | **FROZEN**  | Optional clean-close marker |
+| `0x0005`  | HASH_CHAIN          | 44 bytes    | New — Dec C | SHA-256 hash chain for tamper evidence. See §5.3. |
+| `0x0006`  | COMPLIANCE_EVENT    | 12 bytes    | New — Dec C | Compliance context record. See §5.4. |
+| `0x0007`  | DEVICE_CERT         | variable    | New — Dec C | Device certificate. See §5.5. |
+| `0x0008`  | AI_CODER_SESSION    | 27 bytes    | New — Dec J | AI agent code authorship record. See §5.6. |
+| `0x0009`  | TRACE_SIGNATURE     | variable    | **Phase 2** | Optional device signing for SL-3+. See §5.7. |
+| `0x00FF`  | PADDING             | any         | Existing    | Ignored by decoder — alignment or future use |
+| `0xFFFF`  | RESERVED            | -           | Existing    | Reserved; decoder must skip |
 
 Unknown type values: **decoder must skip** using the `length` field.
-This is the forward-compatibility contract - new record types can be
-added without breaking old decoders.
+This is the forward-compatibility contract — new record types can be added
+without breaking old decoders. Types `0x0009` and above that a decoder does
+not recognise must be skipped via `length`, not treated as errors.
 
 ### 5.2 EVENT_BATCH layout
 
@@ -135,6 +154,133 @@ Offset  Size     Field
 
 EVENT_BATCH is provided for transport efficiency. A decoder must treat
 each event in the batch identically to an individual EVENT record.
+
+### 5.3 HASH_CHAIN TLV (0x0005) — Decision C
+
+Provides SHA-256 hash chain tamper evidence over a batch of events.
+Written by the producer after each EVENT_BATCH. Baseline for all
+compliance levels. (CON-03 resolution.)
+
+```
+Offset  Size  Field
+------  ----  ----------------------------------------
+0       4     batch_seq       (uint32_t LE) — sequence number of the first
+                               event in the corresponding batch
+4       32    batch_hash      SHA-256 hash of all EmbedIQ_Event_t records
+                               in the batch, concatenated in sequence order.
+                               MUST be 32 bytes. (E1-01 critical fix: was 4 bytes.)
+36      4     operator_id     (uint32_t LE) — identity of the human operator
+                               who initiated the session or the triggering action.
+                               0x00000000 = automated / no operator.
+                               MUST be 4 bytes to accommodate GDPR-scope UUIDs.
+                               (E1-02 fix: was 2 bytes.)
+40      1     hash_algorithm  0x01 = SHA-256 (current). Unknown value = decoder
+                               skips hash validation but does not reject the TLV.
+                               (Algorithm agility — E1-03.)
+41      3     _pad            Reserved — must be zero.
+```
+
+**Total payload: 44 bytes.**
+
+A decoder verifying tamper evidence:
+1. Reads all EVENT or EVENT_BATCH records between this HASH_CHAIN and the
+   previous HASH_CHAIN (or SESSION, if first batch).
+2. Concatenates the raw `EmbedIQ_Event_t` bytes in sequence order.
+3. Computes SHA-256 over the concatenation.
+4. Compares to `batch_hash`. Mismatch = tamper detected.
+
+### 5.4 COMPLIANCE_EVENT TLV (0x0006) — Decision C
+
+Records compliance-relevant context for a specific event in the batch.
+
+```
+Offset  Size  Field
+------  ----  ----------------------------------------
+0       2     compliance_type   (uint16_t LE) — compliance event category.
+                                 0x0001 = safety class transition
+                                 0x0002 = operator action
+                                 0x0003 = configuration change
+                                 0x0004 = security boundary crossing
+                                 Unknown values: decoder skips gracefully.
+2       4     standard_ref      (uint32_t LE) — packed standard identifier.
+                                 Bits[31:16] = standard code, bits[15:0] = clause.
+4       4     event_timestamp_us (uint32_t LE) — timestamp_us of the associated
+                                 EmbedIQ_Event_t record.
+8       2     signature_ref     (uint16_t LE) — byte offset from start of this
+                                 TLV to a TRACE_SIGNATURE TLV (0x0009) in the
+                                 same stream. 0x0000 = no signature present
+                                 (Phase 1 default). Non-zero = optional SL-3+
+                                 device signature. (CON-03 Phase 2 hook.)
+```
+
+**Total payload: 12 bytes.**
+
+### 5.5 DEVICE_CERT TLV (0x0007) — Decision C
+
+Carries a device certificate for identity verification.
+
+```
+Offset  Size      Field
+------  ----      ----------------------------------------
+0       1         cert_type   0x01 = X.509 DER, 0x02 = manufacturer cert,
+                               0x03 = custom. Unknown = skip.
+1       2         cert_length (uint16_t LE) — byte length of cert_data.
+3       cert_len  cert_data   Raw certificate bytes.
+```
+
+**Total payload: 3 + cert_length bytes (variable).**
+
+### 5.6 AI_CODER_SESSION TLV (0x0008) — Decision J
+
+Records AI agent authorship when AI-generated or AI-assisted code modifies
+a Functional Block. Written by the CI/CD pipeline or AI agent tooling when
+the AI Code Review Gate is triggered. See `docs/architecture/AI_FIRST_ARCHITECTURE.md`.
+
+```
+Offset  Size  Field
+------  ----  ----------------------------------------
+0       2     agent_id              (uint16_t LE) — AI agent identifier.
+                                     0x0001 = GitHub Copilot
+                                     0x0002 = Claude (Anthropic)
+                                     0x0003 = ChatGPT (OpenAI)
+                                     0x00FF = unknown / custom agent
+2       16    model_version         UTF-8 model identifier string, null-padded
+                                     to 16 bytes. Example: "claude-sonnet-4-6\0..."
+18      8     prompt_hash           First 8 bytes of the SHA-256 hash of the
+                                     prompt used to generate the code change.
+                                     All-zeros if prompt is unavailable.
+26      1     safety_class_reviewed 0x00 = no safety_class-tagged FBs were
+                                     modified, or review not yet complete.
+                                     0x01 = safety_class-tagged FBs were modified
+                                     AND a human reviewer has confirmed review.
+                                     CI/CD gate: block merge if 0x00 and any
+                                     safety-tagged FB was changed.
+```
+
+**Total payload: 27 bytes.**
+
+### 5.7 TRACE_SIGNATURE TLV (0x0009) — Phase 2 Placeholder
+
+> **Phase 2 — not implemented in Phase 1.**
+>
+> This TLV type is defined here so that decoders encountering it (in future
+> Phase 2 deployments) can skip it gracefully via the `length` field.
+> Do not emit this TLV in Phase 1 producers.
+
+Optional per-device cryptographic signature for SL-3+ and high-assurance
+regulated environments. Referenced by `signature_ref` in COMPLIANCE_EVENT
+(§5.4) when non-zero.
+
+```
+Offset  Size      Field
+------  ----      ----------------------------------------
+0       4         device_key_id   (uint32_t LE) — identifies the signing key.
+4       1         sig_algorithm   0x01 = ECDSA-P256. Unknown = skip.
+5       2         sig_length      (uint16_t LE) — byte length of sig_data.
+7       sig_len   sig_data        Raw signature bytes.
+```
+
+**Total payload: 7 + sig_length bytes (variable).**
 
 ---
 
@@ -273,6 +419,7 @@ The `.iqtrace` file is always the authoritative open record.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1 | 2026-03 | Decision C: Add HASH_CHAIN (0x0005), COMPLIANCE_EVENT (0x0006), DEVICE_CERT (0x0007). Decision J: Add AI_CODER_SESSION (0x0008), TRACE_SIGNATURE placeholder (0x0009). Decision G: explicit 14B ring buffer guarantee and overflow-as-gap-record documentation. |
 | 1.0 | 2026-03 | Initial specification |
 
 ---

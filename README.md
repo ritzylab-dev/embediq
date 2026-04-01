@@ -1,14 +1,14 @@
 # EmbedIQ
 
-**The open-source application framework above the RTOS.**
+**The AI-first application framework for embedded and edge.**
 
-Apache 2.0 · RTOS-agnostic · Host simulation first · Zero-instrumentation observability · Open .iqtrace format
+Apache 2.0 · AI-first · RTOS-agnostic · Linux gateway · Host simulation first · Zero-instrumentation observability · Open .iqtrace format
 
 ---
 
 ## The problem
 
-Every RTOS gives you threads, queues, and semaphores. Nothing above that. Every firmware team reinvents the same infrastructure — OTA, cloud connectivity, watchdog management, structured state — on every project, under delivery pressure, differently each time.
+Every RTOS gives you threads, queues, and semaphores. Every Linux process gives you sockets and file descriptors. Nothing above that — not for firmware, not for Linux gateways. Every team reinvents the same infrastructure — OTA, cloud connectivity, watchdog management, structured state — on every project, under delivery pressure, differently each time.
 
 The result is firmware that only its original author can safely touch, field failures debugged with printf, and AI tools that generate inconsistent code faster.
 
@@ -18,7 +18,7 @@ The problem is structural. The solution has to be structural too.
 
 ## What EmbedIQ is
 
-A message-driven, layered application framework that sits above your RTOS and enforces structure at the architecture level — not through code reviews or guidelines.
+A message-driven, layered application framework that sits above your substrate — RTOS, bare-metal, or Linux — and enforces structure at the architecture level, not through code reviews or guidelines.
 
 The structural fix: every firmware concern — a UART driver, an OTA updater, a cloud publisher — is isolated into an independent unit. That unit owns its state privately. It communicates with every other unit only through typed messages on a shared bus. It never calls another unit directly. No shared state across units. No hidden dependencies. The wrong patterns cannot compile.
 
@@ -143,6 +143,12 @@ EmbedIQ makes every FB, message schema, and FSM transition a typed, machine-read
 
 This is not a marketing claim. It is a structural consequence of the architecture.
 
+**AI observability — built in, not bolted on.** EmbedIQ ships four event type constants for AI inference (EU AI Act Art.12 logging: `AI_INFERENCE_START` / `AI_INFERENCE_END`; EU AI Act Art.13 explainability: `AI_CONFIDENCE_THRESHOLD`). Every AI inference event lands in the same tamper-evident 14-byte ring buffer as every fault event, every boot event, and every message bus event. There is no separate AI logging pipeline — the Observatory is the logging pipeline.
+
+**`.iqtrace` as AI training data moat.** A device fleet running EmbedIQ accumulates a proprietary, tamper-evident dataset of edge AI behaviour on real hardware with real workloads. The 14-byte fixed record size means traces from any device are structurally identical — trivially mergeable into a cross-device training corpus. This dataset is structurally private: the `.iqtrace` never leaves the device unless the application operator explicitly exports it. No cloud provider has access to it. The longer the fleet runs, the deeper the dataset. See `docs/architecture/AI_FIRST_ARCHITECTURE.md §6`.
+
+**AI Code Review Gate.** When an AI coding assistant modifies a safety-classified Functional Block, EmbedIQ's AI Code Review Gate requires a qualified human to review the change before it can be merged. The gate outcome is recorded in the `AI_CODER_SESSION` TLV — a machine-readable provenance record in every `.iqtrace` session. See `AGENTS.md §14` and `docs/architecture/AI_FIRST_ARCHITECTURE.md §4`.
+
 ---
 
 ## Why Apache 2.0
@@ -166,6 +172,8 @@ Embedded engineers and IoT leads who have shipped production RTOS firmware and r
 - Mbed OS users who need a new architecture home before ARM archives it in July 2026
 - Engineers building on RISC-V (SHAKTI, VEGA) — EmbedIQ runs on RISC-V without modification
 
+**India is a priority geography.** EmbedIQ is designed for the missing middle of the Indian embedded market: systems with enough compute to run inference and connectivity, but not enough to run full cloud agent stacks. India-specific alignment: AIS-190 (automotive, aligned ISO 26262 ASIL A/B), CDSCO/MDR 2017 (medical devices, aligned IEC 62304 Class A/B), TEC IoT security guidelines, and IndiaAI Mission DPI objectives. The open `.iqtrace` format and zero-cost Apache 2.0 license remove vendor lock-in for PLI-recipient electronics manufacturers. See `COMPLIANCE.md` and `ARCHITECTURE.md §India Market`.
+
 ---
 
 ## Documentation
@@ -178,7 +186,10 @@ Embedded engineers and IoT leads who have shipped production RTOS firmware and r
 | [CODING_RULES.md](CODING_RULES.md)                      | Rules enforced on every PR                                 |
 | [ROADMAP.md](ROADMAP.md)                                | Phase 1→4 public roadmap                                   |
 | [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md)        | What is free forever vs future commercial                  |
-| [docs/observability/iqtrace_format.md](docs/observability/iqtrace_format.md) | Open `.iqtrace` binary format specification v1.0 |
+| [docs/observability/iqtrace_format.md](docs/observability/iqtrace_format.md) | Open `.iqtrace` binary format specification v1.1 |
+| [docs/architecture/AI_FIRST_ARCHITECTURE.md](docs/architecture/AI_FIRST_ARCHITECTURE.md) | AI-first architecture: constants, Code Review Gate, training data moat |
+| [docs/MIGRATION.md](docs/MIGRATION.md)                 | Four migration patterns: Greenfield, Add-Observatory, Strangler Fig, Module-Only |
+| [COMPLIANCE.md](COMPLIANCE.md)                          | Industry coverage table, MISRA stance, tamper evidence tiers, SBOM formats |
 
 ---
 

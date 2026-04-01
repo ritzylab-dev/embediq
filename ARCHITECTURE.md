@@ -73,7 +73,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 │  Implementations: osal/posix/ · osal/freertos/ · osal/zephyr/      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  SUBSTRATE                                                          │
-│  FreeRTOS  ·  Pi/Linux POSIX  ·  Zephyr  ·  bare-metal MCU         │
+│  FreeRTOS  ·  Linux (gateway/edge)  ·  Zephyr  ·  bare-metal MCU  ·  POSIX         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -430,13 +430,16 @@ The family is derived in the decoder with zero runtime overhead:
 
 | Band       | Family    | Event types                                   |
 | ---------- | --------- | --------------------------------------------- |
-| 0x10–0x1F  | SYSTEM    | OVERFLOW (0x10)                               |
+| 0x10–0x1F  | SYSTEM    | OVERFLOW(0x10), BOOT(0x11), SHUTDOWN(0x12), WATCHDOG_RST(0x13), HEARTBEAT(0x14), OTA_UPDATE(0x15), CONFIG_CHANGE(0x16), AI_INFERENCE_START(0x17)†, AI_INFERENCE_END(0x18)†, AI_MODEL_LOAD(0x19)†, AI_CONFIDENCE_THRESHOLD(0x1A)†, MAINTENANCE_MODE(0x1B), FW_START(0x1C), CONFIG_LOAD(0x1D) |
 | 0x20–0x2F  | MESSAGE   | MSG_TX (0x20), MSG_RX (0x21), QUEUE_DROP (0x22) |
 | 0x30–0x3F  | STATE     | LIFECYCLE (0x30), FSM_TRANS (0x31)            |
 | 0x40–0x4F  | RESOURCE  | (reserved for queue depth, stack high-water)  |
 | 0x50–0x5F  | TIMING    | (reserved for ISR latency, message latency)   |
-| 0x60–0x6F  | FAULT     | FAULT (0x60)                                  |
-| 0x70–0x7F  | FUNCTION  | (reserved for FB CPU slice)                   |
+| 0x60–0x6F  | FAULT     | FAULT(0x60), SECURITY_INCIDENT(0x61), AUTH_EVENT(0x62), FAULT_CLEARED(0x63) |
+| 0x70–0x7F  | FUNCTION  | TEST_START(0x70), TEST_END(0x71)              |
+| 0x80–0x8F  | AI (Ph.3) | RESERVED — Phase-3 AI family (do not allocate) |
+
+† Decision J AI Phase-1 constants — see `docs/architecture/AI_FIRST_ARCHITECTURE.md`
 
 ```c
 // Derive family at zero cost — no struct field, no lookup table
@@ -479,12 +482,22 @@ typedef struct {
 _Static_assert(sizeof(EmbedIQ_Obs_Session_t) == 40, "session struct size mismatch");
 ```
 
+### 14-Byte Ring Buffer Guarantee
+
+Every Observatory ring buffer record is **exactly 14 bytes** on every platform, every target, every compliance level. This is not a target or a goal — it is enforced by `_Static_assert(sizeof(EmbedIQ_Event_t) == 14, ...)` at compile time. Any change that would alter the record size fails the build immediately.
+
+The practical consequences:
+- A ring buffer of N records always occupies exactly `N × 14` bytes of RAM.
+- `.iqtrace` files from any device are structurally identical — decoders need no per-device schema.
+- Overflow records are gap records by design: `EMBEDIQ_OBS_EVT_OVERFLOW` (0x10) is emitted when the buffer is full. The sequence number gap around an overflow event is unambiguous evidence of the gap size.
+- Per-event storage cost is known at compile time and does not vary with payload content, platform, or compiler version.
+
 ### File Capture and Open Format
 
 Binary `.iqtrace` files are written via the `hal_obs_stream.h` HAL contract
 (implementation: `hal/posix/hal_obs_stream_posix.c`). The format is TLV-framed,
 little-endian, and forward-compatible. Full specification:
-`docs/observability/iqtrace_format.md` (Apache 2.0, open).
+`docs/observability/iqtrace_format.md` v1.1 (Apache 2.0, open).
 ```bash
 # Capture a session to file
 EMBEDIQ_OBS_PATH=/tmp/session.iqtrace ./build/examples/thermostat/embediq_thermostat
@@ -600,6 +613,44 @@ Verify every item before emitting any EmbedIQ code.
 | R-sub-14 | `boot_phase` declared in every FB config                             | Missing boot_phase — will default to APPLICATION silently                                    |
 | R-sub-15 | `sequence` for ordering, not `timestamp_us`                          | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap                                   |
 | R-sub-16 | Driver FB calls `hal/*.h` only for hardware access                   | Driver FB calls `esp_uart_write()` or `HAL_UART_Transmit()` directly — bypasses HAL contract |
+
+---
+
+---
+
+## India Market — Strategic Positioning (Decision K)
+
+India is a priority geography for EmbedIQ, not an afterthought. The positioning is grounded in three structural facts about the Indian embedded/edge market.
+
+**The Missing Middle.** India's embedded systems market is bifurcated: hyperscale IoT platforms (AWS Greengrass, Azure IoT Edge) at one end; deeply resource-constrained bare-metal BSPs at the other. The middle tier — systems with enough compute to run inference and connectivity, but not enough to run full cloud agent stacks — is largely underserved. EmbedIQ targets this segment directly. The fixed 14-byte Observatory record, the zero-overhead OSAL abstraction, and the host/POSIX simulation capability are all properties that matter specifically to this middle tier.
+
+**IndiaAI Mission and DPI.** The IndiaAI Mission (MEITY, 2024) establishes Digital Public Infrastructure (DPI) as a policy objective for AI. EmbedIQ's `.iqtrace` format is open and vendor-neutral — it produces AI training data at the edge without proprietary lock-in. A fleet of devices running EmbedIQ accumulates a proprietary, tamper-evident dataset of edge AI behaviour that no cloud provider can replicate. This aligns structurally with the DPI principle: the data infrastructure is public and open; the value built on top of it is the competitive differentiator.
+
+**PLI Scheme Alignment.** India's Production-Linked Incentive (PLI) scheme for electronics incentivises domestic hardware manufacturing. Domestic hardware running EmbedIQ Observatory accumulates domestic `.iqtrace` datasets, fulfilling data-locality expectations without requiring cloud infrastructure. EmbedIQ's Apache 2.0 license and zero-cost core remove any vendor-lock risk for PLI-recipient manufacturers.
+
+**India-Specific Standards (Decision H corrections):**
+- **CDSCO / MDR 2017:** India's medical device rules are aligned with IEC 62304 Class A/B. EmbedIQ's Class A/B support covers CDSCO-regulated medical devices.
+- **AIS-190:** India's automotive cybersecurity standard, aligned with ISO 26262 ASIL A/B and UNECE R155. EmbedIQ's SECURITY_INCIDENT and AUTH_EVENT event types provide the required audit trail.
+- **TEC IoT Security Guidelines:** Tamper-evident audit trail plus SECURITY_INCIDENT event type satisfy TEC logging requirements.
+- **NITI Aayog Responsible AI for All:** The AI Code Review Gate and `safety_class_reviewed` field directly implement the human-oversight requirements in the Responsible AI framework.
+
+---
+
+## AI-First Architecture Summary (Decision J)
+
+EmbedIQ is not an AI runtime. It is an **audit substrate** that makes AI-enhanced embedded systems trustworthy and regulatorily legible.
+
+**Phase 1 (implemented):**
+- Four event type constants in the SYSTEM band (0x17–0x1A): `AI_INFERENCE_START`, `AI_INFERENCE_END`, `AI_MODEL_LOAD`, `AI_CONFIDENCE_THRESHOLD`.
+- One TLV type (`AI_CODER_SESSION`, 0x0008): firmware provenance for AI-generated code.
+- AI Code Review Gate: mandatory human review when AI modifies safety-classified FBs (see `AGENTS.md §14` and `docs/architecture/AI_FIRST_ARCHITECTURE.md §4`).
+
+**Phase 3 (planned, not yet allocated):**
+- Full AI event family band 0x80–0x8F reserved in `embediq_obs.h`.
+- Gate: ≥2 production deployments using Phase-1 constants before Phase-3 band is finalised.
+- See `ROADMAP.md — Phase 3` and `docs/architecture/AI_FIRST_ARCHITECTURE.md §5`.
+
+**Full specification:** `docs/architecture/AI_FIRST_ARCHITECTURE.md`
 
 ---
 

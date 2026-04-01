@@ -1,6 +1,6 @@
 # EmbedIQ — PM Project State
 
-Read this file at the start of every session alongside 13_gate_protocol.md.
+Read this file at the start of every session alongside gate_protocol.md.
 Update it whenever a task completes or a decision is made.
 
 ---
@@ -18,7 +18,8 @@ Update it whenever a task completes or a decision is made.
 | Milestone | Status | Tag | Date |
 |-----------|--------|-----|------|
 | v0.1.0 — Phase 1 + HAL Refactor + Observability | **COMPLETE** | `v0.1.0 → cd035a8` | 2026-03-24 |
-| v0.2.0 — FreeRTOS + ESP32 + MQTT + OTA | Pending | — | — |
+| v0.1.2 — Phase 1 review + pre-Phase-2 fix plan | **COMPLETE** | — | 2026-03-26 |
+| v0.2.0 — FreeRTOS + ESP32 + MQTT + OTA | **IN PROGRESS** | — | — |
 
 ---
 
@@ -67,12 +68,22 @@ Substrate
 | #44 | dev→main | v0.1.0 milestone promotion — 38 commits, merge commit on main |
 | #45 | docs/project-state-v010 | PM/project_state.md full rewrite — v0.1.0 complete, all PRs #24–#44 recorded |
 | #46 | fix/fix-generated-gitignore | Commit generated headers, add CI drift-check — fixes fresh-clone build failure (reported by external contributor Michael) |
+| #47–#54 | (Phase 1 PRs) | Additional Phase 1 work — see git log |
+| #55 | fix/shell-to-layer-terminology | Replace Shell 1/2/3 with Layer 1/2/3 across all docs and code |
+| #56 | fix/hal-defs-extract | Extract HAL return codes into hal_defs.h — remove cross-peripheral coupling |
+| #57 | fix/obs-transport-abstraction | Observatory transport ops table — remove core/src → hal/ direct dependency |
+| #58 | fix/osal-queue-destroy-dispatch-priority | Add queue_destroy to OSAL; parameterize dispatch priority and stack size |
+| #59 | fix/mutex-timeout-nvm-api-alignment | Fix mutex timeout 0u→UINT32_MAX; align fb_nvm.c with embediq_nvm.h contract |
+| #60 | fix/thermostat-msg-id-namespace | Move thermostat MSG IDs to community range 0x1400+ (was conflicting with fb_uart range) |
+| #61 | fix/header-guards | Add #ifndef/#define and extern "C" guards to embediq_endpoint.h + 6 HAL headers |
+| #62 | fix/meta-types-config-constants | embediq_meta.h type fixes; config constants for WDG/NVM; compat shim expanded to 18 headers |
+| #63 | fix/cosmetic-batch | Cosmetic batch — comments, local constants, dedup, tooling; closes all Phase 1 review findings |
 
 ---
 
 ## In Progress
 
-None.
+- **P2-T1** — FreeRTOS OSAL (`osal/freertos/embediq_osal_freertos.c`)
 
 ---
 
@@ -96,7 +107,7 @@ None.
 - All Phase 2 work merges to `dev`. `main` promoted at milestone boundaries.
 - PM role is read-only on repo. All changes go through agent prompts.
 - Registry is authoritative for message ID namespacing. validator.py enforces.
-- Gate protocol is 13 gates (13_gate_protocol.md) — Gate 13 added 2026-03-24.
+- Gate protocol is 15 gates (PM/gate_protocol.md) — Gate 0 (agent grounding) added 2026-03-26. Gate 14 (promotion gate) was already in use. File renamed from 13_gate_protocol.md to gate_protocol.md (permanent generic name).
 - generated/*.h files are design-time artifacts (binary wire protocol contracts) — committed to repo, not gitignored. The .iq generator is a design tool, not a build tool. CI drift-check (I-16) enforces .iq → .h consistency on every PR. Decision date: 2026-03-24.
 
 ### Observability decisions (locked 2026-03-23)
@@ -114,8 +125,7 @@ None.
 
 ## Known Issues / Watch List
 
-- `MSG_TEMP_READING = 0x0420` falls in `fb_uart` reserved range (0x0400–0x046B)
-  → No conflict now but MUST be resolved before fb_uart implementation (P2)
+None. All Phase 1 review findings resolved (PRs #55–#63).
 
 ---
 
@@ -128,4 +138,5 @@ None.
 
 ---
 
-*Last updated: 2026-03-24 — v0.1.0 milestone complete. PRs #32–#44 merged. Tag v0.1.0 → cd035a8 on main.*
+*Last updated: 2026-03-26 — Phase 1 review + pre-Phase-2 fix plan complete. PRs #55–#63 merged.
+Phase 2 (v0.2.0) started: P2-T1 FreeRTOS OSAL is next.*

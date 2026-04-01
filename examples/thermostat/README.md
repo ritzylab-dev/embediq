@@ -1,6 +1,6 @@
 # Smart Thermostat Demo
 
-This is the Phase 1 gate demo for EmbedIQ. Five Functional Blocks work together — from a hardware timer tick through application FSM logic — all observable without a single printf in application code. It runs entirely on Mac or Linux. No hardware required.
+This is the Phase 1 reference example for EmbedIQ — Phase 1 is complete and all tests pass. Five Functional Blocks work together — from a hardware timer tick through application FSM logic — all observable without a single printf in application code. It runs entirely on Mac or Linux. No hardware required.
 
 ## What it does
 
@@ -111,3 +111,46 @@ python3 tools/embediq_obs/embediq_obs.py obs export /tmp/thermo.iqtrace
 
 The `.iqtrace` format is open (Apache 2.0) and fully documented at
 `docs/observability/iqtrace_format.md`.
+
+## Companion example — Industrial Edge Gateway
+
+The `examples/gateway/` example demonstrates EmbedIQ in a Linux edge/gateway context:
+6 FBs forming a field-sensor-to-cloud pipeline with offline buffering and deduplication.
+Both examples run from the same build:
+```bash
+./build/examples/gateway/embediq_gateway
+```
+
+See `examples/gateway/README.md` for the full walkthrough.
+
+## AI Event Constants
+
+The Observatory includes four Phase-1 AI event type constants defined in
+`core/include/embediq_obs.h`. If your application wraps an inference call in an FB,
+emit these constants to satisfy EU AI Act Art.12 (input-output traceability) and
+Art.13 (confidence explainability):
+
+| Constant | Value | When to emit |
+|---|---|---|
+| `EMBEDIQ_OBS_EVT_AI_INFERENCE_START` | `0x17` | Before calling model inference |
+| `EMBEDIQ_OBS_EVT_AI_INFERENCE_END` | `0x18` | After inference returns |
+| `EMBEDIQ_OBS_EVT_AI_MODEL_LOAD` | `0x19` | When model is loaded into memory |
+| `EMBEDIQ_OBS_EVT_AI_CONFIDENCE_THRESHOLD` | `0x1A` | If confidence drops below threshold |
+
+See `docs/architecture/AI_FIRST_ARCHITECTURE.md §2` for field usage per constant.
+
+## FB Metadata and safety_class
+
+Every FB can register metadata via `embediq_meta_register()`. The `safety_class` field
+records the applicable safety standard:
+```c
+static const EmbedIQ_FB_Meta_t fb_meta = {
+    .name        = "fb_temp_controller",
+    .version     = "1.0.0",
+    .description = "Thermal FSM — monitors temperature and drives safety state.",
+    .boot_phase  = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    .safety_class = "NONE",   /* or "IEC62304:CLASS-B" for medical deployments */
+};
+```
+
+See `COMPLIANCE.md §5` for canonical encoding and `core/include/embediq_meta.h` for the full struct.

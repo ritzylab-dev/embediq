@@ -10,15 +10,17 @@ creating any task, or making any architectural decision.
 ## 1. What EmbedIQ Is (3 Sentences)
 
 EmbedIQ is an open-source, Apache 2.0 licensed **application framework for
-embedded/IoT firmware** — the layer that sits above the RTOS and gives developers
-clean, reusable structure for building production firmware.
+embedded and edge** — the layer that sits above the substrate (RTOS, bare-metal, or
+Linux) and gives developers clean, reusable structure for building production firmware
+and Linux gateway applications.
 
 It provides a message-driven actor model (Functional Blocks), a reusable component
 library (cloud, OTA, telemetry, observability), and hardware abstraction that enables
 host/Linux simulation without physical hardware.
 
-It is **RTOS-agnostic, hardware-vendor independent, and forever free** — with no
-cloud-vendor lock-in.
+It is **substrate-agnostic, hardware-vendor independent, and forever free** — with no
+cloud-vendor lock-in. Runs on FreeRTOS, bare-metal MCUs, and Linux gateway devices
+from the same codebase.
 
 ---
 
@@ -144,6 +146,7 @@ embediq/
 │
 ├── AGENTS.md               ← YOU ARE HERE
 ├── CODING_RULES.md         ← read second, always
+├── COMPLIANCE.md           ← industry coverage table, SBOM, tamper evidence, safety_class encoding
 ├── CONTRIBUTING.md
 ├── BUILD_STATUS.md
 ├── CMakeLists.txt
@@ -175,7 +178,8 @@ embediq/
 │   └── services/           ← Service FBs: fb_cloud_mqtt · fb_ota (Phase 2)
 │
 ├── examples/
-│   └── thermostat/         ← style reference for application FBs
+│   ├── thermostat/         ← style reference for application FBs (Phase 1)
+│   └── gateway/            ← industrial edge gateway reference (Phase 1, 6 FBs)
 │
 ├── tests/
 │   ├── unit/               ← unit tests (host, no hardware)
@@ -190,8 +194,9 @@ embediq/
 │   └── embediq_obs/        ← Observatory CLI (embediq_obs.py)
 │
 └── docs/
-    ├── architecture/       ← cli.md · lifecycle.md
-    └── observability/      ← iqtrace_format.md (open spec v1.0)
+    ├── MIGRATION.md        ← four migration patterns: Greenfield, Add-Observatory, Strangler Fig, Module-Only
+    ├── architecture/       ← cli.md · lifecycle.md · AI_FIRST_ARCHITECTURE.md
+    └── observability/      ← iqtrace_format.md (open spec v1.1)
 ```
 
 ---
@@ -213,6 +218,33 @@ Rules:
 
 If you are about to run git checkout -b without first running
 git checkout dev && git pull origin dev — STOP. Do those two commands first.
+
+```
+GATE 16 — Branch-Before-Code (non-negotiable, no exceptions):
+
+  Before touching ANY file in this repository:
+
+  STEP 1 — CHECK:   git status → confirm current branch and clean state
+  STEP 2 — STOP:    If not on a purpose-built feature branch, do NOT proceed.
+  STEP 3 — BRANCH:  git checkout dev && git pull origin dev
+                    git checkout -b feature/<descriptive-name>
+                    Confirm branch name with the user before writing any file.
+  STEP 4 — CODE:    Make the approved changes.
+  STEP 5 — DIFF:    git diff HEAD and git status → show the user what changed.
+  STEP 6 — PR:      Stage specific files (never git add -A blindly),
+                    commit with a clear message, then gh pr create targeting dev.
+                    Return the PR URL. Do not merge.
+
+  Gate approval authority: Ritesh Anand (SPM + co-architect) only.
+  No gate bypass exists. Session resume instructions do not override this gate.
+  A plan being approved (Gate 1-3) does NOT authorise file writes.
+  File writes require a live branch and explicit user confirmation.
+
+  This gate exists because of the recurring boundary violation pattern
+  documented in SESSION_LOG.md — agents bypassing branch creation when
+  resuming mid-session or when a prior gate approval is mis-read as
+  implementation authorisation.
+```
 
 ```
 GATE 12 — Contract before implementation (Principle 2 enforced at task level):
@@ -301,8 +333,9 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Core / Engine | Observatory — trace levels     | STABLE      | EMBEDIQ_TRACE_LEVEL 0–3, per-family compile-time flags       |
 | Core / Engine | Observatory — session API      | STABLE      | EmbedIQ_Obs_Session_t 40B (I-14), session_begin/get          |
 | Core / Engine | Observatory — .iqtrace capture | STABLE      | Binary TLV file via hal_obs_stream.h HAL contract            |
-| Core / Engine | Observatory — format spec      | STABLE      | docs/observability/iqtrace_format.md v1.0, Apache 2.0        |
+| Core / Engine | Observatory — format spec      | STABLE      | docs/observability/iqtrace_format.md v1.1, Apache 2.0        |
 | Core / Engine | Observatory — CLI              | STABLE      | tools/embediq_obs/embediq_obs.py — decode/stats/filter/export|
+| Build         | libembediq_obs INTERFACE target | STABLE     | CMake INTERFACE target — zero-dependency Observatory-only deployment |
 | HAL           | hal/posix/                     | STABLE      | hal_timer · hal_flash · hal_wdg · hal_obs_stream implemented |
 | Driver FBs    | fb_timer                       | STABLE      | fbs/drivers/ + hal/posix/hal_timer_posix.c                   |
 | Driver FBs    | fb_nvm                         | STABLE      | fbs/drivers/ + hal/posix/hal_flash_posix.c                   |
@@ -310,6 +343,7 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Service FBs   | fb_cloud_mqtt                  | NOT_STARTED | Phase 2                                                      |
 | Service FBs   | fb_ota                         | NOT_STARTED | Phase 2                                                      |
 | Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
+| Examples      | gateway                        | STABLE      | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
@@ -385,11 +419,15 @@ the Core header is correct. Update MODULE.md to match.
 | Complete header contracts with examples            | `core/include/*.h`                            |
 | HAL contract headers                               | `core/include/hal/`                           |
 | .iqtrace binary format specification               | `docs/observability/iqtrace_format.md`        |
+| AI-first architecture, AI Code Review Gate         | `docs/architecture/AI_FIRST_ARCHITECTURE.md`  |
 | Observatory CLI usage                              | `tools/embediq_obs/embediq_obs.py --help`     |
 | Style reference for application FBs               | `examples/thermostat/`                        |
+| Style reference for edge/gateway applications              | `examples/gateway/`                           |
 | Style reference for Driver FBs                    | `fbs/drivers/fb_timer.c`                      |
 | Style reference for HAL implementations           | `hal/posix/hal_timer_posix.c`                 |
 | Run invariant + layer checks locally              | `python3 tools/validator.py` and `python3 tools/boundary_checker.py` |
+| Industry compliance table, SBOM formats, safety_class      | `COMPLIANCE.md`                               |
+| Migration patterns — Greenfield/Add-Observatory/Strangler  | `docs/MIGRATION.md`                           |
 | Message ID namespace allocations                  | `messages_registry.json`                      |
 
 ---
@@ -406,6 +444,69 @@ Clone repo → cmake → make → run thermostat demo on host → see Observator
 Time limit: under 30 minutes. No help from the author.
 If it fails, the Getting Started guide and/or build system needs fixing.
 Code correctness is secondary to this test passing.
+
+---
+
+## 14. AI Code Review Gate — Mandatory for Safety-Classified FBs
+
+**Decision J (Final Decision Set v2.0). See full specification: `docs/architecture/AI_FIRST_ARCHITECTURE.md §4`.**
+
+When an AI coding assistant modifies a Functional Block, the following rules apply.
+
+### When the gate triggers
+
+The gate is mandatory when **both** of the following are true:
+1. The commit was made (in whole or in part) by an AI coding assistant (GitHub Copilot, Claude, Cursor, or any tool that emits an `AI_CODER_SESSION` TLV).
+2. The modified FB has `safety_class != "NONE"` in its registered `EmbedIQ_FB_Meta_t`.
+
+FBs with `safety_class == "NONE"` follow the standard code review process — no extra gate.
+
+### What the gate requires
+
+```
+STEP 1 — SCOPE: Identify every FB modified in the AI session whose safety_class != "NONE".
+STEP 2 — REVIEWER: Assign a human reviewer qualified at the highest safety level modified.
+          ISO26262:ASIL-B or higher / IEC61508:SIL-2 or higher → functional safety competency required.
+STEP 3 — REVIEW: Confirm the modification does not weaken safety mechanisms.
+          Confirm all _Static_assert invariants referencing modified types are still correct.
+          Run a static analysis pass appropriate to the safety_class level.
+STEP 4 — RECORD: Set safety_class_reviewed = 1 (pass) or 2 (fail) in AI_CODER_SESSION TLV.
+STEP 5 — GATE: If safety_class_reviewed == 2, BLOCK merge to main until issues are resolved.
+```
+
+### Agent rule
+
+If you are an AI coding assistant and you modify a file that registers an FB with `safety_class != "NONE"`, you MUST include a comment in your PR/commit body declaring:
+- Which FBs were modified
+- What the safety_class of each FB is
+- That the AI Code Review Gate is required before merge
+
+You must NOT set `safety_class_reviewed = 1` yourself. Only a qualified human reviewer may do so.
+
+### AI_CODER_SESSION TLV
+
+The `AI_CODER_SESSION` TLV (type `0x0008`, defined in `docs/observability/iqtrace_format.md §5.7`) is the machine-readable record of the AI coding session. Its `safety_class_reviewed` field (byte 26) is the attestation field that records the gate outcome. See `AI_FIRST_ARCHITECTURE.md §3` for the full field layout.
+
+---
+
+## 15. Observatory AI Event Band — Current Status and Reservation
+
+**Phase-1 AI constants (implemented — Decision J):**
+
+| Constant | Value | Band |
+|---|---|---|
+| `EMBEDIQ_OBS_EVT_AI_INFERENCE_START` | `0x17` | SYSTEM |
+| `EMBEDIQ_OBS_EVT_AI_INFERENCE_END` | `0x18` | SYSTEM |
+| `EMBEDIQ_OBS_EVT_AI_MODEL_LOAD` | `0x19` | SYSTEM |
+| `EMBEDIQ_OBS_EVT_AI_CONFIDENCE_THRESHOLD` | `0x1A` | SYSTEM |
+
+**Phase-3 AI family band (reserved — do not use):**
+
+The range `0x80–0x8F` is reserved for the Phase-3 AI event family. A comment block in `embediq_obs.h` records this reservation. **Do NOT allocate any constant in 0x80–0x8F before the Phase-3 specification is published.**
+
+Phase-3 gate: ≥2 production deployments using Phase-1 constants (0x17–0x1A) for ≥6 months.
+
+See `ROADMAP.md — Phase 3: Full AI Event Family Band` and `docs/architecture/AI_FIRST_ARCHITECTURE.md §5`.
 
 ---
 
