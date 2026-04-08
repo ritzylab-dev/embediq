@@ -83,6 +83,74 @@ Agents: never add an include that skips a layer.
 
 ---
 
+## Library Architecture
+
+### Design
+
+Phase 2 introduces the standard integration path for third-party and platform components.
+Every library that ships with or integrates with EmbedIQ follows this pattern.
+
+**D-LIB-1: Libraries are not FBs.**
+A library provides services through an ops table (function pointer struct). An FB owns a
+library instance, calls it within its sub-function, and exposes results to the bus via
+typed messages. A library has no message-bus identity.
+
+**D-LIB-2: Every library declares itself via platform_lib_declare() before PLATFORM_INIT
+completes.**
+This gives each library an Observatory source ID and makes initialization observable at
+the platform level.
+
+**D-LIB-3: Third-party source code lives exclusively in third_party/<name>/ and is never
+modified.**
+Wrapper and integration code lives in components/<name>/. This boundary is enforced by CI.
+
+**D-LIB-4: The ops table is the integration contract.**
+A library exposes an embediq_<name>_ops_t struct. The FB calls only through this struct —
+the same pattern as the HAL contract, applied one layer up.
+
+**D-LIB-5: EMBEDIQ_OPS_STRICT_VERSION fields in the ops table allow version compatibility
+to be verified at compile time.**
+Mismatch is a build error, not a runtime discovery.
+
+### Phase 2 MCU Observatory Design Constraints
+
+The MCU Observatory implementation (Phase 2) must satisfy the following constraints.
+These are documented here so every contributor understands the contract before writing
+any MCU-targeted observation code.
+
+- **Ring buffer:** Lock-free, ISR-reentrant write. Two compile-time paths:
+  - ARMv7-M / ARMv8-M (Cortex-M3, M4, M7, M33): LDREX/STREX atomic compare-and-swap.
+  - ARMv6-M (Cortex-M0, M0+): CPSID/CPSIE interrupt disable — no LDREX/STREX on these cores.
+  - Compile-time dispatch: `#if defined(__ARM_ARCH_6M__)` in hal_obs_ring.c.
+- **Transport:** Dedicated observer task drains the ring. Never inline with emit().
+- **emit_from_isr() naming:** Exists so HAL ISR call sites can be audited by grep.
+- **Overflow:** Silent drop in ISR path. Observer task records OVERFLOW event (0x10) after
+  ring recovery. ISR does zero overflow handling.
+
+### SYSTEM Band Admission Policy
+
+The SYSTEM band (0x10–0x1F) accepts lifecycle events only. Admission criteria:
+
+- Lifecycle events: power-cycle, OTA, watchdog reset, maintenance mode, firmware start,
+  config load, AI model lifecycle.
+- 14 of 16 slots are taken. 0x1E and 0x1F are held as genuine reserve.
+- Library initialization is a resource acquisition event — it belongs in the RESOURCE
+  band (0x40+), not SYSTEM.
+- Any proposed SYSTEM band addition must answer: "Is this a system lifecycle event?"
+  If the answer is no, it belongs in a different band.
+
+### 16-Slot Library Source Named Constraint
+
+EMBEDIQ_LIB_SRC_* occupies 0xE0–0xEF: a maximum of 16 instrumented library sources per
+firmware build. This is a deliberate named constraint, not an accidental limit.
+
+One firmware build has a fixed, finite set of libraries. Only libraries that emit
+Observatory events receive a source ID. In practice this count is always well under 16.
+platform_lib_declare() enforces this with a _Static_assert at build time. Attempting to
+register a 17th library source is a build error with a clear diagnostic message.
+
+---
+
 ## Layer Definitions
 
 ### Driver FB vs Service FB (both are Layer 2)
