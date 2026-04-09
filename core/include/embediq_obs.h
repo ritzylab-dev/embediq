@@ -182,8 +182,13 @@ extern "C" {
 #define EMBEDIQ_OBS_EVT_FAULT_CLEARED       0x63u /**< Previously reported fault cleared.
                                                         Closes the fault lifecycle. */
 /* 0x64–0x65 reserved for future library fault events */
-/* 0x66: EMBEDIQ_OBS_EVT_OSAL_FAULT — reserved, activated in XOBS-1 (before FreeRTOS OSAL) */
-/* 0x67: EMBEDIQ_OBS_EVT_HAL_FAULT  — reserved, activated in XOBS-2 (before ESP32 HAL)    */
+#define EMBEDIQ_OBS_EVT_OSAL_FAULT  0x66u  /**< OSAL resource fault (XOBS-1).
+                                                 source_fb_id: EMBEDIQ_OSAL_SRC_* (tasks/queues/mutexes/signals).
+                                                 state_or_flag: 0=task_create_fail  1=mutex_timeout
+                                                                2=queue_send_full   3=signal_timeout
+                                                                4=stack_overflow.
+                                                 msg_id: resource instance index (0 on POSIX). */
+/* 0x67: EMBEDIQ_OBS_EVT_HAL_FAULT — reserved, activated in XOBS-2 (before ESP32 HAL) */
 /* 0x68–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */

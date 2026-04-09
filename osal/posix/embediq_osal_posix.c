@@ -153,6 +153,7 @@ EmbedIQ_Task_t *embediq_osal_task_create(const char    *name,
     if (pthread_create(&task->thread, NULL, _task_entry, w) != 0) {
         free(w);
         free(task);
+        EMBEDIQ_OSAL_OBS_TASK_FAIL(0);
         return NULL;
     }
     return task;
@@ -217,12 +218,14 @@ embediq_err_t embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
     while (q->count >= q->depth) {
         if (timeout_ms == 0) {
             pthread_mutex_unlock(&q->mutex);
+            EMBEDIQ_OSAL_OBS_QUEUE_FULL(0);
             return EMBEDIQ_ERR_TIMEOUT;
         }
         if (timed) {
             if (pthread_cond_timedwait(&q->not_full, &q->mutex, &abs)
                     == ETIMEDOUT) {
                 pthread_mutex_unlock(&q->mutex);
+                EMBEDIQ_OSAL_OBS_QUEUE_FULL(0);
                 return EMBEDIQ_ERR_TIMEOUT;
             }
         } else {
@@ -329,6 +332,7 @@ embediq_err_t embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t m
         if (pthread_cond_timedwait(&sig->cond, &sig->mutex, &abs)
                 == ETIMEDOUT) {
             pthread_mutex_unlock(&sig->mutex);
+            EMBEDIQ_OSAL_OBS_SIGNAL_TIMEOUT(0);
             return EMBEDIQ_ERR_TIMEOUT;
         }
     }
@@ -367,7 +371,9 @@ embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
         return (pthread_mutex_lock(&m->mutex) == 0) ? EMBEDIQ_OK : EMBEDIQ_ERR_TIMEOUT;
     }
     if (timeout_ms == 0) {
-        return (pthread_mutex_trylock(&m->mutex) == 0) ? EMBEDIQ_OK : EMBEDIQ_ERR_TIMEOUT;
+        if (pthread_mutex_trylock(&m->mutex) == 0) return EMBEDIQ_OK;
+        EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(0);
+        return EMBEDIQ_ERR_TIMEOUT;
     }
 
     /* Poll at 1 ms granularity — sufficient for simulation use cases */
@@ -379,7 +385,9 @@ embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
         nanosleep(&ns, NULL);
     }
     /* One final attempt once the deadline is reached */
-    return (pthread_mutex_trylock(&m->mutex) == 0) ? EMBEDIQ_OK : EMBEDIQ_ERR_TIMEOUT;
+    if (pthread_mutex_trylock(&m->mutex) == 0) return EMBEDIQ_OK;
+    EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(0);
+    return EMBEDIQ_ERR_TIMEOUT;
 }
 
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)
