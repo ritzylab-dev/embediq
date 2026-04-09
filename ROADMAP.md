@@ -354,6 +354,13 @@ Capabilities the architecture is designed to support. Implementation is Phase 4+
   reconstruct the FB topology without the build system. Architecture does not
   prevent this; SESSION TLV carries firmware version today and is the natural
   anchor for a topology block.
+- **Observatory as standalone link target** — `embediq_obs_emit()` currently
+  lives inside `embediq_fb_engine`. XOBS-1 introduced a bidirectional static
+  library dependency (OSAL → Engine via obs). Future work: extract Observatory
+  emit into a thin `embediq_obs` static library that both OSAL and Engine link
+  against, removing the circularity. No functional impact today — CMake resolves
+  it at link time. Trigger: when a second OSAL implementation (FreeRTOS) makes
+  the bidirectional dependency harder to manage.
 
 ---
 
