@@ -27,3 +27,5 @@ target_compile_options(embediq_hal_posix PRIVATE
     -Wextra
     -Werror
 )
+
+target_link_libraries(embediq_hal_posix PUBLIC embediq_fb_engine)
