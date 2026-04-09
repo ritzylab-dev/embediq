@@ -12,8 +12,6 @@ Layer rules (a file in layer X may only include from allowed layers):
   core/src/        → allowed: core/include/, core/include/hal/
   osal/posix/      → allowed: core/include/, core/include/hal/
   osal/freertos/   → allowed: core/include/, core/include/hal/
-  platform/posix/  → allowed: core/include/, core/include/hal/, osal/posix/
-  platform/esp32/  → allowed: core/include/, core/include/hal/, osal/freertos/
   components/      → allowed: C stdlib + own third_party/<name>/ only (no embediq_*.h)
   examples/        → allowed: core/include/, core/include/hal/, fbs/drivers/, fbs/services/
   tests/           → allowed: core/include/, core/include/hal/, examples/, fbs/drivers/, fbs/services/
@@ -71,9 +69,6 @@ _ALLOWED = {
     'core/src':        {'core/include'},
     'osal/posix':      {'core/include', 'core/include/hal'},
     'osal/freertos':   {'core/include', 'core/include/hal'},
-    # RETIRED (PR #29): platform/ layer was removed; rules kept for reference only.
-    'platform/posix':  {'core/include', 'core/include/hal', 'osal/posix'},
-    'platform/esp32':  {'core/include', 'core/include/hal', 'osal/freertos'},
     'components':      set(),  # stdlib + own third_party/<name>/ only; no embediq_*.h
     'examples':        {'core/include', 'core/include/hal', 'fbs/drivers', 'fbs/services'},
     'tests':           {'core/include', 'core/include/hal', 'examples', 'fbs/drivers', 'fbs/services'},

@@ -36,6 +36,12 @@ typedef int32_t embediq_err_t;
 #define EMBEDIQ_ERR_NOMEM     ((embediq_err_t)-3)  /**< Allocation or resource limit reached */
 #define EMBEDIQ_ERR_INVALID   ((embediq_err_t)-4)  /**< Invalid argument or precondition */
 
+/** Returns non-zero (true) when err indicates success. */
+#define EMBEDIQ_SUCCEEDED(err)  ((err) == EMBEDIQ_OK)
+
+/** Returns non-zero (true) when err indicates failure. */
+#define EMBEDIQ_FAILED(err)     ((err) != EMBEDIQ_OK)
+
 /* ---------------------------------------------------------------------------
  * Opaque OS primitive handles
  *
