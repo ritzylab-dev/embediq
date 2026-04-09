@@ -108,6 +108,23 @@ if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     add_subdirectory(fbs/drivers)
     add_subdirectory(tests/unit)
     add_subdirectory(tests/integration)
+
+    # -----------------------------------------------------------------------
+    # Component libraries + tests (LIB-3)
+    # -----------------------------------------------------------------------
+    add_library(embediq_crc STATIC
+        components/embediq_crc/embediq_crc.c)
+    target_include_directories(embediq_crc PUBLIC
+        ${CMAKE_SOURCE_DIR}/components/embediq_crc)
+    target_compile_options(embediq_crc PRIVATE -Wall -Wextra -Werror)
+
+    add_executable(test_embediq_crc
+        components/embediq_crc/test_embediq_crc.c)
+    target_include_directories(test_embediq_crc PRIVATE
+        ${CMAKE_SOURCE_DIR}/components/embediq_crc)
+    target_link_libraries(test_embediq_crc PRIVATE embediq_crc)
+    target_compile_options(test_embediq_crc PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME unit_embediq_crc COMMAND test_embediq_crc)
 endif()
 
 # ---------------------------------------------------------------------------
