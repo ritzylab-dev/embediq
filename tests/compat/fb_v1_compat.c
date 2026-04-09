@@ -33,8 +33,8 @@
 #include "embediq_time.h"
 #include "embediq_endpoint.h"
 #include "embediq_meta.h"
-#include "embediq_ota.h"
-#include "embediq_mqtt.h"
+#include "ops/embediq_ota.h"
+#include "ops/embediq_mqtt.h"
 #include "embediq_bridge.h"
 
 /* Generated catalog — present only when -I generated/ is on the compile line. */

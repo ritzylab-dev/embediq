@@ -22,6 +22,18 @@
 
 #include <stdbool.h>
 
+/* ---------------------------------------------------------------------------
+ * Async bus post token
+ *
+ * An opaque token passed to async ops table callbacks. The token is the
+ * ONLY argument permitted inside a callback — it physically prevents
+ * callbacks from accessing FB state or calling OSAL primitives.
+ *
+ * Lifecycle: valid only for the duration of the callback invocation.
+ * The only permitted operation on a token: pass it to embediq_bus_post_async().
+ * ------------------------------------------------------------------------- */
+typedef struct embediq_bus_token embediq_bus_token_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -83,6 +95,23 @@ const char *embediq_bus_resolve_id(uint8_t endpoint_id);
  * Used by the per-FB dispatch loop created by embediq_engine_dispatch_boot().
  */
 bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out);
+
+/* ---------------------------------------------------------------------------
+ * Async bus post — ISR-safe and callback-safe
+ * ------------------------------------------------------------------------- */
+
+/**
+ * ISR-safe and callback-safe bus post.
+ *
+ * The ONLY function permitted inside an async ops table callback.
+ * On FreeRTOS: maps to xQueueSendFromISR().
+ * On POSIX host: maps to embediq_publish() with mutex guard.
+ *
+ * token: must be the token received in the callback — not a stored copy.
+ * msg:   message to post; copied by value.
+ * Returns EMBEDIQ_OK on success, EMBEDIQ_ERR if queue is full.
+ */
+int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *msg);
 
 #ifdef __cplusplus
 }

@@ -42,7 +42,16 @@ extern "C" {
  * All function pointers must be non-NULL when registered.
  * ------------------------------------------------------------------------- */
 
+/** ABI version for embediq_ota_ops_t. Increment on any breaking field change. */
+#define EMBEDIQ_OTA_OPS_VERSION  1u
+
 typedef struct {
+    /**
+     * MUST BE FIRST — ABI versioning (I-17).
+     * Set to EMBEDIQ_OTA_OPS_VERSION at ops table declaration.
+     */
+    uint32_t version;
+
     /**
      * Prepare the inactive partition for writing (erase, bounds check).
      * Called once at the start of each OTA session.

@@ -56,6 +56,47 @@ extern "C" {
 #define EMBEDIQ_OBS_BAND_STRIDE          0x10u
 
 /* ---------------------------------------------------------------------------
+ * source_fb_id namespace (uint8_t)
+ *
+ * Disambiguation contract: source_fb_id < 0xC0 identifies an FB endpoint
+ * instance (index into the endpoint table). source_fb_id >= 0xC0 identifies
+ * a non-FB layer source. Decoders MUST branch on this boundary.
+ *
+ * 0x00–0xBF  FB endpoint indices         (192 slots; EMBEDIQ_MAX_ENDPOINTS = 64)
+ * 0xC0–0xCF  OSAL resource type IDs      (16 slots)
+ * 0xD0–0xDF  HAL peripheral source IDs   (16 slots)
+ * 0xE0–0xEF  Library source IDs          (16 slots — named constraint)
+ * 0xF0–0xFF  Reserve
+ *
+ * See: ARCHITECTURE.md — Phase 2 MCU Observatory, source_fb_id section
+ * ------------------------------------------------------------------------- */
+
+/* OSAL resource type IDs (0xC0–0xCF) */
+#define EMBEDIQ_OSAL_SRC_TASKS    0xC0u  /**< OSAL task pool */
+#define EMBEDIQ_OSAL_SRC_QUEUES   0xC1u  /**< OSAL queue pool */
+#define EMBEDIQ_OSAL_SRC_MUTEXES  0xC2u  /**< OSAL mutex pool */
+#define EMBEDIQ_OSAL_SRC_SIGNALS  0xC3u  /**< OSAL signal pool */
+#define EMBEDIQ_OSAL_SRC_SEMS     0xC4u  /**< OSAL semaphore pool */
+/* 0xC5–0xCF reserved for future OSAL resource types */
+
+/* HAL peripheral source IDs (0xD0–0xDF) */
+#define EMBEDIQ_HAL_SRC_UART      0xD0u
+#define EMBEDIQ_HAL_SRC_I2C       0xD1u
+#define EMBEDIQ_HAL_SRC_SPI       0xD2u
+#define EMBEDIQ_HAL_SRC_GPIO      0xD3u
+#define EMBEDIQ_HAL_SRC_FLASH     0xD4u
+#define EMBEDIQ_HAL_SRC_TIMER     0xD5u
+#define EMBEDIQ_HAL_SRC_WDG       0xD6u
+/* 0xD7–0xDF reserved for additional HAL peripherals */
+
+/* Library source IDs (0xE0–0xEF) — assigned by embediq_platform_lib_declare() */
+#define EMBEDIQ_LIB_SRC_BASE      0xE0u  /**< First library source slot */
+#define EMBEDIQ_LIB_SRC_MAX       0xEFu  /**< Last library source slot */
+/* Maximum 16 instrumented library sources per firmware build (named constraint).
+ * Slot 17 causes embediq_platform_lib_declare() to return EMBEDIQ_ERR. */
+/* 0xF0–0xFF reserved */
+
+/* ---------------------------------------------------------------------------
  * Event type constants — organised by family band
  *
  * Decision A  — existing constants (0x10, 0x20–0x22, 0x30–0x31, 0x60): FROZEN.
@@ -121,7 +162,10 @@ extern "C" {
 #define EMBEDIQ_OBS_EVT_LIFECYCLE           0x30u /**< FB lifecycle state transition */
 #define EMBEDIQ_OBS_EVT_FSM_TRANS           0x31u /**< FSM state machine transition */
 
-/* RESOURCE family (0x40–0x4F) — reserved, not yet emitted */
+/* RESOURCE family (0x40–0x4F) — resource acquisition and lifecycle */
+#define EMBEDIQ_OBS_EVT_LIB_INIT    0x40u  /**< Library global init completed (once per boot per library) */
+#define EMBEDIQ_OBS_EVT_LIB_DEINIT  0x41u  /**< Library global deinit called at shutdown */
+/* 0x42–0x4F reserved for Phase 2 OSAL and HAL resource events (XOBS-1, XOBS-2) */
 
 /* TIMING family (0x50–0x5F) — reserved, not yet emitted */
 
@@ -137,6 +181,10 @@ extern "C" {
                                                         PCI DSS Req.10 / IEC 62443 / ISO 27001. */
 #define EMBEDIQ_OBS_EVT_FAULT_CLEARED       0x63u /**< Previously reported fault cleared.
                                                         Closes the fault lifecycle. */
+/* 0x64–0x65 reserved for future library fault events */
+/* 0x66: EMBEDIQ_OBS_EVT_OSAL_FAULT — reserved, activated in XOBS-1 (before FreeRTOS OSAL) */
+/* 0x67: EMBEDIQ_OBS_EVT_HAL_FAULT  — reserved, activated in XOBS-2 (before ESP32 HAL)    */
+/* 0x68–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */
 
@@ -185,7 +233,12 @@ typedef enum {
     EMBEDIQ_OBS_FAMILY_TIMING   = 4,
     EMBEDIQ_OBS_FAMILY_FAULT    = 5,
     EMBEDIQ_OBS_FAMILY_FUNCTION = 6,
-    EMBEDIQ_OBS_FAMILY_UNKNOWN  = 7,
+    EMBEDIQ_OBS_FAMILY_AI       = 7,  /**< Phase 3 reserved band (0x80–0x8F) */
+    EMBEDIQ_OBS_FAMILY_VENDOR   = 8,  /**< Community/vendor extension (0x90–0xFF) */
+    /* NOTE: EMBEDIQ_OBS_FAMILY_UNKNOWN integer value is 9 as of this release.
+     * It was 7 in v0.1.x. Named-constant usage is safe across all versions.
+     * Any code comparing against the raw integer 7 to mean UNKNOWN must be updated. */
+    EMBEDIQ_OBS_FAMILY_UNKNOWN  = 9,
 } embediq_obs_family_t;
 
 /* Derive family from event_type band — zero runtime overhead when inlined */
@@ -197,6 +250,8 @@ embediq_obs_event_family(uint8_t event_type) {
     if (event_type < EMBEDIQ_OBS_BAND_TIMING_START)   return EMBEDIQ_OBS_FAMILY_RESOURCE;
     if (event_type < EMBEDIQ_OBS_BAND_FAULT_START)    return EMBEDIQ_OBS_FAMILY_TIMING;
     if (event_type < EMBEDIQ_OBS_BAND_FUNCTION_START) return EMBEDIQ_OBS_FAMILY_FAULT;
+    if (event_type >= 0x90u) return EMBEDIQ_OBS_FAMILY_VENDOR;
+    if (event_type >= 0x80u) return EMBEDIQ_OBS_FAMILY_AI;
     return EMBEDIQ_OBS_FAMILY_FUNCTION;
 }
 
@@ -445,6 +500,22 @@ int embediq_obs_capture_begin(const char *path);
  * No-op and returns -1 on MCU builds.
  */
 int embediq_obs_capture_end(void);
+
+/**
+ * embediq_obs_emit_from_isr() — ISR-safe event emission. Declared void.
+ *
+ * Fire-and-forget: the ISR does not wait for emission to complete and must
+ * not attempt overflow handling. Overflow detection occurs exclusively in
+ * the observer task.
+ *
+ * On host (EMBEDIQ_PLATFORM_HOST): delegates to embediq_obs_emit().
+ * On MCU (Phase 2): uses ISR-reentrant ring write (XOBS-1 gate).
+ *
+ * The _from_isr suffix ensures ISR call sites are grep-auditable.
+ */
+void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
+                                uint8_t target, uint8_t state,
+                                uint16_t msg_id);
 
 #ifdef __cplusplus
 }
