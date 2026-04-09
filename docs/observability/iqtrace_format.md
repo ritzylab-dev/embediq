@@ -65,6 +65,23 @@ explicitly. The band map is:
 | 0x60-0x6F  | FAULT    | Watchdog, assertion, error entry |
 | 0x70-0x7F  | FUNCTION | Function enter/exit tracing (reserved) |
 
+## Migration Notice — EMBEDIQ_OBS_FAMILY_UNKNOWN integer value change
+
+**Affected versions:** Any parser or tool that hardcoded the integer value of
+`EMBEDIQ_OBS_FAMILY_UNKNOWN` prior to LIB-4A.
+
+When `EMBEDIQ_OBS_FAMILY_AI` (7) and `EMBEDIQ_OBS_FAMILY_VENDOR` (8) were
+added in LIB-4A, `EMBEDIQ_OBS_FAMILY_UNKNOWN` shifted from its previous
+integer position to **9**.
+
+**Action required:** Do not hardcode integer values for family constants.
+Always use the named constants from `core/include/embediq_obs.h`:
+
+  EMBEDIQ_OBS_FAMILY_UNKNOWN = 9   /* as of LIB-4A */
+
+Parsers that compared the raw family byte to a hardcoded integer for UNKNOWN
+must be updated to use the named constant or the value 9.
+
 **Ordering invariant (I-13):** Always use `sequence` for ordering and gap
 detection. `timestamp_us` is informational only and wraps at ~71 minutes.
 
