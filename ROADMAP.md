@@ -145,7 +145,7 @@ can contribute to every deliverable.
 - [x] `messages_registry.json` — initial namespace allocations for all official FBs
       (fb_cloud_mqtt, fb_telemetry, fb_provisioning, fb_ota, fb_uart, fb_i2c,
       fb_spi, fb_timer, fb_watchdog, fb_nvm, fb_bridge, fb_logger, thermostat,
-      gateway). All official ranges allocated.
+      gateway). 203-line file in repo. All official ranges allocated.
 - [ ] `messages.iq` runtime integration — schema_id verified at runtime in debug
       builds. Generator emits validation table alongside typed structs.
 
@@ -350,10 +350,10 @@ Capabilities the architecture is designed to support. Implementation is Phase 4+
   (stack high-water) and message latency events. (E1-f from expert review.)
 - **TOPOLOGY TLV in `.iqtrace`** — a future TLV type carrying the full FB
   registry snapshot (names, safety classes, message subscriptions, boot phases)
-  at session start. Enables any decoder — CLI, community tools — to reconstruct
-  the FB topology without the build system. Architecture does not prevent this;
-  SESSION TLV carries firmware version today and is the natural anchor for a
-  topology block.
+  at session start. Enables any decoder — CLI, Studio, community tools — to
+  reconstruct the FB topology without the build system. Architecture does not
+  prevent this; SESSION TLV carries firmware version today and is the natural
+  anchor for a topology block.
 
 ---
 
