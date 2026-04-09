@@ -122,8 +122,8 @@ static void test_queue_send_timeout_returns_false(void)
     EmbedIQ_Queue_t *q  = embediq_osal_queue_create(1, sizeof(uint8_t));
     uint8_t item = 0xFFu;
     embediq_osal_queue_send(q, &item, 0);              /* fill it */
-    bool ok = embediq_osal_queue_send(q, &item, 0);   /* must fail */
-    ASSERT(!ok, "send to full queue with timeout=0 must return false");
+    embediq_err_t ok = embediq_osal_queue_send(q, &item, 0);   /* must fail */
+    ASSERT(ok != EMBEDIQ_OK, "send to full queue with timeout=0 must return non-OK");
 }
 
 /* ---------------------------------------------------------------------------
@@ -146,9 +146,9 @@ static void test_queue_send_block_forever(void)
     embediq_osal_queue_send(q, &item, 0);   /* fill queue (depth 1) */
     EmbedIQ_Task_t *t = embediq_osal_task_create(
             "recv_delay", recv_after_delay, q, 1, 4096);
-    bool ok = embediq_osal_queue_send(q, &item, UINT32_MAX); /* blocks */
+    embediq_err_t ok = embediq_osal_queue_send(q, &item, UINT32_MAX); /* blocks */
     embediq_osal_task_delete(t);
-    ASSERT(ok, "send with UINT32_MAX must succeed once space is available");
+    ASSERT(ok == EMBEDIQ_OK, "send with UINT32_MAX must succeed once space is available");
 }
 
 /* ---------------------------------------------------------------------------
@@ -243,9 +243,9 @@ static void test_time_us_increases_monotonically(void)
 static void test_mutex_lock_unlock(void)
 {
     EmbedIQ_Mutex_t *m = embediq_osal_mutex_create();
-    bool locked = embediq_osal_mutex_lock(m, UINT32_MAX);
+    embediq_err_t locked = embediq_osal_mutex_lock(m, UINT32_MAX);
     embediq_osal_mutex_unlock(m);
-    ASSERT(locked, "mutex_lock with UINT32_MAX must succeed on an unlocked mutex");
+    ASSERT(locked == EMBEDIQ_OK, "mutex_lock with UINT32_MAX must succeed on an unlocked mutex");
 }
 
 /* ---------------------------------------------------------------------------
@@ -275,10 +275,10 @@ static void test_mutex_timeout_returns_false(void)
     EmbedIQ_Task_t *holder = embediq_osal_task_create(
             "holder", hold_mutex_fn, NULL, 1, 4096);
     embediq_osal_signal_wait(g_lock_acquired); /* wait until holder has lock */
-    bool got = embediq_osal_mutex_lock(g_held_mutex, 50); /* 50 ms timeout */
-    if (got) embediq_osal_mutex_unlock(g_held_mutex);
+    embediq_err_t got = embediq_osal_mutex_lock(g_held_mutex, 50); /* 50 ms timeout */
+    if (got == EMBEDIQ_OK) embediq_osal_mutex_unlock(g_held_mutex);
     embediq_osal_task_delete(holder);
-    ASSERT(!got, "mutex_lock must return false when timed out while held");
+    ASSERT(got != EMBEDIQ_OK, "mutex_lock must return non-OK when timed out while held");
 }
 
 /* ---------------------------------------------------------------------------

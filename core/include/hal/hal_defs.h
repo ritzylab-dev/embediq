@@ -33,6 +33,18 @@ extern "C" {
 #define HAL_ERR_TIMEOUT  (-3)
 #define HAL_ERR_IO       (-4)
 
+/* ---------------------------------------------------------------------------
+ * HAL error code range assertion
+ *
+ * Observability encoding uses (uint8_t)(-(err)) to pack HAL error codes into
+ * a single byte. Values outside [-1, -127] alias silently — the assert
+ * catches any future constant added outside the safe range before it ships.
+ * ------------------------------------------------------------------------- */
+_Static_assert(HAL_ERR_INVALID >= -127, "HAL_ERR_INVALID out of obs encoding range");
+_Static_assert(HAL_ERR_BUSY    >= -127, "HAL_ERR_BUSY out of obs encoding range");
+_Static_assert(HAL_ERR_TIMEOUT >= -127, "HAL_ERR_TIMEOUT out of obs encoding range");
+_Static_assert(HAL_ERR_IO      >= -127, "HAL_ERR_IO out of obs encoding range");
+
 #ifdef __cplusplus
 }
 #endif

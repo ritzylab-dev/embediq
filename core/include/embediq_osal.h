@@ -30,8 +30,11 @@ extern "C" {
  * ------------------------------------------------------------------------- */
 
 typedef int32_t embediq_err_t;
-#define EMBEDIQ_OK   ((embediq_err_t) 0)
-#define EMBEDIQ_ERR  ((embediq_err_t)-1)
+#define EMBEDIQ_OK            ((embediq_err_t) 0)
+#define EMBEDIQ_ERR           ((embediq_err_t)-1)
+#define EMBEDIQ_ERR_TIMEOUT   ((embediq_err_t)-2)  /**< Operation timed out or would block */
+#define EMBEDIQ_ERR_NOMEM     ((embediq_err_t)-3)  /**< Allocation or resource limit reached */
+#define EMBEDIQ_ERR_INVALID   ((embediq_err_t)-4)  /**< Invalid argument or precondition */
 
 /* ---------------------------------------------------------------------------
  * Opaque OS primitive handles
@@ -91,13 +94,19 @@ void embediq_osal_delay_ms(uint32_t ms);
 /** Create a queue holding depth items of item_size bytes each. */
 EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
 
-/** Copy item into the back of the queue. Blocks up to timeout_ms. */
-bool embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
-                              uint32_t timeout_ms);
+/** Copy item into the back of the queue. Blocks up to timeout_ms.
+ *  Returns EMBEDIQ_OK on success.
+ *  Returns EMBEDIQ_ERR_TIMEOUT if the queue is full and timeout elapsed.
+ *  Never negate this return value with ! (R-osal-01). */
+embediq_err_t embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
+                                       uint32_t timeout_ms);
 
-/** Copy the front item out of the queue. Blocks up to timeout_ms. */
-bool embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
-                              uint32_t timeout_ms);
+/** Copy the front item out of the queue. Blocks up to timeout_ms.
+ *  Returns EMBEDIQ_OK on success.
+ *  Returns EMBEDIQ_ERR_TIMEOUT if the queue is empty and timeout elapsed.
+ *  Never negate this return value with ! (R-osal-01). */
+embediq_err_t embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
+                                       uint32_t timeout_ms);
 
 /** Return the number of items currently in the queue. */
 uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q);
@@ -118,8 +127,11 @@ EmbedIQ_Signal_t *embediq_osal_signal_create(void);
 /** Block until the signal is raised. */
 void embediq_osal_signal_wait(EmbedIQ_Signal_t *sig);
 
-/** Block up to ms milliseconds for the signal. Returns true if signalled. */
-bool embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t ms);
+/** Block up to ms milliseconds for the signal.
+ *  Returns EMBEDIQ_OK if the signal was raised.
+ *  Returns EMBEDIQ_ERR_TIMEOUT if the timeout elapsed without a signal.
+ *  Never negate this return value with ! (R-osal-01). */
+embediq_err_t embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t ms);
 
 /** Raise the signal from an ISR context. Must exit in < 10 cycles. */
 void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig);
@@ -131,8 +143,11 @@ void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig);
 /** Create an unlocked mutex. */
 EmbedIQ_Mutex_t *embediq_osal_mutex_create(void);
 
-/** Lock the mutex, blocking up to timeout_ms. Returns true if acquired. */
-bool embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
+/** Lock the mutex, blocking up to timeout_ms.
+ *  Returns EMBEDIQ_OK if the lock was acquired.
+ *  Returns EMBEDIQ_ERR_TIMEOUT if the timeout elapsed without acquiring the lock.
+ *  Never negate this return value with ! (R-osal-01). */
+embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
 
 /** Unlock a mutex held by the calling task. */
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
@@ -175,6 +190,20 @@ uint32_t embediq_osal_time_us(void);
 
 /** Monotonic millisecond clock. Wraps at 2^32 (~49 days). Informational only. */
 uint32_t embediq_osal_time_ms(void);
+
+/* ---------------------------------------------------------------------------
+ * OSAL observation obligation macros
+ *
+ * Activated in XOBS-1 (Phase 2 — before FreeRTOS OSAL implementation).
+ * Currently no-ops. Placed here so CI tool check_osal_obs.py can enforce
+ * their presence in every OSAL implementation file that touches tasks,
+ * queues, mutexes, or signals.
+ * ------------------------------------------------------------------------- */
+#define EMBEDIQ_OSAL_OBS_TASK_FAIL(idx)       ((void)0)
+#define EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(idx)   ((void)0)
+#define EMBEDIQ_OSAL_OBS_QUEUE_FULL(idx)      ((void)0)
+#define EMBEDIQ_OSAL_OBS_SIGNAL_TIMEOUT(idx)  ((void)0)
+#define EMBEDIQ_OSAL_OBS_STACK_OVERFLOW(idx)  ((void)0)
 
 #ifdef __cplusplus
 }
