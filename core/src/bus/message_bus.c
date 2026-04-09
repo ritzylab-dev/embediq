@@ -250,7 +250,7 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
 
         } else if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL) {
             /* ---- NORMAL: drop OLDEST on overflow ---- */
-            if (!embediq_osal_queue_send(q, &copy, 0u)) {
+            if (embediq_osal_queue_send(q, &copy, 0u) != EMBEDIQ_OK) {
                 EmbedIQ_Msg_t oldest;
                 embediq_osal_queue_recv(q, &oldest, 0u);  /* discard oldest */
                 embediq_osal_queue_send(q, &copy,   0u);  /* enqueue new */
@@ -265,7 +265,7 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
 
         } else {
             /* ---- LOW: drop INCOMING on overflow ---- */
-            if (embediq_osal_queue_send(q, &copy, 0u)) {
+            if (embediq_osal_queue_send(q, &copy, 0u) == EMBEDIQ_OK) {
                 if (g_notify_fn) g_notify_fn(ep);
             } else {
                 embediq_obs_emit(EMBEDIQ_OBS_EVT_QUEUE_DROP,
@@ -291,7 +291,7 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
     if (ep_id >= g_ep_count || priority > 2u || !out) return false;
     EmbedIQ_Queue_t *q = g_ep[ep_id].q[priority];
     if (!q) return false;
-    return embediq_osal_queue_recv(q, out, 0u);
+    return embediq_osal_queue_recv(q, out, 0u) == EMBEDIQ_OK;
 }
 
 /* ---------------------------------------------------------------------------
@@ -335,7 +335,7 @@ bool message_bus__test_recv(uint8_t ep_id, uint8_t prio, EmbedIQ_Msg_t *out)
     if (ep_id >= g_ep_count || prio > 2u) return false;
     EmbedIQ_Queue_t *q = g_ep[ep_id].q[prio];
     if (!q) return false;
-    return embediq_osal_queue_recv(q, out, 0u);
+    return embediq_osal_queue_recv(q, out, 0u) == EMBEDIQ_OK;
 }
 
 /** Return the total number of drop events emitted since last reset. */
