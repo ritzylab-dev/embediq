@@ -86,8 +86,9 @@ extern "C" {
 #define EMBEDIQ_HAL_SRC_GPIO      0xD3u
 #define EMBEDIQ_HAL_SRC_FLASH     0xD4u
 #define EMBEDIQ_HAL_SRC_TIMER     0xD5u
-#define EMBEDIQ_HAL_SRC_WDG       0xD6u
-/* 0xD7–0xDF reserved for additional HAL peripherals */
+#define EMBEDIQ_HAL_SRC_WDG        0xD6u
+#define EMBEDIQ_HAL_SRC_OBS_STREAM 0xD7u  /**< Observatory binary stream HAL */
+/* 0xD8–0xDF reserved for additional HAL peripherals */
 
 /* Library source IDs (0xE0–0xEF) — assigned by embediq_platform_lib_declare() */
 #define EMBEDIQ_LIB_SRC_BASE      0xE0u  /**< First library source slot */
@@ -188,7 +189,11 @@ extern "C" {
                                                                 2=queue_send_full   3=signal_timeout
                                                                 4=stack_overflow.
                                                  msg_id: resource instance index (0 on POSIX). */
-/* 0x67: EMBEDIQ_OBS_EVT_HAL_FAULT — reserved, activated in XOBS-2 (before ESP32 HAL) */
+#define EMBEDIQ_OBS_EVT_HAL_FAULT  0x67u  /**< HAL peripheral fault (XOBS-2).
+                                                source_fb_id: EMBEDIQ_HAL_SRC_* (FLASH/TIMER/WDG/...).
+                                                state_or_flag: (uint8_t)(-(err_code))
+                                                               1=INVALID 2=BUSY 3=TIMEOUT 4=IO.
+                                                msg_id: 0 (no message context). */
 /* 0x68–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */

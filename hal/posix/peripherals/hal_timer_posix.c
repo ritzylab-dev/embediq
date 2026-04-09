@@ -80,6 +80,7 @@ static void *timer_thread(void *arg)
 int hal_timer_init(uint32_t period_us, hal_timer_isr_t cb, void *ctx)
 {
     if (!cb) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
 
@@ -93,11 +94,13 @@ int hal_timer_init(uint32_t period_us, hal_timer_isr_t cb, void *ctx)
 int hal_timer_start(void)
 {
     if (!s_inited) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
     s_running = 1;
     if (pthread_create(&s_thread, NULL, timer_thread, NULL) != 0) {
         s_running = 0;
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_IO);
         return HAL_ERR_IO;
     }
     return HAL_OK;
@@ -106,6 +109,7 @@ int hal_timer_start(void)
 int hal_timer_stop(void)
 {
     if (!s_inited) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
     s_running = 0;

@@ -41,6 +41,7 @@ int hal_wdg_init(uint32_t timeout_ms)
 int hal_wdg_kick(void)
 {
     if (!s_inited) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_WDG, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
     /* POSIX sim: nothing to do — just acknowledge the kick. */
