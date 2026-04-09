@@ -108,6 +108,7 @@ if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     add_subdirectory(fbs/drivers)
     add_subdirectory(tests/unit)
     add_subdirectory(tests/integration)
+    add_subdirectory(tests/lib)
 
     # -----------------------------------------------------------------------
     # Component libraries + tests (LIB-3)

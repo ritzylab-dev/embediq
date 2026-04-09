@@ -46,3 +46,6 @@ jobs:
               -DEMBEDIQ_MSG_MAX_PAYLOAD=64 \
               -c tests/compat/fb_v1_compat.c
           fi
+
+      - name: Library Observatory obligation check — strict (R-lib-1)
+        run: python3 tools/ci/check_lib_obs.py --strict
