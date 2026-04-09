@@ -80,45 +80,45 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 ## Layer Model
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  LAYER 4 — COMMERCIAL (future)                                      │
-│  Visual tooling  ·  Cloud connectivity  ·  IDE and AI integrations  │
-├─────────────────────────────────────────────────────────────────────┤
-│  LAYER 3 — ECOSYSTEM                                                │
-│  Bridge daemon  ·  bridge/websocket  ·  bridge/unix_socket          │
-│  Registry  ·  Community BSPs  ·  3rd-party FB wrappers              │
-│  External FBs (Python · Node.js · Java · any language)             │
-├─────────────────────────────────────────────────────────────────────┤
-│  LAYER 2 — DRIVER FBs + SERVICE FBs          (all Apache 2.0)      │
-│  Driver FBs:   fb_uart · fb_gpio · fb_spi · fb_i2c                 │
-│                fb_timer · fb_nvm · fb_watchdog                      │
-│  Service FBs:  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger   │
-├─────────────────────────────────────────────────────────────────────┤
-│  LAYER 1 — FRAMEWORK ENGINE                  (all Apache 2.0)      │
-│  FB Registry  ·  Endpoint Router  ·  Message Bus (3-queue)         │
-│  Sub-fn Dispatcher  ·  FSM Engine  ·  Observatory                  │
-│  Test Runner [TEST BUILDS ONLY]                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│  CONTRACTS  (core/include/ — header-only · frozen post-v1)         │
-│  embediq_fb.h  ·  embediq_subfn.h  ·  embediq_bus.h                │
-│  embediq_msg.h  ·  embediq_sm.h  ·  embediq_obs.h                  │
-│  embediq_osal.h  ·  embediq_time.h  ·  embediq_bridge.h            │
-│  embediq_meta.h  ·  embediq_endpoint.h  ·  embediq_msg_catalog.h   │
-│  embediq_nvm.h  ·  embediq_timer.h  ·  embediq_wdg.h               │
-│  embediq_ota.h  ·  embediq_mqtt.h                                  │
-│  hal/ (HAL contract headers — see HAL section below)               │
-├─────────────────────────────────────────────────────────────────────┤
-│  HAL — Hardware Abstraction Layer                                   │
-│  Contracts: core/include/hal/  (hal_uart.h · hal_gpio.h · etc.)    │
-│  Implementations: hal/posix/ · hal/esp32/ · hal/stm32/             │
-├─────────────────────────────────────────────────────────────────────┤
-│  OSAL — OS Abstraction Layer                                        │
-│  Contract: core/include/embediq_osal.h                             │
-│  Implementations: osal/posix/ · osal/freertos/ · osal/zephyr/      │
-├─────────────────────────────────────────────────────────────────────┤
-│  SUBSTRATE                                                          │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  LAYER 4 — COMMERCIAL (future)                                              │
+│  Visual tooling  ·  Cloud connectivity  ·  IDE and AI integrations          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 3 — ECOSYSTEM                                                        │
+│  Bridge daemon  ·  bridge/websocket  ·  bridge/unix_socket                  │
+│  Registry  ·  Community BSPs  ·  3rd-party FB wrappers                      │
+│  External FBs (Python · Node.js · Java · any language)                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 2 — DRIVER FBs + SERVICE FBs          (all Apache 2.0)               │
+│  Driver FBs:   fb_uart · fb_gpio · fb_spi · fb_i2c                          │
+│                fb_timer · fb_nvm · fb_watchdog                              │
+│  Service FBs:  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  LAYER 1 — FRAMEWORK ENGINE                  (all Apache 2.0)               │
+│  FB Registry  ·  Endpoint Router  ·  Message Bus (3-queue)                  │
+│  Sub-fn Dispatcher  ·  FSM Engine  ·  Observatory                           │
+│  Test Runner [TEST BUILDS ONLY]                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  CONTRACTS  (core/include/ — header-only · frozen post-v1)                  │
+│  embediq_fb.h  ·  embediq_subfn.h  ·  embediq_bus.h                         │
+│  embediq_msg.h  ·  embediq_sm.h  ·  embediq_obs.h                           │
+│  embediq_osal.h  ·  embediq_time.h  ·  embediq_bridge.h                     │
+│  embediq_meta.h  ·  embediq_endpoint.h  ·  embediq_msg_catalog.h            │
+│  embediq_nvm.h  ·  embediq_timer.h  ·  embediq_wdg.h                        │
+│  embediq_ota.h  ·  embediq_mqtt.h                                           │
+│  hal/ (HAL contract headers — see HAL section below)                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  HAL — Hardware Abstraction Layer                                           │
+│  Contracts: core/include/hal/  (hal_uart.h · hal_gpio.h · etc.)             │
+│  Implementations: hal/posix/ · hal/esp32/ · hal/stm32/                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  OSAL — OS Abstraction Layer                                                │
+│  Contract: core/include/embediq_osal.h                                      │
+│  Implementations: osal/posix/ · osal/freertos/ · osal/zephyr/               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  SUBSTRATE                                                                  │
 │  FreeRTOS  ·  Linux (gateway/edge)  ·  Zephyr  ·  bare-metal MCU  ·  POSIX  │
-└─────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Layer dependency rule:** Each layer may only depend on the layer directly below it.
