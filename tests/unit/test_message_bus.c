@@ -436,6 +436,113 @@ static void test_drop_emits_observatory_event(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_xobs3_queue_depth_constant_and_threshold_exist
+ * Verify EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH (0x42) and EMBEDIQ_QUEUE_WARN_THRESHOLD
+ * exist and have the correct values. Compile-time contract check.
+ * ------------------------------------------------------------------------- */
+
+static void test_xobs3_queue_depth_constant_and_threshold_exist(void)
+{
+    /* These _Static_asserts verify at compile time — the ASSERT below is
+     * a runtime confirmation that both constants resolve. */
+    _Static_assert(EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH == 0x42u,
+                   "BUS_QUEUE_DEPTH must be 0x42u (not 0x41 — that is LIB_DEINIT)");
+    _Static_assert(EMBEDIQ_QUEUE_WARN_THRESHOLD >= 1u &&
+                   EMBEDIQ_QUEUE_WARN_THRESHOLD <= 100u,
+                   "threshold must be 1–100");
+
+    ASSERT(EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH == 0x42u &&
+           EMBEDIQ_QUEUE_WARN_THRESHOLD == 75u,
+           "XOBS-3 constants must exist with correct values");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_xobs3_bus_functions_with_depth_check
+ * Verify that publish still works correctly after the BUS_QUEUE_DEPTH_CHECK
+ * macro was added to all three priority branches. Floods NORMAL queue to
+ * above the threshold — messages must still be delivered and drops still
+ * counted. (The RESOURCE emit is ((void)0) at default host trace level.)
+ * ------------------------------------------------------------------------- */
+
+#define MSG_DEPTH_TEST 0x0407u
+
+static void test_xobs3_bus_functions_with_depth_check(void)
+{
+    full_reset();
+
+    EMBEDIQ_SUBS(depth_subs, MSG_DEPTH_TEST);
+    EmbedIQ_FB_Config_t cfg_dst = {
+        .name = "fb_depth_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .subscriptions = depth_subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Config_t cfg_src = {
+        .name = "fb_depth_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    };
+
+    embediq_fb_register(&cfg_dst);
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&cfg_src);
+    embediq_engine_boot();
+    message_bus_boot();
+
+    /* Fill NORMAL queue to 100% capacity — all should succeed (drop-oldest policy) */
+    for (int i = 0; i < EMBEDIQ_NORMAL_QUEUE_DEPTH + 4; i++) {
+        EmbedIQ_Msg_t m = make_msg(MSG_DEPTH_TEST, EMBEDIQ_MSG_PRIORITY_NORMAL,
+                                   (uint32_t)i);
+        embediq_publish(src, &m);
+    }
+
+    /* Verify: 4 drops counted (overflow handler still works with depth check in place) */
+    ASSERT(message_bus__drop_count() == 4u,
+           "drop-oldest must still function after XOBS-3 depth check additions");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_xobs3_all_priority_branches_survive_depth_check
+ * Verify HIGH, NORMAL, LOW branches all function with BUS_QUEUE_DEPTH_CHECK.
+ * Publish one message to each priority — all must be delivered.
+ * ------------------------------------------------------------------------- */
+
+static void test_xobs3_all_priority_branches_survive_depth_check(void)
+{
+    full_reset();
+
+    EMBEDIQ_SUBS(all_subs, MSG_DEPTH_TEST);
+    EmbedIQ_FB_Config_t cfg_dst = {
+        .name = "fb_allpri_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .subscriptions = all_subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Config_t cfg_src = {
+        .name = "fb_allpri_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    };
+
+    embediq_fb_register(&cfg_dst);
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&cfg_src);
+    uint8_t dst_ep = embediq_bus_resolve_name("fb_allpri_dst");
+    embediq_engine_boot();
+    message_bus_boot();
+
+    /* Publish one message to each priority */
+    EmbedIQ_Msg_t mh = make_msg(MSG_DEPTH_TEST, EMBEDIQ_MSG_PRIORITY_HIGH, 10u);
+    EmbedIQ_Msg_t mn = make_msg(MSG_DEPTH_TEST, EMBEDIQ_MSG_PRIORITY_NORMAL, 20u);
+    EmbedIQ_Msg_t ml = make_msg(MSG_DEPTH_TEST, EMBEDIQ_MSG_PRIORITY_LOW, 30u);
+    embediq_publish(src, &mh);
+    embediq_publish(src, &mn);
+    embediq_publish(src, &ml);
+
+    /* Verify: all three messages delivered */
+    EmbedIQ_Msg_t rh, rn, rl;
+    bool gh = message_bus__test_recv(dst_ep, EMBEDIQ_MSG_PRIORITY_HIGH, &rh);
+    bool gn = message_bus__test_recv(dst_ep, EMBEDIQ_MSG_PRIORITY_NORMAL, &rn);
+    bool gl = message_bus__test_recv(dst_ep, EMBEDIQ_MSG_PRIORITY_LOW, &rl);
+
+    ASSERT(gh && gn && gl &&
+           rh.correlation_id == 10u &&
+           rn.correlation_id == 20u &&
+           rl.correlation_id == 30u,
+           "all three priority branches must deliver with depth check in place");
+}
+
+/* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 
@@ -449,6 +556,9 @@ int main(void)
     test_endpoint_registry_resolve_name();
     test_no_subscriber_message_is_dropped_silently();
     test_drop_emits_observatory_event();
+    test_xobs3_queue_depth_constant_and_threshold_exist();
+    test_xobs3_bus_functions_with_depth_check();
+    test_xobs3_all_priority_branches_survive_depth_check();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

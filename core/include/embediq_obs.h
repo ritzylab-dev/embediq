@@ -163,10 +163,18 @@ extern "C" {
 #define EMBEDIQ_OBS_EVT_LIFECYCLE           0x30u /**< FB lifecycle state transition */
 #define EMBEDIQ_OBS_EVT_FSM_TRANS           0x31u /**< FSM state machine transition */
 
-/* RESOURCE family (0x40–0x4F) — resource acquisition and lifecycle */
-#define EMBEDIQ_OBS_EVT_LIB_INIT    0x40u  /**< Library global init completed (once per boot per library) */
-#define EMBEDIQ_OBS_EVT_LIB_DEINIT  0x41u  /**< Library global deinit called at shutdown */
-/* 0x42–0x4F reserved for Phase 2 OSAL and HAL resource events (XOBS-1, XOBS-2) */
+/* RESOURCE family (0x40–0x4F) — resource acquisition and pressure events */
+#define EMBEDIQ_OBS_EVT_LIB_INIT          0x40u  /**< Library global init completed (once per boot per library) */
+#define EMBEDIQ_OBS_EVT_LIB_DEINIT        0x41u  /**< Library global deinit called at shutdown */
+#define EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH   0x42u  /**< FB inbox queue fill above warning threshold (XOBS-3).
+                                                       Gated by EMBEDIQ_TRACE_RESOURCE — use EMBEDIQ_OBS_EMIT_RESOURCE.
+                                                       source_fb_id: publisher endpoint id.
+                                                       target_fb_id: subscriber endpoint id (whose queue is filling).
+                                                       state_or_flag: fill percentage 0–100 at time of emit.
+                                                       msg_id:        the msg_id just enqueued.
+                                                       Threshold: EMBEDIQ_QUEUE_WARN_THRESHOLD (default 75%). */
+/* 0x43: EMBEDIQ_OBS_EVT_OSAL_STACK_HIGH — reserved, activated in XOBS-3b (Phase 3, FreeRTOS only) */
+/* 0x44–0x4F reserved for future RESOURCE band events */
 
 /* TIMING family (0x50–0x5F) — reserved, not yet emitted */
 
