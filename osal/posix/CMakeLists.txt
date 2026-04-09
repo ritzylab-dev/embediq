@@ -16,4 +16,7 @@ target_compile_options(embediq_osal_posix PRIVATE
     -Werror
 )
 
-target_link_libraries(embediq_osal_posix PUBLIC pthread)
+# XOBS-1: OSAL observation macros call embediq_obs_emit() — link against
+# fb_engine (which contains obs.c). CMake resolves the bidirectional static
+# library dependency at link time via the linker's archive rescanning.
+target_link_libraries(embediq_osal_posix PUBLIC pthread embediq_fb_engine)

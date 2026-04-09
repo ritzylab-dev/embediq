@@ -21,6 +21,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "embediq_obs.h"  /* OSAL observation obligation macros use embediq_obs_emit() */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -198,18 +200,35 @@ uint32_t embediq_osal_time_us(void);
 uint32_t embediq_osal_time_ms(void);
 
 /* ---------------------------------------------------------------------------
- * OSAL observation obligation macros
+ * OSAL observation obligation macros — XOBS-1 active
  *
- * Activated in XOBS-1 (Phase 2 — before FreeRTOS OSAL implementation).
- * Currently no-ops. Placed here so CI tool check_osal_obs.py can enforce
- * their presence in every OSAL implementation file that touches tasks,
- * queues, mutexes, or signals.
+ * Every OSAL implementation (POSIX, FreeRTOS, Zephyr) MUST call the
+ * corresponding macro before returning a failure indicator on these paths.
+ * Enforced by tools/ci/check_osal_obs.py --strict on every PR.
+ *
+ * Encoding (EMBEDIQ_OBS_EVT_OSAL_FAULT = 0x66, FAULT band — always emitted):
+ *   source_fb_id:  EMBEDIQ_OSAL_SRC_* identifies the resource type
+ *   state_or_flag: sub-type — see embediq_obs.h EMBEDIQ_OBS_EVT_OSAL_FAULT
+ *   msg_id:        resource instance index (0 = unknown / POSIX simulation)
+ *
+ * R-osal-01: Never negate embediq_err_t. Always compare explicitly.
+ * See: PM/CROSS_LAYER_OBSERVABILITY_PLAN.md — XOBS-1
  * ------------------------------------------------------------------------- */
-#define EMBEDIQ_OSAL_OBS_TASK_FAIL(idx)       ((void)0)
-#define EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(idx)   ((void)0)
-#define EMBEDIQ_OSAL_OBS_QUEUE_FULL(idx)      ((void)0)
-#define EMBEDIQ_OSAL_OBS_SIGNAL_TIMEOUT(idx)  ((void)0)
-#define EMBEDIQ_OSAL_OBS_STACK_OVERFLOW(idx)  ((void)0)
+#define EMBEDIQ_OSAL_OBS_TASK_FAIL(idx) \
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                     EMBEDIQ_OSAL_SRC_TASKS, 0, 0, (uint16_t)(idx))
+#define EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(idx) \
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                     EMBEDIQ_OSAL_SRC_MUTEXES, 0, 1, (uint16_t)(idx))
+#define EMBEDIQ_OSAL_OBS_QUEUE_FULL(idx) \
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                     EMBEDIQ_OSAL_SRC_QUEUES, 0, 2, (uint16_t)(idx))
+#define EMBEDIQ_OSAL_OBS_SIGNAL_TIMEOUT(idx) \
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                     EMBEDIQ_OSAL_SRC_SIGNALS, 0, 3, (uint16_t)(idx))
+#define EMBEDIQ_OSAL_OBS_STACK_OVERFLOW(idx) \
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                     EMBEDIQ_OSAL_SRC_TASKS, 0, 4, (uint16_t)(idx))
 
 #ifdef __cplusplus
 }

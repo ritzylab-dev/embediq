@@ -50,6 +50,9 @@ jobs:
       - name: Library Observatory obligation check — strict (R-lib-1)
         run: python3 tools/ci/check_lib_obs.py --strict
 
+      - name: OSAL Observatory obligation check — strict (XOBS-1, R-osal-01)
+        run: python3 tools/ci/check_osal_obs.py --strict
+
       - name: Component OSAL handle storage check — warning (R-lib-4)
         run: python3 tools/ci/component_globals_check.py
 
