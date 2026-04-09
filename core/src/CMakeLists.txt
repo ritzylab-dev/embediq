@@ -9,6 +9,7 @@ add_library(embediq_fb_engine STATIC
     bus/message_bus.c
     fsm/fsm_engine.c
     observatory/obs.c
+    embediq_platform.c
 )
 
 target_include_directories(embediq_fb_engine PUBLIC

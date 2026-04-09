@@ -125,6 +125,16 @@ if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     target_link_libraries(test_embediq_crc PRIVATE embediq_crc)
     target_compile_options(test_embediq_crc PRIVATE -Wall -Wextra -Werror)
     add_test(NAME unit_embediq_crc COMMAND test_embediq_crc)
+
+    # -----------------------------------------------------------------------
+    # Platform library registration tests (LIB-4a)
+    # -----------------------------------------------------------------------
+    add_executable(test_platform_lib tests/test_platform_lib.c)
+    target_include_directories(test_platform_lib PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/include)
+    target_link_libraries(test_platform_lib PRIVATE embediq_fb_engine)
+    target_compile_options(test_platform_lib PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME unit_platform_lib COMMAND test_platform_lib)
 endif()
 
 # ---------------------------------------------------------------------------

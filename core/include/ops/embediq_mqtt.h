@@ -39,7 +39,16 @@ extern "C" {
  * MQTT platform operations table
  * ------------------------------------------------------------------------- */
 
+/** ABI version for embediq_mqtt_ops_t. Increment on any breaking field change. */
+#define EMBEDIQ_MQTT_OPS_VERSION  1u
+
 typedef struct {
+    /**
+     * MUST BE FIRST — ABI versioning (I-17).
+     * Set to EMBEDIQ_MQTT_OPS_VERSION at ops table declaration.
+     */
+    uint32_t version;
+
     /**
      * Open a TCP connection and send MQTT CONNECT.
      *

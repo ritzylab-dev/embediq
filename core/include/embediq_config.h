@@ -190,6 +190,15 @@ extern "C" {
  *  16 bytes covers all standard encodings with room for NUL. */
 #define EMBEDIQ_FB_SAFETY_CLASS_LEN     16u
 
+/* ---------------------------------------------------------------------------
+ * Library registration
+ * ------------------------------------------------------------------------- */
+
+/** Maximum number of libraries registered via embediq_platform_lib_declare().
+ *  Enforced at runtime by embediq_platform_lib_declare() — returns EMBEDIQ_ERR
+ *  if exceeded. 16 slots correspond to the 0xE0–0xEF library source ID range. */
+#define EMBEDIQ_MAX_LIB_INITS           16u
+
 #ifdef __cplusplus
 }
 #endif

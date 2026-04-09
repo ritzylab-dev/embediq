@@ -543,4 +543,19 @@ void obs__format_event(const EmbedIQ_Event_t *evt, char *buf, size_t n)
     format_event_internal(evt, buf, n);
 }
 
+/* ---------------------------------------------------------------------------
+ * ISR-safe emit — host implementation
+ *
+ * On the host (POSIX, single-writer), ISR context does not exist.
+ * Delegate directly to embediq_obs_emit(). MCU implementation is Phase 2
+ * (XOBS-1 gate) — the undefined symbol on MCU targets is intentional until
+ * the ring buffer backend is implemented.
+ * ------------------------------------------------------------------------- */
+void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
+                                uint8_t target, uint8_t state,
+                                uint16_t msg_id)
+{
+    embediq_obs_emit(event_type, source, target, state, msg_id);
+}
+
 #endif /* EMBEDIQ_PLATFORM_HOST */
