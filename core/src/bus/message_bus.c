@@ -228,13 +228,16 @@ const char *embediq_bus_resolve_id(uint8_t endpoint_id)
  *    Overflow is handled per queue level (BINDING policy, AGENTS.md §2B).
  * ------------------------------------------------------------------------- */
 
-void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
+/* ---------------------------------------------------------------------------
+ * route_message() — private routing helper
+ *
+ * Contains all subscription lookup, queue enqueue, and overflow policy logic.
+ * msg must have source_endpoint_id already stamped by the caller.
+ * Used by both embediq_publish() and bus_inject().
+ * ------------------------------------------------------------------------- */
+
+static void route_message(EmbedIQ_Msg_t *msg)
 {
-    if (!msg) return;
-
-    /* Stamp source endpoint — convenience for sub-fns reading the envelope. */
-    msg->source_endpoint_id = fb_engine__get_ep_id(fb);
-
     uint16_t msg_id = msg->msg_id;
     uint8_t  prio   = msg->priority;
 
@@ -311,6 +314,13 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
     }
 }
 
+void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
+{
+    if (!msg) return;
+    msg->source_endpoint_id = fb_engine__get_ep_id(fb);
+    route_message(msg);
+}
+
 /* ---------------------------------------------------------------------------
  * Public: message_bus_recv_ep()
  *
@@ -331,6 +341,18 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
  * ------------------------------------------------------------------------- */
 
 #ifdef EMBEDIQ_PLATFORM_HOST
+
+#include "embediq_test.h"   /* for EMBEDIQ_TEST_SOURCE_ID */
+
+/*
+ * bus_inject — test-only message injection with sentinel source ID.
+ * See embediq_test.h for API contract.
+ */
+void bus_inject(EmbedIQ_Msg_t *msg)
+{
+    msg->source_endpoint_id = EMBEDIQ_TEST_SOURCE_ID;
+    route_message(msg);
+}
 
 /**
  * Reset all bus state.  Destroys all per-FB queues before zeroing handles.
