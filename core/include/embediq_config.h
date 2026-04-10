@@ -50,6 +50,18 @@ extern "C" {
 /** Depth of the LOW-priority queue for each Functional Block. */
 #define EMBEDIQ_LOW_QUEUE_DEPTH         16
 
+/**
+ * EMBEDIQ_QUEUE_WARN_THRESHOLD — fill percentage at which an FB inbox queue
+ * emits EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH (XOBS-3).
+ *
+ * Default: 75 (75% full). Range: 1–100.
+ * Requires EMBEDIQ_TRACE_RESOURCE to be enabled (trace level >= 2).
+ * Override in your platform config to tune warning sensitivity.
+ */
+#ifndef EMBEDIQ_QUEUE_WARN_THRESHOLD
+#  define EMBEDIQ_QUEUE_WARN_THRESHOLD  75u
+#endif
+
 /* ---------------------------------------------------------------------------
  * Sub-function dispatch
  * ------------------------------------------------------------------------- */
