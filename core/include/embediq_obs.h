@@ -176,7 +176,27 @@ extern "C" {
 /* 0x43: EMBEDIQ_OBS_EVT_OSAL_STACK_HIGH — reserved, activated in XOBS-3b (Phase 3, FreeRTOS only) */
 /* 0x44–0x4F reserved for future RESOURCE band events */
 
-/* TIMING family (0x50–0x5F) — reserved, not yet emitted */
+/* TIMING family (0x50–0x5F) ----------------------------------------- */
+
+#define EMBEDIQ_OBS_EVT_WDG_CHECKIN   0x50u  /**< Watchdog successful kick (XOBS-4).
+                                                   Emitted by fb_watchdog monitor_scan()
+                                                   when all registered FBs have checked in
+                                                   within their timeout window and
+                                                   hal_wdg_kick() is called.
+                                                   Gated by EMBEDIQ_TRACE_TIMING — use
+                                                   EMBEDIQ_OBS_EMIT_TIMING.
+                                                   source_fb_id: watchdog FB endpoint index
+                                                                 (0xFF if not yet initialised).
+                                                   target_fb_id: 0xFF (health heartbeat,
+                                                                 no specific target).
+                                                   state_or_flag: low 8 bits of kick-sequence
+                                                                 counter (wrap-safe; enables
+                                                                 Studio gap detection).
+                                                   msg_id:        0 (no message context).
+                                                   Pairs with EMBEDIQ_OBS_EVT_FAULT on missed
+                                                   checkin for the full watchdog picture:
+                                                   cadence → gap → FAULT → reset → FW_START. */
+/* 0x51–0x5F reserved for future TIMING band events */
 
 /* FAULT family (0x60–0x6F) ------------------------------------------------ */
 

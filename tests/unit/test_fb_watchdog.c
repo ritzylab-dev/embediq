@@ -23,6 +23,7 @@
 #include "embediq_osal.h"
 #include "embediq_config.h"
 #include "hal/hal_wdg.h"
+#include "embediq_obs.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -45,6 +46,12 @@ extern void embediq_wdg_unregister(void *fb);
 /* Test-only FB engine API */
 extern void     fb_engine__reset(void);
 extern uint32_t fb_engine__obs_event_count(void);
+
+/* Package-internal Observatory capture API (EMBEDIQ_PLATFORM_HOST only) */
+extern void     obs__reset(void);
+extern uint32_t obs__ring_count(void);
+extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
+extern void     obs__set_level(uint8_t level);
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -222,6 +229,58 @@ static void test_hal_wdg_kick_before_init_returns_error(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_wdg_checkin_emits_timing_event
+ *
+ * When all registered FBs check in within their timeout window,
+ * monitor_scan() calls hal_wdg_kick() and must emit
+ * EMBEDIQ_OBS_EVT_WDG_CHECKIN (0x50) in the TIMING band.
+ *
+ * Gated by EMBEDIQ_TRACE_TIMING — requires EMBEDIQ_TRACE_LEVEL >= 2.
+ * embediq_driver_fbs is compiled with EMBEDIQ_TRACE_LEVEL=2 in
+ * fbs/drivers/CMakeLists.txt so the macro expands to the real call.
+ *
+ * hal_wdg_init() is called explicitly so that hal_wdg_kick() returns
+ * HAL_OK and does not emit a HAL_FAULT event before the TIMING emit.
+ * ------------------------------------------------------------------------- */
+
+static void test_wdg_checkin_emits_timing_event(void)
+{
+    fb_engine__reset();
+    wdg__init_state();
+    hal_wdg_init(500u);      /* ensure HAL is ready — no FAULT on kick */
+
+    EmbedIQ_FB_Handle_t fb = make_test_fb("fb_timing_ok");
+    embediq_wdg_register(fb, 200u);  /* generous timeout — will not miss */
+    embediq_wdg_checkin(fb);         /* fresh heartbeat — elapsed ≈ 0 */
+
+    obs__reset();                    /* clear any events from setup */
+    obs__set_level(2u);              /* TIMING events require runtime level >= 2 */
+    wdg__trigger_check();            /* all_ok=true → hal_wdg_kick() → TIMING emit */
+
+    uint32_t count = obs__ring_count();
+    ASSERT(count >= 1u,
+           "all-checkin scan must emit at least one TIMING event");
+
+    EmbedIQ_Event_t evt;
+    memset(&evt, 0, sizeof(evt));
+    bool found = false;
+    for (uint32_t i = 0u; i < count; i++) {
+        obs__ring_read(i, &evt);
+        if (evt.event_type == EMBEDIQ_OBS_EVT_WDG_CHECKIN) {
+            found = true;
+            break;
+        }
+    }
+    ASSERT(found,
+           "EMBEDIQ_OBS_EVT_WDG_CHECKIN (0x50) must appear in Observatory ring");
+    ASSERT(embediq_obs_event_family(EMBEDIQ_OBS_EVT_WDG_CHECKIN) ==
+               EMBEDIQ_OBS_FAMILY_TIMING,
+           "WDG_CHECKIN event must be in the TIMING family (band 0x50-0x5F)");
+
+    hal_wdg_deinit();
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -238,6 +297,9 @@ int main(void)
     test_hal_wdg_kick_returns_ok_after_init();
     test_hal_wdg_deinit_does_not_crash();
     test_hal_wdg_kick_before_init_returns_error();
+
+    /* XOBS-4 TIMING band test */
+    test_wdg_checkin_emits_timing_event();
 
     printf("\n");
     if (g_tests_failed == 0) {

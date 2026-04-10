@@ -148,6 +148,19 @@ static void monitor_scan(void)
     if (all_ok) {
         hal_wdg_kick();
         g_kick_seq++;
+        /* XOBS-4: Emit TIMING heartbeat on every successful kick.
+         * Gated by EMBEDIQ_TRACE_TIMING — expands to ((void)0) when
+         * EMBEDIQ_TRACE_LEVEL < 2, so zero overhead in production builds.
+         * g_wdg_fb is NULL when wdg__trigger_check() is called from
+         * tests that bypass wdg_init() — guard with 0xFFu sentinel. */
+        {
+            uint8_t const wdg_src_id = g_wdg_fb
+                                       ? fb_engine__get_ep_id(g_wdg_fb)
+                                       : 0xFFu;
+            EMBEDIQ_OBS_EMIT_TIMING(EMBEDIQ_OBS_EVT_WDG_CHECKIN,
+                                    wdg_src_id, 0xFFu,
+                                    (uint8_t)(g_kick_seq & 0xFFu), 0u);
+        }
     }
 }
 
