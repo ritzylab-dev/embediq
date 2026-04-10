@@ -153,6 +153,7 @@ EmbedIQ_Task_t *embediq_osal_task_create(const char    *name,
     if (pthread_create(&task->thread, NULL, _task_entry, w) != 0) {
         free(w);
         free(task);
+        EMBEDIQ_OSAL_OBS_TASK_FAIL(0);
         return NULL;
     }
     return task;
@@ -205,8 +206,8 @@ EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size)
     return q;
 }
 
-bool embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
-                              uint32_t timeout_ms)
+embediq_err_t embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
+                                       uint32_t timeout_ms)
 {
     struct timespec abs   = {0};
     bool            timed = (timeout_ms > 0 && timeout_ms != UINT32_MAX);
@@ -217,13 +218,15 @@ bool embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
     while (q->count >= q->depth) {
         if (timeout_ms == 0) {
             pthread_mutex_unlock(&q->mutex);
-            return false;
+            EMBEDIQ_OSAL_OBS_QUEUE_FULL(0);
+            return EMBEDIQ_ERR_TIMEOUT;
         }
         if (timed) {
             if (pthread_cond_timedwait(&q->not_full, &q->mutex, &abs)
                     == ETIMEDOUT) {
                 pthread_mutex_unlock(&q->mutex);
-                return false;
+                EMBEDIQ_OSAL_OBS_QUEUE_FULL(0);
+                return EMBEDIQ_ERR_TIMEOUT;
             }
         } else {
             /* UINT32_MAX — block forever */
@@ -236,11 +239,11 @@ bool embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
     q->count = (uint16_t)( q->count + 1u);
     pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mutex);
-    return true;
+    return EMBEDIQ_OK;
 }
 
-bool embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
-                              uint32_t timeout_ms)
+embediq_err_t embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
+                                       uint32_t timeout_ms)
 {
     struct timespec abs   = {0};
     bool            timed = (timeout_ms > 0 && timeout_ms != UINT32_MAX);
@@ -251,13 +254,13 @@ bool embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
     while (q->count == 0) {
         if (timeout_ms == 0) {
             pthread_mutex_unlock(&q->mutex);
-            return false;
+            return EMBEDIQ_ERR_TIMEOUT;
         }
         if (timed) {
             if (pthread_cond_timedwait(&q->not_empty, &q->mutex, &abs)
                     == ETIMEDOUT) {
                 pthread_mutex_unlock(&q->mutex);
-                return false;
+                return EMBEDIQ_ERR_TIMEOUT;
             }
         } else {
             pthread_cond_wait(&q->not_empty, &q->mutex);
@@ -269,7 +272,7 @@ bool embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
     q->count = (uint16_t)( q->count - 1u);
     pthread_cond_signal(&q->not_full);
     pthread_mutex_unlock(&q->mutex);
-    return true;
+    return EMBEDIQ_OK;
 }
 
 uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q)
@@ -319,7 +322,7 @@ void embediq_osal_signal_wait(EmbedIQ_Signal_t *sig)
     pthread_mutex_unlock(&sig->mutex);
 }
 
-bool embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t ms)
+embediq_err_t embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t ms)
 {
     struct timespec abs;
     _abs_deadline(&abs, ms);
@@ -329,12 +332,13 @@ bool embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t ms)
         if (pthread_cond_timedwait(&sig->cond, &sig->mutex, &abs)
                 == ETIMEDOUT) {
             pthread_mutex_unlock(&sig->mutex);
-            return false;
+            EMBEDIQ_OSAL_OBS_SIGNAL_TIMEOUT(0);
+            return EMBEDIQ_ERR_TIMEOUT;
         }
     }
     sig->count--;
     pthread_mutex_unlock(&sig->mutex);
-    return true;
+    return EMBEDIQ_OK;
 }
 
 void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig)
@@ -361,25 +365,29 @@ EmbedIQ_Mutex_t *embediq_osal_mutex_create(void)
     return m;
 }
 
-bool embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
+embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
 {
     if (timeout_ms == UINT32_MAX) {
-        return pthread_mutex_lock(&m->mutex) == 0;
+        return (pthread_mutex_lock(&m->mutex) == 0) ? EMBEDIQ_OK : EMBEDIQ_ERR_TIMEOUT;
     }
     if (timeout_ms == 0) {
-        return pthread_mutex_trylock(&m->mutex) == 0;
+        if (pthread_mutex_trylock(&m->mutex) == 0) return EMBEDIQ_OK;
+        EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(0);
+        return EMBEDIQ_ERR_TIMEOUT;
     }
 
     /* Poll at 1 ms granularity — sufficient for simulation use cases */
     uint32_t start = embediq_osal_time_ms();
     for (;;) {
-        if (pthread_mutex_trylock(&m->mutex) == 0) return true;
+        if (pthread_mutex_trylock(&m->mutex) == 0) return EMBEDIQ_OK;
         if ((embediq_osal_time_ms() - start) >= timeout_ms) break;
         struct timespec ns = { .tv_sec = 0, .tv_nsec = 1000000L }; /* 1 ms */
         nanosleep(&ns, NULL);
     }
     /* One final attempt once the deadline is reached */
-    return pthread_mutex_trylock(&m->mutex) == 0;
+    if (pthread_mutex_trylock(&m->mutex) == 0) return EMBEDIQ_OK;
+    EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(0);
+    return EMBEDIQ_ERR_TIMEOUT;
 }
 
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)

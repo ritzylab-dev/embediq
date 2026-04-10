@@ -12,9 +12,7 @@ Layer rules (a file in layer X may only include from allowed layers):
   core/src/        → allowed: core/include/, core/include/hal/
   osal/posix/      → allowed: core/include/, core/include/hal/
   osal/freertos/   → allowed: core/include/, core/include/hal/
-  platform/posix/  → allowed: core/include/, core/include/hal/, osal/posix/
-  platform/esp32/  → allowed: core/include/, core/include/hal/, osal/freertos/
-  components/      → allowed: core/include/, core/include/hal/
+  components/      → allowed: C stdlib + own third_party/<name>/ only (no embediq_*.h)
   examples/        → allowed: core/include/, core/include/hal/, fbs/drivers/, fbs/services/
   tests/           → allowed: core/include/, core/include/hal/, examples/, fbs/drivers/, fbs/services/
   hal/posix/       → allowed: core/include/hal/ only (no framework headers)
@@ -71,10 +69,7 @@ _ALLOWED = {
     'core/src':        {'core/include'},
     'osal/posix':      {'core/include', 'core/include/hal'},
     'osal/freertos':   {'core/include', 'core/include/hal'},
-    # RETIRED (PR #29): platform/ layer was removed; rules kept for reference only.
-    'platform/posix':  {'core/include', 'core/include/hal', 'osal/posix'},
-    'platform/esp32':  {'core/include', 'core/include/hal', 'osal/freertos'},
-    'components':      {'core/include', 'core/include/hal'},
+    'components':      set(),  # stdlib + own third_party/<name>/ only; no embediq_*.h
     'examples':        {'core/include', 'core/include/hal', 'fbs/drivers', 'fbs/services'},
     'tests':           {'core/include', 'core/include/hal', 'examples', 'fbs/drivers', 'fbs/services'},
     # HAL implementation layers — HAL contracts + core/include for ops table registration
@@ -175,11 +170,27 @@ def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
                     continue  # same-layer include always allowed
 
                 if inc_layer not in allowed:
-                    violations.append(
-                        f'VIOLATION: {rel_path}:{lineno}: '
-                        f'{file_layer} must not include from {inc_layer} '
-                        f'("{inc}")'
-                    )
+                    if file_layer == 'components':
+                        violations.append(
+                            f'VIOLATION: {rel_path}:{lineno}:\n'
+                            f'  Issue: components/ includes framework header '
+                            f'from {inc_layer} ("{inc}")\n'
+                            f'  Rule: R-lib-2 (emit through ops table only), '
+                            f'R-lib-4 (ops table required) — CODING_RULES.md\n'
+                            f'  Why: components/ must not include embediq_*.h '
+                            f'directly — the ops table is the only framework '
+                            f'interface\n'
+                            f'  Fix: remove the include; access framework '
+                            f'services through the ops table function pointers\n'
+                            f'  See-also: ARCHITECTURE.md — Library Architecture '
+                            f'(D-LIB-1, D-LIB-4)'
+                        )
+                    else:
+                        violations.append(
+                            f'VIOLATION: {rel_path}:{lineno}: '
+                            f'{file_layer} must not include from {inc_layer} '
+                            f'("{inc}")'
+                        )
     except (IOError, OSError):
         pass
 

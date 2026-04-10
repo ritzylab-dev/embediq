@@ -164,7 +164,7 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
     if (strlen(key) >= NVM_KEY_SIZE) return EMBEDIQ_ERR;
     if (!g_mutex)                    return EMBEDIQ_ERR;
 
-    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
@@ -193,7 +193,7 @@ embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len)
     if (!key || !val || !len)  return EMBEDIQ_ERR;
     if (!g_mutex)              return EMBEDIQ_ERR;
 
-    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
@@ -217,7 +217,7 @@ embediq_err_t embediq_nvm_delete(const char *key)
     if (!key)     return EMBEDIQ_ERR;
     if (!g_mutex) return EMBEDIQ_ERR;
 
-    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
@@ -236,7 +236,7 @@ embediq_err_t embediq_nvm_flush(void)
 {
     if (!g_mutex) return EMBEDIQ_ERR;
 
-    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
     nvm_persist();
     embediq_osal_mutex_unlock(g_mutex);
     return EMBEDIQ_OK;
@@ -246,7 +246,7 @@ embediq_err_t embediq_nvm_reset(void)
 {
     if (!g_mutex) return EMBEDIQ_ERR;
 
-    if (!embediq_osal_mutex_lock(g_mutex, UINT32_MAX)) return EMBEDIQ_ERR;
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
     memset(g_nvm, 0, sizeof(g_nvm));
     nvm_persist();
     embediq_osal_mutex_unlock(g_mutex);

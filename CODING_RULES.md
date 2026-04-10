@@ -423,3 +423,45 @@ Every FB must declare its boot phase. Default = APPLICATION (Phase 3).
 - Circular depends_on = BOOT FAULT with clear diagnostic error.
 - Default boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION if not declared.
 
+---
+
+## Library Rules (R-lib-*)
+
+**R-lib-1 — Observatory obligation.**
+Every library that performs resource acquisition (memory allocation, peripheral claim, RTOS
+object creation) must emit EMBEDIQ_OBS_EVT_LIB_INIT (0x40) at init and
+EMBEDIQ_OBS_EVT_LIB_DEINIT (0x41) at teardown via the ops table obs_emit pointer.
+Rationale: silent library init failure is the hardest embedded failure mode to diagnose.
+Checked by: tools/ci/check_lib_obs.py (warning in LIB-2, hard error from LIB-5 onward).
+
+**R-lib-2 — Emit through ops table only.**
+Libraries must not call embediq_obs_emit() directly. All observation goes through the ops
+table obs_emit function pointer. This allows host-side unit testing without a live observer.
+
+**R-lib-3 — Source ID from platform_lib_declare().**
+Library source IDs (EMBEDIQ_LIB_SRC_*) are assigned at build time by platform_lib_declare().
+A library must not hard-code its own source ID. Source IDs are runtime instance identities
+for one firmware build — they are not global constants.
+
+**R-lib-4 — Ops table required.**
+A library that registers with the framework must declare an embediq_<name>_ops_t ops table.
+Partial ops tables are allowed — unused function pointers are NULL. The framework always
+checks for NULL before calling any ops table pointer.
+
+## OSAL Rules (R-osal-*)
+
+**R-osal-01 — Never negate an embediq_err_t return value.**
+embediq_err_t is int32_t. EMBEDIQ_ERR_TIMEOUT = -2 is truthy. The pattern if (!fn(...))
+silently treats a timeout as success — this is a silent correctness bug with no compiler
+warning and no test failure on host builds. It manifests only under real RTOS timing.
+
+Correct pattern:
+
+  /* WRONG — silently inverts on timeout */
+  if (!embediq_osal_mutex_lock(&mtx, 100)) { /* proceeds even on timeout */ }
+
+  /* CORRECT */
+  if (embediq_osal_mutex_lock(&mtx, 100) == EMBEDIQ_OK) { /* safe */ }
+
+Checked by: tools/ci/check_osal_obs.py lint pass. PR fails on violation.
+

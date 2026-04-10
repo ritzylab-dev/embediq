@@ -46,3 +46,33 @@ jobs:
               -DEMBEDIQ_MSG_MAX_PAYLOAD=64 \
               -c tests/compat/fb_v1_compat.c
           fi
+
+      - name: Library Observatory obligation check — strict (R-lib-1)
+        run: python3 tools/ci/check_lib_obs.py --strict
+
+      - name: OSAL Observatory obligation check — strict (XOBS-1, R-osal-01)
+        run: python3 tools/ci/check_osal_obs.py --strict
+
+      - name: HAL Observatory obligation check — strict (XOBS-2)
+        run: python3 tools/ci/check_hal_obs.py --strict
+
+      - name: Component OSAL handle storage check — warning (R-lib-4)
+        run: python3 tools/ci/component_globals_check.py
+
+      - name: Component OSAL API call check — warning (R-lib-4)
+        run: python3 tools/ci/component_state_check.py
+
+      - name: Vendoring manifest completeness check — warning (R-lib-3)
+        run: python3 tools/ci/vendoring_check.py
+
+      - name: Vendoring anomaly date staleness check — warning (R-lib-3)
+        run: python3 tools/ci/vendoring_date_check.py
+
+      - name: Ops table ABI version field check — warning (R-lib-4, D-LIB-5)
+        run: python3 tools/ci/ops_version_check.py
+
+      - name: SPDX licence identifier check — warning
+        run: python3 tools/ci/licence_check.py
+
+      - name: Binary blob detection — warning
+        run: python3 tools/ci/binary_blob_check.py

@@ -91,7 +91,8 @@ static uint16_t    g_sub_count = 0;
  * ------------------------------------------------------------------------- */
 
 typedef struct {
-    EmbedIQ_Queue_t *q[3];   /* indexed by EmbedIQ_Msg_Priority_t */
+    EmbedIQ_Queue_t *q[3];    /* indexed by EmbedIQ_Msg_Priority_t */
+    uint16_t         cap[3];  /* capacity of each queue (items) — for depth % calc */
 } ep_queues_t;
 
 static ep_queues_t g_ep[EMBEDIQ_MAX_ENDPOINTS];
@@ -102,6 +103,26 @@ static bool        g_bus_booted = false;
 #ifdef EMBEDIQ_PLATFORM_HOST
 static uint32_t g_drop_count = 0;
 #endif
+
+/* ---------------------------------------------------------------------------
+ * Queue depth warning helper — XOBS-3
+ *
+ * Emits EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH when fill % >= EMBEDIQ_QUEUE_WARN_THRESHOLD.
+ * Gated by EMBEDIQ_OBS_EMIT_RESOURCE (EMBEDIQ_TRACE_RESOURCE must be enabled).
+ * Division-by-zero safe: guard on cap > 0.
+ * ------------------------------------------------------------------------- */
+#define BUS_QUEUE_DEPTH_CHECK(q_, cap_, src_ep_, dst_ep_, prio_, msg_id_)       \
+    do {                                                                          \
+        if ((cap_) > 0u) {                                                        \
+            uint8_t _pct = (uint8_t)(((uint32_t)embediq_osal_queue_count(q_)    \
+                                      * 100u) / (uint32_t)(cap_));               \
+            if (_pct >= (uint8_t)EMBEDIQ_QUEUE_WARN_THRESHOLD) {                 \
+                EMBEDIQ_OBS_EMIT_RESOURCE(EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH,       \
+                                          (src_ep_), (dst_ep_),                  \
+                                          _pct, (msg_id_));                       \
+            }                                                                     \
+        }                                                                         \
+    } while (0)
 
 /* ---------------------------------------------------------------------------
  * Internal helpers
@@ -155,12 +176,17 @@ void message_bus_boot(void)
 
     /* Create three priority queues for each registered FB. */
     for (uint8_t i = 0u; i < n; i++) {
-        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_HIGH]   =
+        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_HIGH]    =
             embediq_osal_queue_create(EMBEDIQ_HIGH_QUEUE_DEPTH,   sizeof(EmbedIQ_Msg_t));
-        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_NORMAL] =
+        g_ep[i].cap[EMBEDIQ_MSG_PRIORITY_HIGH]  = EMBEDIQ_HIGH_QUEUE_DEPTH;
+
+        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_NORMAL]  =
             embediq_osal_queue_create(EMBEDIQ_NORMAL_QUEUE_DEPTH, sizeof(EmbedIQ_Msg_t));
-        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_LOW]    =
+        g_ep[i].cap[EMBEDIQ_MSG_PRIORITY_NORMAL] = EMBEDIQ_NORMAL_QUEUE_DEPTH;
+
+        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_LOW]     =
             embediq_osal_queue_create(EMBEDIQ_LOW_QUEUE_DEPTH,    sizeof(EmbedIQ_Msg_t));
+        g_ep[i].cap[EMBEDIQ_MSG_PRIORITY_LOW]   = EMBEDIQ_LOW_QUEUE_DEPTH;
     }
 
     /* Build subscription table from each FB's subscription list. */
@@ -202,13 +228,16 @@ const char *embediq_bus_resolve_id(uint8_t endpoint_id)
  *    Overflow is handled per queue level (BINDING policy, AGENTS.md §2B).
  * ------------------------------------------------------------------------- */
 
-void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
+/* ---------------------------------------------------------------------------
+ * route_message() — private routing helper
+ *
+ * Contains all subscription lookup, queue enqueue, and overflow policy logic.
+ * msg must have source_endpoint_id already stamped by the caller.
+ * Used by both embediq_publish() and bus_inject().
+ * ------------------------------------------------------------------------- */
+
+static void route_message(EmbedIQ_Msg_t *msg)
 {
-    if (!msg) return;
-
-    /* Stamp source endpoint — convenience for sub-fns reading the envelope. */
-    msg->source_endpoint_id = fb_engine__get_ep_id(fb);
-
     uint16_t msg_id = msg->msg_id;
     uint8_t  prio   = msg->priority;
 
@@ -246,11 +275,13 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
         if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH) {
             /* ---- HIGH: block until space is available ---- */
             embediq_osal_queue_send(q, &copy, UINT32_MAX);
+            BUS_QUEUE_DEPTH_CHECK(q, g_ep[ep].cap[prio],
+                                  msg->source_endpoint_id, ep, prio, msg_id);
             if (g_notify_fn) g_notify_fn(ep);
 
         } else if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL) {
             /* ---- NORMAL: drop OLDEST on overflow ---- */
-            if (!embediq_osal_queue_send(q, &copy, 0u)) {
+            if (embediq_osal_queue_send(q, &copy, 0u) != EMBEDIQ_OK) {
                 EmbedIQ_Msg_t oldest;
                 embediq_osal_queue_recv(q, &oldest, 0u);  /* discard oldest */
                 embediq_osal_queue_send(q, &copy,   0u);  /* enqueue new */
@@ -261,11 +292,15 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
                 g_drop_count++;
 #endif
             }
+            BUS_QUEUE_DEPTH_CHECK(q, g_ep[ep].cap[prio],
+                                  msg->source_endpoint_id, ep, prio, msg_id);
             if (g_notify_fn) g_notify_fn(ep);
 
         } else {
             /* ---- LOW: drop INCOMING on overflow ---- */
-            if (embediq_osal_queue_send(q, &copy, 0u)) {
+            if (embediq_osal_queue_send(q, &copy, 0u) == EMBEDIQ_OK) {
+                BUS_QUEUE_DEPTH_CHECK(q, g_ep[ep].cap[prio],
+                                      msg->source_endpoint_id, ep, prio, msg_id);
                 if (g_notify_fn) g_notify_fn(ep);
             } else {
                 embediq_obs_emit(EMBEDIQ_OBS_EVT_QUEUE_DROP,
@@ -277,6 +312,13 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
             }
         }
     }
+}
+
+void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
+{
+    if (!msg) return;
+    msg->source_endpoint_id = fb_engine__get_ep_id(fb);
+    route_message(msg);
 }
 
 /* ---------------------------------------------------------------------------
@@ -291,7 +333,7 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
     if (ep_id >= g_ep_count || priority > 2u || !out) return false;
     EmbedIQ_Queue_t *q = g_ep[ep_id].q[priority];
     if (!q) return false;
-    return embediq_osal_queue_recv(q, out, 0u);
+    return embediq_osal_queue_recv(q, out, 0u) == EMBEDIQ_OK;
 }
 
 /* ---------------------------------------------------------------------------
@@ -299,6 +341,18 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
  * ------------------------------------------------------------------------- */
 
 #ifdef EMBEDIQ_PLATFORM_HOST
+
+#include "embediq_test.h"   /* for EMBEDIQ_TEST_SOURCE_ID */
+
+/*
+ * bus_inject — test-only message injection with sentinel source ID.
+ * See embediq_test.h for API contract.
+ */
+void bus_inject(EmbedIQ_Msg_t *msg)
+{
+    msg->source_endpoint_id = EMBEDIQ_TEST_SOURCE_ID;
+    route_message(msg);
+}
 
 /**
  * Reset all bus state.  Destroys all per-FB queues before zeroing handles.
@@ -335,7 +389,7 @@ bool message_bus__test_recv(uint8_t ep_id, uint8_t prio, EmbedIQ_Msg_t *out)
     if (ep_id >= g_ep_count || prio > 2u) return false;
     EmbedIQ_Queue_t *q = g_ep[ep_id].q[prio];
     if (!q) return false;
-    return embediq_osal_queue_recv(q, out, 0u);
+    return embediq_osal_queue_recv(q, out, 0u) == EMBEDIQ_OK;
 }
 
 /** Return the total number of drop events emitted since last reset. */

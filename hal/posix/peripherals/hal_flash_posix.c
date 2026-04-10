@@ -108,11 +108,11 @@ static int write_file(const void *buf, size_t len)
 {
     ensure_parent_dir(s_tmp_path);
     FILE *f = fopen(s_tmp_path, "wb");
-    if (!f) return HAL_ERR_IO;
+    if (!f) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
     size_t written = fwrite(buf, 1u, len, f);
     fclose(f);
-    if (written != len) return HAL_ERR_IO;
-    if (rename(s_tmp_path, s_path) != 0) return HAL_ERR_IO;
+    if (written != len) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
+    if (rename(s_tmp_path, s_path) != 0) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
     return HAL_OK;
 }
 
@@ -122,7 +122,7 @@ static int write_file(const void *buf, size_t len)
 
 int hal_flash_read(uint32_t addr, void *buf, size_t len)
 {
-    if (!buf) return HAL_ERR_INVALID;
+    if (!buf) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     resolve_paths();
 
     /* Start with zeroed buffer (simulates erased flash). */
@@ -143,7 +143,7 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
 
 int hal_flash_write(uint32_t addr, const void *buf, size_t len)
 {
-    if (!buf) return HAL_ERR_INVALID;
+    if (!buf) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     resolve_paths();
 
     /* Read current file (may be empty). */
@@ -153,7 +153,7 @@ int hal_flash_write(uint32_t addr, const void *buf, size_t len)
 
     /* Compute required file size after this write. */
     size_t needed = (size_t)addr + len;
-    if (needed > sizeof(file_buf)) return HAL_ERR_INVALID;
+    if (needed > sizeof(file_buf)) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     if (needed > file_len) file_len = needed;
 
     /* Overlay the write region. */
@@ -173,7 +173,7 @@ int hal_flash_erase(uint32_t addr, size_t len)
 
     /* Fill the erased region with 0xFF (real flash erase state). */
     size_t needed = (size_t)addr + len;
-    if (needed > sizeof(file_buf)) return HAL_ERR_INVALID;
+    if (needed > sizeof(file_buf)) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     if (needed > file_len) file_len = needed;
 
     memset(file_buf + addr, 0xFF, len);

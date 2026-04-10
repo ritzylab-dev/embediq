@@ -18,31 +18,46 @@
 #include <stdio.h>
 #include <string.h>
 
-static FILE *g_stream = NULL;
+static FILE *g_stream        = NULL;
+static int   s_write_error   = 0;  /* latch: set on first write failure, cleared on open */
 
 int hal_obs_stream_open(const char *path)
 {
-    if (!path) return HAL_ERR_IO;
+    if (!path) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO); return HAL_ERR_IO; }
     if (g_stream) {
         fclose(g_stream);
         g_stream = NULL;
     }
     g_stream = fopen(path, "wb");
-    return g_stream ? HAL_OK : HAL_ERR_IO;
+    if (!g_stream) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO); return HAL_ERR_IO; }
+    s_write_error = 0;  /* stream opened successfully — clear any prior write-error latch */
+    return HAL_OK;
 }
 
 int hal_obs_stream_write(const void *data, uint16_t len)
 {
-    if (!g_stream || !data) return HAL_ERR_IO;
+    if (!g_stream || !data) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO); return HAL_ERR_IO; }
     if (len == 0u) return HAL_OK;
+    if (s_write_error) return HAL_ERR_IO;  /* latch: prior write failed — suppress storm */
     size_t written = fwrite(data, 1u, (size_t)len, g_stream);
-    return (written == (size_t)len) ? HAL_OK : HAL_ERR_IO;
+    if (written != (size_t)len) {
+        s_write_error = 1;  /* set latch — emit FAULT once, then stay silent */
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+    return HAL_OK;
 }
 
 int hal_obs_stream_flush(void)
 {
-    if (!g_stream) return HAL_ERR_IO;
-    return (fflush(g_stream) == 0) ? HAL_OK : HAL_ERR_IO;
+    if (!g_stream) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO); return HAL_ERR_IO; }
+    if (s_write_error) return HAL_ERR_IO;  /* latch: suppress flush storm */
+    if (fflush(g_stream) != 0) {
+        s_write_error = 1;
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+    return HAL_OK;
 }
 
 int hal_obs_stream_close(void)
@@ -51,7 +66,9 @@ int hal_obs_stream_close(void)
     fflush(g_stream);
     int ret = fclose(g_stream);
     g_stream = NULL;
-    return (ret == 0) ? HAL_OK : HAL_ERR_IO;
+    s_write_error = 0;  /* reset latch on close — next open starts clean */
+    if (ret != 0) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO); return HAL_ERR_IO; }
+    return HAL_OK;
 }
 
 /* ---------------------------------------------------------------------------
