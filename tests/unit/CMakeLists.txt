@@ -254,3 +254,48 @@ target_compile_options(test_obs_capture PRIVATE
 )
 
 add_test(NAME unit_obs_capture COMMAND test_obs_capture)
+
+# ---------------------------------------------------------------------------
+# OSAL Observatory behavioral tests (XOBS-1 catch-up — Gate 2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_osal_obs test_osal_obs.c)
+
+target_include_directories(test_osal_obs PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_osal_obs PRIVATE
+    embediq_osal_posix
+)
+
+target_compile_options(test_osal_obs PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_osal_obs COMMAND test_osal_obs)
+
+# ---------------------------------------------------------------------------
+# HAL Observatory behavioral tests (XOBS-2 + latch catch-up — Gate 2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_hal_obs test_hal_obs.c)
+
+target_include_directories(test_hal_obs PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_hal_obs PRIVATE
+    embediq_hal_posix
+)
+
+target_compile_options(test_hal_obs PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_hal_obs COMMAND test_hal_obs)
