@@ -299,3 +299,48 @@ target_compile_options(test_hal_obs PRIVATE
 )
 
 add_test(NAME unit_hal_obs COMMAND test_hal_obs)
+
+# ---------------------------------------------------------------------------
+# Test harness support library (P2-T5)
+# ---------------------------------------------------------------------------
+
+add_library(embediq_test_support STATIC
+    embediq_test_support.c
+)
+
+target_include_directories(embediq_test_support PUBLIC
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(embediq_test_support PUBLIC
+    embediq_fb_engine
+)
+
+target_compile_options(embediq_test_support PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+# ---------------------------------------------------------------------------
+# Test harness self-tests (P2-T5)
+# ---------------------------------------------------------------------------
+
+add_executable(test_harness test_harness.c)
+
+target_include_directories(test_harness PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_harness PRIVATE
+    embediq_fb_engine
+    embediq_test_support
+)
+
+target_compile_options(test_harness PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_test_harness COMMAND test_harness)
