@@ -125,18 +125,6 @@ can contribute to every deliverable.
       Gated by `EMBEDIQ_TRACE_TIMING` compile-time flag (off by default on
       constrained profiles).
 
-**Service FBs (platform-agnostic, run on Linux):**
-- [ ] fb_cloud_mqtt — MQTT 3.1.1 over TCP/IP. Connect, publish, subscribe,
-      reconnect with exponential backoff. Ops table pattern (`embediq_mqtt_ops_t`).
-      Linux host backend. Full test suite.
-- [ ] fb_telemetry — periodic metric reporting over MQTT or local log. No hardware
-      dependency. Configurable interval, metric selection, payload schema.
-- [ ] fb_provisioning — device identity and configuration provisioning flow.
-      Linux-backed for development. Ops table pattern.
-- [ ] fb_ota (logic + Linux mock) — OTA FSM: download, signature verification hook,
-      state machine (IDLE → DOWNLOADING → VERIFYING → APPLYING → CONFIRMED/ROLLBACK).
-      Linux file-based mock backend. Real dual-bank flash write is Phase 3.
-
 **Test infrastructure:**
 - [ ] Test harness — `embediq_test.h`, `bus_inject()`, scenario runner.
       Allows deterministic replay of message sequences in unit tests.
@@ -184,10 +172,9 @@ can contribute to every deliverable.
       fields must not contain (credentials, keys, PII). Required before public
       SDK release. (E1-g from expert review.)
 
-**Success criterion:** Smart thermostat + fb_cloud_mqtt publishing to a broker +
-fb_telemetry reporting, all running on Linux. Bridge daemon with a Python External
-FB communicating with native FBs. Observatory capturing everything. 100% of
-deliverables verified with zero hardware.
+**Success criterion:** Smart thermostat running on Linux with full Observatory
+capture. Bridge daemon with a Python External FB communicating with native FBs.
+All open-source deliverables verified with zero hardware.
 
 ---
 
@@ -371,4 +358,24 @@ what you need. Community demand directly influences phase priorities.
 
 ---
 
-*Apache 2.0 · embediq.com*
+---
+
+## EmbedIQ Pro
+
+Commercial production accelerators, available separately.
+Each Pro FB plugs into the Apache 2.0 framework via the standard FB interface.
+Licensing and access: [embediq.com/pro](https://embediq.com/pro)
+
+| Pro FB              | Description                                                              |
+|---------------------|--------------------------------------------------------------------------|
+| `fb_ota`            | OTA firmware updates — rollback, A/B partitions, integrity verification  |
+| `fb_telemetry`      | Structured telemetry — batching, compression, cloud-agnostic transport   |
+| `fb_cloud_mqtt`     | Production MQTT — auto-reconnect, QoS, AWS/Azure/GCP provisioning       |
+| `fb_nvm` Pro        | Enhanced NVM — wear leveling, atomic writes, key-value store, encryption |
+| `fb_secure_boot`    | Verified boot chain, HSM integration, firmware signing, anti-rollback    |
+| `fb_fleet_diag`     | Fleet diagnostics, remote debug, device health dashboards                |
+| `fb_compliance_log` | EU AI Act compliant logging, tamper-evident audit trails                 |
+
+---
+
+*Apache 2.0 core · embediq.com*

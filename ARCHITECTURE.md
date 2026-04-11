@@ -89,10 +89,11 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 │  Registry  ·  Community BSPs  ·  3rd-party FB wrappers                      │
 │  External FBs (Python · Node.js · Java · any language)                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  LAYER 2 — DRIVER FBs + SERVICE FBs          (all Apache 2.0)               │
-│  Driver FBs:   fb_uart · fb_gpio · fb_spi · fb_i2c                          │
-│                fb_timer · fb_nvm · fb_watchdog                              │
-│  Service FBs:  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger            │
+│  LAYER 2 — DRIVER FBs (Apache 2.0)                                         │
+│  fb_uart · fb_timer · fb_gpio · fb_i2c · fb_spi                             │
+│  fb_watchdog (basic) · fb_nvm (basic)                                        │
+│  Pro FBs (commercial licence): fb_ota · fb_telemetry · fb_cloud_mqtt · …   │
+│  → embediq.com/pro                                                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — FRAMEWORK ENGINE                  (all Apache 2.0)               │
 │  FB Registry  ·  Endpoint Router  ·  Message Bus (3-queue)                  │
@@ -623,9 +624,9 @@ static_assert(offsetof(MSG_TEMP_READING_Payload_t, temperature_c) == 0,
 {
   "core":     { "range": [0, 1023],    "owner": "embediq/embediq" },
   "official": {
-    "fb_cloud_mqtt": { "range": [1024, 1099], "owner": "embediq/embediq" },
-    "fb_ota":        { "range": [1100, 1149], "owner": "embediq/embediq" },
-    "fb_nvm":        { "range": [1150, 1199], "owner": "embediq/embediq" }
+    "fb_cloud_mqtt": { "range": [1024, 1099], "owner": "embediq/embediq-pro" },
+    "fb_ota":        { "range": [1100, 1149], "owner": "embediq/embediq-pro" },
+    "fb_nvm":        { "range": [1150, 1199], "owner": "embediq/embediq-pro" }
   },
   "community": {
     "fb_modbus_rtu": { "range": [5120, 5179], "owner": "github.com/user/repo" }
@@ -1266,18 +1267,19 @@ API surface. Breaking change = CI failure.
 
 The following are Apache 2.0 forever — permanent, irrevocable:
 
-- All of `core/` — FB engine, message bus, FSM engine, Observatory runtime, OSAL contracts
-- All OSAL implementations — FreeRTOS, Pi/Linux POSIX, Zephyr, bare-metal, RISC-V
-- All Driver FBs — `fb_uart`, `fb_watchdog`, `fb_nvm`, `fb_i2c`, `fb_spi`, `fb_timer`, `fb_gpio`
-- All Service FBs — `fb_cloud_mqtt`, `fb_ota`, `fb_telemetry`, `fb_provisioning`
-- All tools — `messages.iq` generator, `embediq` CLI, FB registry protocol
-- All examples — smart thermostat, industrial gateway, and all future examples
+- All of `core/` — FB engine, message bus, FSM engine, Observatory runtime, OSAL
+- All OSAL implementations — FreeRTOS, POSIX, Zephyr, bare-metal
+- Base Driver FBs — `fb_uart`, `fb_i2c`, `fb_spi`, `fb_timer`, `fb_gpio`
+- Infrastructure FBs — `fb_watchdog` (basic), `fb_nvm` (basic)
+- All tools — `messages.iq` generator, `embediq` CLI, Observatory CLI
+- The `.iqtrace` binary format specification — open forever
+- All examples and tests in this repository
 
-This commitment cannot be changed by any future owner.
-
-Layer 4 (commercial tools) is built on top of this open foundation. The framework never
-requires Layer 4. All commercial tools are optional and additive. See commercial
-documentation for details.
+**EmbedIQ Pro** — production accelerator FBs (`fb_ota`, `fb_telemetry`,
+`fb_cloud_mqtt`, `fb_nvm` Pro, and others) are commercial and proprietary.
+They plug into the Apache 2.0 framework via the standard FB interface.
+See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) and
+[embediq.com/pro](https://embediq.com/pro).
 
 ---
 

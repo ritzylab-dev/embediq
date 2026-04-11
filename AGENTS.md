@@ -9,10 +9,10 @@ creating any task, or making any architectural decision.
 
 ## 1. What EmbedIQ Is (3 Sentences)
 
-EmbedIQ is an open-source, Apache 2.0 licensed **application framework for
-embedded and edge** — the layer that sits above the substrate (RTOS, bare-metal, or
-Linux) and gives developers clean, reusable structure for building production firmware
-and Linux gateway applications.
+EmbedIQ is an open-core — Apache 2.0 core with commercial Pro FBs — **application
+framework for embedded and edge** — the layer that sits above the substrate (RTOS,
+bare-metal, or Linux) and gives developers clean, reusable structure for building
+production firmware and Linux gateway applications.
 
 It provides a message-driven actor model (Functional Blocks), a reusable component
 library (cloud, OTA, telemetry, observability), and hardware abstraction that enables
@@ -109,9 +109,9 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 │  Bridge daemon · bridge/websocket · bridge/unix_socket          │
 │  Community Driver FBs · 3rd-party FB wrappers                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  LAYER 2 — DRIVER FBs + SERVICE FBs                             │
-│  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_logger         │
-│  fb_cloud_mqtt · fb_ota · fb_telemetry · fb_nvm                 │
+│  LAYER 2 — DRIVER FBs (Apache 2.0)                               │
+│  fb_uart · fb_timer · fb_gpio · fb_watchdog (basic) · fb_nvm     │
+│  Pro FBs (commercial): fb_ota · fb_telemetry · fb_cloud_mqtt     │
 ├─────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — FRAMEWORK ENGINE                                     │
 │  FB Registry · Endpoint Router · Message Bus (3-queue)          │
@@ -340,12 +340,14 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Driver FBs    | fb_timer                       | STABLE      | fbs/drivers/ + hal/posix/hal_timer_posix.c                   |
 | Driver FBs    | fb_nvm                         | STABLE      | fbs/drivers/ + hal/posix/hal_flash_posix.c                   |
 | Driver FBs    | fb_watchdog                    | STABLE      | fbs/drivers/ + hal/posix/hal_wdg_posix.c                     |
-| Service FBs   | fb_cloud_mqtt                  | NOT_STARTED | Phase 2                                                      |
-| Service FBs   | fb_ota                         | NOT_STARTED | Phase 2                                                      |
 | Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
 | Examples      | gateway                        | STABLE      | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
+
+> **EmbedIQ Pro FBs** (fb_ota, fb_telemetry, fb_cloud_mqtt) are commercial
+> modules developed in the private Pro repository. They are not open-source
+> roadmap items. See [embediq.com/pro](https://embediq.com/pro).
 
 ---
 
