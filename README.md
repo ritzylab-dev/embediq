@@ -36,9 +36,9 @@ The structural fix: every firmware concern — a UART driver, an OTA updater, a 
 │  Registry · Community BSPs · 3rd-party FB wrappers                 │
 │  External FBs (Python · Node.js · Java · any language)            │
 ├────────────────────────────────────────────────────────────────────┤
-│  Layer 2 · Driver FBs + Service FBs                                │
-│  Driver FBs:  fb_timer · fb_uart · fb_nvm · fb_watchdog · fb_gpio  │
-│  Service FBs: fb_cloud_mqtt · fb_ota · fb_telemetry · fb_logger    │
+│  Layer 2 · Driver FBs (Apache 2.0)                                           │
+│  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_nvm                         │
+│  Pro FBs (commercial): fb_ota · fb_telemetry · fb_cloud_mqtt → embediq.com/pro │
 │                 ▼  typed messages only  ▼                          │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 1 · Framework Engine                 ← running on POSIX     │
@@ -129,7 +129,7 @@ The event record format, TLV framing, and session structure are open and specifi
 - `.iqtrace` open binary format — TLV-framed, little-endian, forward-compatible, fully specified in `docs/observability/iqtrace_format.md` (Apache 2.0)
 - `tools/embediq_obs/` CLI — `embediq obs decode / stats / filter / export` — read any `.iqtrace` file from a laptop, no Studio required
 
-**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, `fb_cloud_mqtt`, `fb_ota`. See [ROADMAP.md](ROADMAP.md).
+**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, hardware Driver FBs. Pro FBs (fb_ota, fb_telemetry, fb_cloud_mqtt) available at [embediq.com/pro](https://embediq.com/pro). See [ROADMAP.md](ROADMAP.md).
 
 See [ROADMAP.md](ROADMAP.md) for the full timeline.
 
@@ -159,7 +159,10 @@ QP/C — the closest prior art, 60,000+ downloads per year for 19 years — ship
 
 The `.iqtrace` binary format and `embediq obs` CLI are Apache 2.0 forever — the data your firmware produces is permanently open. EmbedIQ Studio (future commercial) adds visual analysis on top; it never owns or restricts the underlying event data.
 
-See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the exact commitment: what is Apache 2.0 forever and what the future commercial layer is.
+The core framework, base Driver FBs, and infrastructure FBs are Apache 2.0
+forever. Production accelerators (fb_ota, fb_telemetry, fb_cloud_mqtt) are
+available as EmbedIQ Pro with commercial licensing. See
+[COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the exact line.
 
 ---
 
