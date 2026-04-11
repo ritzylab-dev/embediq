@@ -36,9 +36,9 @@ The structural fix: every firmware concern — a UART driver, an OTA updater, a 
 │  Registry · Community BSPs · 3rd-party FB wrappers                 │
 │  External FBs (Python · Node.js · Java · any language)            │
 ├────────────────────────────────────────────────────────────────────┤
-│  Layer 2 · Driver FBs (Apache 2.0)                                           │
-│  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_nvm                         │
-│  Pro FBs (commercial): fb_ota · fb_telemetry · fb_cloud_mqtt → embediq.com/pro │
+│  Layer 2 · Driver FBs (Apache 2.0)                                 │
+│  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_nvm               │
+│  Pro FBs: fb_ota · fb_telemetry · fb_cloud_mqtt → embediq.com/pro  │
 │                 ▼  typed messages only  ▼                          │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 1 · Framework Engine                 ← running on POSIX     │
