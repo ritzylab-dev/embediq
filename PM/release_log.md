@@ -50,6 +50,20 @@ What shipped:
 - dev post-release state: PRs #64 #66 #67 ahead of main (process/docs only — no code)
 - Verified by:   Gate 15 agent pass — second run
 
+## v0.2.1 — 2026-04-10 UTC
+
+- Tag SHA:       529ec0d3853c77dccff4cb5eecaeea913eb33eab
+- main HEAD SHA: 529ec0d3853c77dccff4cb5eecaeea913eb33eab
+- Match:         ✅ CONFIRMED
+- dev post-release state: clean — dev equals main at tag commit (0 commits ahead)
+- Verified by:   Gate 15 agent pass
+
+What shipped (docs-only release):
+- PR #101: Gate 15 release log for v0.2.0
+- PR #102: Open-core licensing model — five public docs updated
+- PR #103: README.md Layer 2 diagram box width fix
+- PR #104: Gate 14B contrib_sim 23/23 pass
+
 ## v0.2.0 — 2026-04-10 UTC
 
 - Tag SHA:       350423650605c14982802c6ebee21275f176442f
