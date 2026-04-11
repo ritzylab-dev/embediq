@@ -49,3 +49,26 @@ What shipped:
 - Match:         ✅ CONFIRMED — tag corrected by human after Gate 15 mismatch finding
 - dev post-release state: PRs #64 #66 #67 ahead of main (process/docs only — no code)
 - Verified by:   Gate 15 agent pass — second run
+
+## v0.2.0 — 2026-04-10 UTC
+
+- Tag SHA:       350423650605c14982802c6ebee21275f176442f
+- main HEAD SHA: 350423650605c14982802c6ebee21275f176442f
+- Match:         ✅ CONFIRMED
+- dev post-release state: clean — dev equals main at tag commit (0 commits ahead)
+- Verified by:   Gate 15 agent pass
+
+Gate evidence:
+- PRs #92–#98: Phase 2 Stage 1 (XOBS-1 through XOBS-4 + test harness) → dev ✅
+- PR #99: Gate 14B contrib_sim pass — 23/23 fresh clone → dev ✅
+- PR #100: dev→main Phase 2 Stage 1 promotion → main ✅
+- Tag v0.2.0 on 3504236 (Merge PR #100) ✅
+
+What shipped:
+- Cross-layer observability: OSAL fault (0x66), HAL fault (0x67), queue depth (0x42), WDG checkin (0x50)
+- Observatory feedback storm latch in hal_obs_stream_posix.c
+- OSAL/HAL CI obligation scripts promoted to --strict
+- Bus queue depth warning with configurable EMBEDIQ_QUEUE_WARN_THRESHOLD (75%)
+- Test harness: bus_inject(), EMBEDIQ_TEST_SOURCE_ID=0xFEu, scenario runner
+- Behavioral test coverage: test_osal_obs.c (3 tests), test_hal_obs.c (8 tests)
+- 23 tests total (was 20 at v0.1.3)
