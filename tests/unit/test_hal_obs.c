@@ -47,19 +47,29 @@ static int g_tests_failed = 0;
 } while (0)
 
 /* ---------------------------------------------------------------------------
- * /dev/full availability probe.
+ * /dev/full behavioral probe.
  *
- * access("/dev/full", W_OK) checks inode permission bits only. Inside a
- * container runtime (e.g. GitHub Actions ubuntu-latest), permission bits may
- * indicate writable while the kernel security policy blocks the actual device
- * open. fopen() reflects the real outcome — use it as the probe instead.
+ * Checks both that /dev/full can be opened AND that writes to it actually
+ * fail. Some container environments (e.g. GitHub Actions ubuntu-latest)
+ * have a /dev/full that accepts writes rather than returning ENOSPC. In
+ * those environments the latch tests cannot run correctly and must skip.
+ *
+ * setvbuf(_IONBF) matches the production HAL behaviour set in
+ * hal_obs_stream_open(), ensuring the probe reflects what the tests
+ * will actually experience.
  * ------------------------------------------------------------------------- */
 static bool dev_full_available(void)
 {
     FILE *f = fopen("/dev/full", "wb");
     if (!f) return false;
+    /* Mirror production HAL: disable buffering so writes go to OS directly */
+    (void)setvbuf(f, NULL, _IONBF, 0);
+    uint8_t probe = 0xAAu;
+    size_t written = fwrite(&probe, 1u, 1u, f);
     fclose(f);
-    return true;
+    /* /dev/full is only usable if writes fail (ENOSPC behaviour confirmed).
+     * If written == 1 the device accepted the byte — not a true /dev/full. */
+    return (written == 0u);
 }
 
 /* ---------------------------------------------------------------------------
