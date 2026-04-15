@@ -86,3 +86,10 @@ What shipped:
 - Test harness: bus_inject(), EMBEDIQ_TEST_SOURCE_ID=0xFEu, scenario runner
 - Behavioral test coverage: test_osal_obs.c (3 tests), test_hal_obs.c (8 tests)
 - 23 tests total (was 20 at v0.1.3)
+
+## v0.2.2 — 2026-04-10 UTC
+- Tag SHA:       4561eb6a1c4edbad7c16a69b6f5d59a84ca190fd
+- main HEAD SHA: 4561eb6a1c4edbad7c16a69b6f5d59a84ca190fd
+- Match:         ✅
+- dev post-release state: clean
+- Verified by:   Gate 15 agent pass
