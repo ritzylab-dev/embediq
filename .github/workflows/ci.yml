@@ -36,6 +36,9 @@ jobs:
           cmake -B build -DEMBEDIQ_PLATFORM=host
           cmake --build build
 
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
       - name: Validate — no hardcoded sizing constants (Invariant I-08)
         run: python3 tools/validator.py
 
@@ -73,6 +76,9 @@ jobs:
 
       - name: SPDX licence identifier check — warning
         run: python3 tools/ci/licence_check.py
+
+      - name: FB layer call enforcement — strict (I-07, R-02, R-sub-03)
+        run: python3 tools/ci/check_fb_calls.py
 
       - name: Binary blob detection — warning
         run: python3 tools/ci/binary_blob_check.py

@@ -30,6 +30,12 @@ int hal_obs_stream_open(const char *path)
     }
     g_stream = fopen(path, "wb");
     if (!g_stream) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_OBS_STREAM, HAL_ERR_IO); return HAL_ERR_IO; }
+    /* Disable C stdio buffering so every write() reaches the OS immediately.
+     * Without this, fwrite() to devices like /dev/full appears to succeed
+     * (data sits in the C library buffer), hiding write failures until fclose.
+     * For an Observatory stream, unbuffered output is also correct by design:
+     * events must be written immediately so they are not lost on crash. */
+    (void)setvbuf(g_stream, NULL, _IONBF, 0);
     s_write_error = 0;  /* stream opened successfully — clear any prior write-error latch */
     return HAL_OK;
 }
