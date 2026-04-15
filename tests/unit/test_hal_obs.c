@@ -24,7 +24,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>   /* access() for /dev/full probe */
 
 /* Observatory internal API (host builds only — EMBEDIQ_PLATFORM_HOST) */
 extern void     obs__reset(void);
@@ -46,6 +45,22 @@ static int g_tests_failed = 0;
         printf("PASS  %s\n", __func__);                                        \
     }                                                                          \
 } while (0)
+
+/* ---------------------------------------------------------------------------
+ * /dev/full availability probe.
+ *
+ * access("/dev/full", W_OK) checks inode permission bits only. Inside a
+ * container runtime (e.g. GitHub Actions ubuntu-latest), permission bits may
+ * indicate writable while the kernel security policy blocks the actual device
+ * open. fopen() reflects the real outcome — use it as the probe instead.
+ * ------------------------------------------------------------------------- */
+static bool dev_full_available(void)
+{
+    FILE *f = fopen("/dev/full", "wb");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
 
 /* ---------------------------------------------------------------------------
  * XOBS-2 test 1: HAL flash emits FAULT on NULL read buffer
@@ -164,8 +179,8 @@ static void test_obs_stream_null_data_emits_fault(void)
 static void test_obs_stream_latch_suppresses_second_fault(void)
 {
     /* /dev/full is Linux-only — skip gracefully on macOS */
-    if (access("/dev/full", W_OK) != 0) {
-        printf("SKIP  %s  (/dev/full not available on this platform)\n", __func__);
+    if (!dev_full_available()) {
+        printf("SKIP  %s  (/dev/full not openable on this platform)\n", __func__);
         return;
     }
 
@@ -196,8 +211,8 @@ static void test_obs_stream_latch_suppresses_second_fault(void)
 
 static void test_obs_stream_latch_cleared_on_open(void)
 {
-    if (access("/dev/full", W_OK) != 0) {
-        printf("SKIP  %s  (/dev/full not available on this platform)\n", __func__);
+    if (!dev_full_available()) {
+        printf("SKIP  %s  (/dev/full not openable on this platform)\n", __func__);
         return;
     }
 
@@ -226,8 +241,8 @@ static void test_obs_stream_latch_cleared_on_open(void)
 
 static void test_obs_stream_latch_cleared_on_close(void)
 {
-    if (access("/dev/full", W_OK) != 0) {
-        printf("SKIP  %s  (/dev/full not available on this platform)\n", __func__);
+    if (!dev_full_available()) {
+        printf("SKIP  %s  (/dev/full not openable on this platform)\n", __func__);
         return;
     }
 
