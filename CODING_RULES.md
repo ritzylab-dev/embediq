@@ -93,6 +93,8 @@ other_fb_process_temp(reading);
 
 ### R-sub-03 · No OSAL calls from application FB code
 
+**Enforcement:** CI — `tools/ci/check_fb_calls.py` (hard failure)
+
 ```c
 // ✓ CORRECT — let the framework create the thread
 embediq_fb_register(&config);
@@ -100,6 +102,27 @@ embediq_fb_register(&config);
 // ✗ WRONG — never call RTOS directly from app FB
 xTaskCreate(...);
 embediq_osal_task_create(...);
+```
+
+---
+
+### R-sub-03a · No blocking calls in dispatch threads
+
+**Enforcement:** CI — `tools/ci/check_fb_calls.py` (hard failure)
+
+A message handler must never call `sleep()`, `usleep()`, `nanosleep()`,
+`embediq_osal_delay_ms()`, or any function that blocks the calling thread.
+Blocking a dispatch thread delays all messages queued for that FB and
+can cause queue fill under high message rates. Use `MSG_TIMER_*`
+subscriptions for time-based logic instead of sleeping.
+
+```c
+// ✓ CORRECT — subscribe to MSG_TIMER_100MS and react on tick
+EMBEDIQ_SUBS(my_subs, MSG_TIMER_100MS);
+
+// ✗ WRONG — blocks the dispatch thread for this FB
+usleep(100 * 1000);
+embediq_osal_delay_ms(100);
 ```
 
 ---
@@ -331,7 +354,7 @@ Run this before opening every PR. Agents must include this checklist
 as a comment on their own PR.
 
 ```
-[ ] tools/check_invariants.sh passes (run locally before push)
+[ ] bash scripts/check.sh passes (run locally before push)
 [ ] cmake --build build succeeds on host (cmake -B build -DEMBEDIQ_PLATFORM=host first if needed)
 [ ] All tests pass: ctest --test-dir build --output-on-failure (17 entries: 12 unit + 4 integration + 1 CLI)
 [ ] Thermostat scenario passes (if Layer 1 or Layer 2 change)
