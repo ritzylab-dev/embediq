@@ -24,7 +24,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>   /* access() for /dev/full probe */
 
 /* Observatory internal API (host builds only — EMBEDIQ_PLATFORM_HOST) */
 extern void     obs__reset(void);
@@ -46,6 +45,32 @@ static int g_tests_failed = 0;
         printf("PASS  %s\n", __func__);                                        \
     }                                                                          \
 } while (0)
+
+/* ---------------------------------------------------------------------------
+ * /dev/full behavioral probe.
+ *
+ * Checks both that /dev/full can be opened AND that writes to it actually
+ * fail. Some container environments (e.g. GitHub Actions ubuntu-latest)
+ * have a /dev/full that accepts writes rather than returning ENOSPC. In
+ * those environments the latch tests cannot run correctly and must skip.
+ *
+ * setvbuf(_IONBF) matches the production HAL behaviour set in
+ * hal_obs_stream_open(), ensuring the probe reflects what the tests
+ * will actually experience.
+ * ------------------------------------------------------------------------- */
+static bool dev_full_available(void)
+{
+    FILE *f = fopen("/dev/full", "wb");
+    if (!f) return false;
+    /* Mirror production HAL: disable buffering so writes go to OS directly */
+    (void)setvbuf(f, NULL, _IONBF, 0);
+    uint8_t probe = 0xAAu;
+    size_t written = fwrite(&probe, 1u, 1u, f);
+    fclose(f);
+    /* /dev/full is only usable if writes fail (ENOSPC behaviour confirmed).
+     * If written == 1 the device accepted the byte — not a true /dev/full. */
+    return (written == 0u);
+}
 
 /* ---------------------------------------------------------------------------
  * XOBS-2 test 1: HAL flash emits FAULT on NULL read buffer
@@ -164,28 +189,28 @@ static void test_obs_stream_null_data_emits_fault(void)
 static void test_obs_stream_latch_suppresses_second_fault(void)
 {
     /* /dev/full is Linux-only — skip gracefully on macOS */
-    if (access("/dev/full", W_OK) != 0) {
-        printf("SKIP  %s  (/dev/full not available on this platform)\n", __func__);
+    if (!dev_full_available()) {
+        printf("SKIP  %s  (/dev/full not openable on this platform)\n", __func__);
         return;
     }
 
     hal_obs_stream_close();
+    obs__reset();                   /* clear ring BEFORE opening /dev/full */
+
     int ret = hal_obs_stream_open("/dev/full");
     ASSERT(ret == HAL_OK, "/dev/full must open successfully");
 
-    obs__reset();
     static const uint8_t buf[4] = {0x01u, 0x02u, 0x03u, 0x04u};
 
-    /* First write: fwrite fails → s_write_error=1, FAULT emitted once */
+    /* First write — fwrite fails on /dev/full → latch set, one FAULT emitted */
     hal_obs_stream_write(buf, (uint16_t)sizeof(buf));
     ASSERT(obs__ring_count() == 1u,
            "first write failure must emit exactly one FAULT event");
 
-    /* Second write: latch set → silent return, no emission */
-    obs__reset();
+    /* Second write — latch active → silent discard, ring must not grow */
     hal_obs_stream_write(buf, (uint16_t)sizeof(buf));
-    ASSERT(obs__ring_count() == 0u,
-           "second write while latch set must emit NO event (storm suppressed)");
+    ASSERT(obs__ring_count() == 1u,
+           "second write while latch set must not add to ring (storm suppressed)");
 
     hal_obs_stream_close();
 }
@@ -196,12 +221,14 @@ static void test_obs_stream_latch_suppresses_second_fault(void)
 
 static void test_obs_stream_latch_cleared_on_open(void)
 {
-    if (access("/dev/full", W_OK) != 0) {
-        printf("SKIP  %s  (/dev/full not available on this platform)\n", __func__);
+    if (!dev_full_available()) {
+        printf("SKIP  %s  (/dev/full not openable on this platform)\n", __func__);
         return;
     }
 
     hal_obs_stream_close();
+    obs__reset();                   /* clear ring BEFORE opening /dev/full */
+
     hal_obs_stream_open("/dev/full");
     static const uint8_t buf[4] = {0xAAu, 0xBBu, 0xCCu, 0xDDu};
     hal_obs_stream_write(buf, (uint16_t)sizeof(buf));  /* sets latch */
@@ -210,11 +237,12 @@ static void test_obs_stream_latch_cleared_on_open(void)
     int ret = hal_obs_stream_open("/tmp/test_hal_obs_g.iqtrace");
     ASSERT(ret == HAL_OK, "open with valid path must succeed");
 
-    obs__reset();
+    /* Capture ring count before clean write — latch cleared, no new fault */
+    uint32_t count_before = obs__ring_count();
     int wr = hal_obs_stream_write(buf, (uint16_t)sizeof(buf));
     ASSERT(wr == HAL_OK,
            "write after open must succeed (latch cleared on open)");
-    ASSERT(obs__ring_count() == 0u,
+    ASSERT(obs__ring_count() == count_before,
            "no FAULT must be emitted after latch cleared by open");
 
     hal_obs_stream_close();
@@ -226,26 +254,29 @@ static void test_obs_stream_latch_cleared_on_open(void)
 
 static void test_obs_stream_latch_cleared_on_close(void)
 {
-    if (access("/dev/full", W_OK) != 0) {
-        printf("SKIP  %s  (/dev/full not available on this platform)\n", __func__);
+    if (!dev_full_available()) {
+        printf("SKIP  %s  (/dev/full not openable on this platform)\n", __func__);
         return;
     }
 
     hal_obs_stream_close();
+    obs__reset();                   /* clear ring BEFORE opening /dev/full */
+
     hal_obs_stream_open("/dev/full");
     static const uint8_t buf[4] = {0x11u, 0x22u, 0x33u, 0x44u};
     hal_obs_stream_write(buf, (uint16_t)sizeof(buf));  /* sets latch */
 
-    hal_obs_stream_close();  /* must clear latch unconditionally */
+    hal_obs_stream_close();         /* must clear latch unconditionally */
 
     int ret = hal_obs_stream_open("/tmp/test_hal_obs_h.iqtrace");
     ASSERT(ret == HAL_OK, "open after close must succeed");
 
-    obs__reset();
+    /* Capture ring count before clean write — latch cleared, no new fault */
+    uint32_t count_before = obs__ring_count();
     int wr = hal_obs_stream_write(buf, (uint16_t)sizeof(buf));
     ASSERT(wr == HAL_OK,
            "write after close+reopen must succeed (latch cleared on close)");
-    ASSERT(obs__ring_count() == 0u,
+    ASSERT(obs__ring_count() == count_before,
            "no FAULT must be emitted after latch cleared by close");
 
     hal_obs_stream_close();
