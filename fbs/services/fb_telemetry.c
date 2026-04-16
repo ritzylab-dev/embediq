@@ -12,14 +12,16 @@
  *   - No blocking primitives in handlers (R-sub-03a).
  *   - No dynamic allocation (I-07, R-02) — all state in static arrays.
  *
- * Batch payload layout (packed; 8-byte header + N × 14-byte entries):
+ * Batch payload layout (packed; 8-byte header + N × 18-byte entries):
  *   header  — MSG_TELEMETRY_BATCH_Payload_t from generated catalog
- *   entries — TelBatchEntry_t[N] packed after the header
+ *   entries — EmbedIQ_Telemetry_Batch_Entry_t[N] packed after the header
+ *             (public type in core/include/embediq_telemetry.h)
  *
  * Batch capacity: (EMBEDIQ_MSG_MAX_PAYLOAD - sizeof(batch header)) /
- * sizeof(TelBatchEntry_t). With MAX_PAYLOAD=64 that is 4 entries per
- * message; tables larger than 4 active entries are split across multiple
- * MSG_TELEMETRY_BATCH messages, each with its own entry_count.
+ * sizeof(EmbedIQ_Telemetry_Batch_Entry_t). With MAX_PAYLOAD=64 that is
+ * 3 entries per message; tables larger than 3 active entries are split
+ * across multiple MSG_TELEMETRY_BATCH messages, each with its own
+ * entry_count.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -42,11 +44,11 @@
 
 /* ---------------------------------------------------------------------------
  * Internal types
+ *
+ * Public types live in core/include/embediq_telemetry.h:
+ *   EmbedIQ_Telemetry_Batch_Entry_t   — packed 18-byte on-wire entry
+ *   EmbedIQ_Telemetry_Entry_Type_t    — enum for the .type field
  * ------------------------------------------------------------------------- */
-
-#define TEL_TYPE_GAUGE      0u
-#define TEL_TYPE_COUNTER    1u
-#define TEL_TYPE_HISTOGRAM  2u
 
 #define TEL_SLOT_FREE       0xFFFFu
 
@@ -64,17 +66,6 @@ typedef struct {
     uint32_t counter_total;
 } fb_telemetry_entry_t;
 
-/* Packed on-wire batch entry — 14 bytes. */
-typedef struct __attribute__((packed)) {
-    uint16_t metric_id;
-    uint8_t  type;
-    uint8_t  unit_id;
-    float    value_a;        /* gauge:avg    counter:total  histogram:mean */
-    float    value_b;        /* gauge:last   counter:0      histogram:min  */
-    float    value_c;        /* gauge:max    counter:0      histogram:max  */
-    uint16_t count;          /* samples in window (capped to UINT16_MAX)   */
-} TelBatchEntry_t;
-
 typedef struct {
     char key[EMBEDIQ_TELEMETRY_TAG_LEN];
     char val[EMBEDIQ_TELEMETRY_TAG_LEN];
@@ -82,7 +73,7 @@ typedef struct {
 
 /* Batch header as defined by generated/telemetry_msg_catalog.h. */
 #define TEL_HDR_SIZE   (sizeof(MSG_TELEMETRY_BATCH_Payload_t))
-#define TEL_ENTRY_SIZE (sizeof(TelBatchEntry_t))
+#define TEL_ENTRY_SIZE EMBEDIQ_TELEMETRY_ENTRY_SIZE
 #define TEL_ENTRIES_PER_BATCH \
     ((EMBEDIQ_MSG_MAX_PAYLOAD - TEL_HDR_SIZE) / TEL_ENTRY_SIZE)
 
@@ -143,7 +134,7 @@ static fb_telemetry_entry_t *find_or_alloc(uint16_t metric_id,
     return NULL;  /* table full — caller drops silently */
 }
 
-static void build_entry(const fb_telemetry_entry_t *src, TelBatchEntry_t *dst)
+static void build_entry(const fb_telemetry_entry_t *src, EmbedIQ_Telemetry_Batch_Entry_t *dst)
 {
     dst->metric_id = src->metric_id;
     dst->type      = src->type;
@@ -153,17 +144,17 @@ static void build_entry(const fb_telemetry_entry_t *src, TelBatchEntry_t *dst)
     float n = (src->count > 0u) ? (float)src->count : 1.0f;
 
     switch (src->type) {
-    case TEL_TYPE_GAUGE:
+    case EMBEDIQ_TELEMETRY_ENTRY_GAUGE:
         dst->value_a = src->sum / n;   /* avg  */
         dst->value_b = src->last;      /* last */
         dst->value_c = src->max;       /* max  */
         break;
-    case TEL_TYPE_COUNTER:
+    case EMBEDIQ_TELEMETRY_ENTRY_COUNTER:
         dst->value_a = (float)src->counter_total;
         dst->value_b = 0.0f;
         dst->value_c = 0.0f;
         break;
-    case TEL_TYPE_HISTOGRAM:
+    case EMBEDIQ_TELEMETRY_ENTRY_HISTOGRAM:
     default:
         dst->value_a = src->sum / n;   /* mean */
         dst->value_b = src->min;
@@ -182,7 +173,7 @@ static void publish_batch(uint8_t fault_triggered)
      * Each group becomes one MSG_TELEMETRY_BATCH message. */
     uint32_t i = 0u;
     while (i < EMBEDIQ_TELEMETRY_MAX_METRICS) {
-        TelBatchEntry_t group[TEL_ENTRIES_PER_BATCH];
+        EmbedIQ_Telemetry_Batch_Entry_t group[TEL_ENTRIES_PER_BATCH];
         uint8_t n = 0u;
 
         while (i < EMBEDIQ_TELEMETRY_MAX_METRICS && n < TEL_ENTRIES_PER_BATCH) {
@@ -225,7 +216,7 @@ static void publish_batch(uint8_t fault_triggered)
 
 void fb_telemetry__agg_gauge(uint16_t metric_id, float value, uint8_t unit_id)
 {
-    fb_telemetry_entry_t *e = find_or_alloc(metric_id, TEL_TYPE_GAUGE, unit_id);
+    fb_telemetry_entry_t *e = find_or_alloc(metric_id, EMBEDIQ_TELEMETRY_ENTRY_GAUGE, unit_id);
     if (e == NULL) return;
     e->count++;
     e->sum  += value;
@@ -236,7 +227,7 @@ void fb_telemetry__agg_gauge(uint16_t metric_id, float value, uint8_t unit_id)
 
 void fb_telemetry__agg_counter(uint16_t metric_id, uint32_t delta, uint8_t unit_id)
 {
-    fb_telemetry_entry_t *e = find_or_alloc(metric_id, TEL_TYPE_COUNTER, unit_id);
+    fb_telemetry_entry_t *e = find_or_alloc(metric_id, EMBEDIQ_TELEMETRY_ENTRY_COUNTER, unit_id);
     if (e == NULL) return;
     e->count++;
     e->counter_total += delta;
@@ -244,7 +235,7 @@ void fb_telemetry__agg_counter(uint16_t metric_id, uint32_t delta, uint8_t unit_
 
 void fb_telemetry__agg_histogram(uint16_t metric_id, float observation, uint8_t unit_id)
 {
-    fb_telemetry_entry_t *e = find_or_alloc(metric_id, TEL_TYPE_HISTOGRAM, unit_id);
+    fb_telemetry_entry_t *e = find_or_alloc(metric_id, EMBEDIQ_TELEMETRY_ENTRY_HISTOGRAM, unit_id);
     if (e == NULL) return;
     e->count++;
     e->sum += observation;
