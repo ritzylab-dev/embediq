@@ -157,6 +157,10 @@ extern "C" {
 #   define EMBEDIQ_TELEMETRY_UNIT_LEN        8u
 #endif
 
+#ifndef EMBEDIQ_TELEMETRY_TAG_LEN
+#   define EMBEDIQ_TELEMETRY_TAG_LEN        16u
+#endif
+
 #ifndef EMBEDIQ_TELEMETRY_IMMEDIATE_FAULT
 #   define EMBEDIQ_TELEMETRY_IMMEDIATE_FAULT 1u
 #endif
