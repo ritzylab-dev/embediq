@@ -242,10 +242,13 @@ static void on_telemetry_batch(EmbedIQ_FB_Handle_t fb, const void *msg,
  */
 ```
 
-To decode the per-entry summaries after the header, match the packed
-14-byte layout fb_telemetry writes (see the `TelBatchEntry_t` comment in
-`fbs/services/fb_telemetry.c`). A public decoder header will ship in a
-follow-up PR alongside the first production batch consumer.
+To decode the per-entry summaries after the header, cast the bytes after
+the batch header to `EmbedIQ_Telemetry_Batch_Entry_t[hdr.entry_count]` —
+the public packed 18-byte type in `core/include/embediq_telemetry.h`.
+Each entry carries `metric_id`, `type` (use the `EmbedIQ_Telemetry_Entry_Type_t`
+enum constants), `unit_id`, three float fields (`value_a` / `_b` / `_c` —
+meaning depends on `type`; see the struct's doc comment), and the in-window
+sample `count`.
 
 ---
 

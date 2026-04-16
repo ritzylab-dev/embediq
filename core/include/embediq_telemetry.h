@@ -52,6 +52,42 @@ typedef enum {
     EMBEDIQ_UNIT_UNKNOWN  = 255u
 } EmbedIQ_Telemetry_Unit_t;
 
+/* Metric type — value of the EmbedIQ_Telemetry_Batch_Entry_t.type field. */
+typedef enum {
+    EMBEDIQ_TELEMETRY_ENTRY_GAUGE     = 0u,
+    EMBEDIQ_TELEMETRY_ENTRY_COUNTER   = 1u,
+    EMBEDIQ_TELEMETRY_ENTRY_HISTOGRAM = 2u
+} EmbedIQ_Telemetry_Entry_Type_t;
+
+/*
+ * One entry within a MSG_TELEMETRY_BATCH payload.
+ *
+ * Packed layout (always follows MSG_TELEMETRY_BATCH_Payload_t in the
+ * message payload):
+ *
+ *   value_a:  gauge=avg   counter=total   histogram=mean
+ *   value_b:  gauge=last  counter=0       histogram=min
+ *   value_c:  gauge=max   counter=0       histogram=max
+ *
+ * Cast the raw payload bytes after the batch header to an array of
+ * EmbedIQ_Telemetry_Batch_Entry_t[entry_count] to decode the batch.
+ */
+typedef struct __attribute__((packed)) {
+    uint16_t metric_id;
+    uint8_t  type;     /* EmbedIQ_Telemetry_Entry_Type_t */
+    uint8_t  unit_id;  /* EmbedIQ_Telemetry_Unit_t */
+    float    value_a;
+    float    value_b;
+    float    value_c;
+    uint16_t count;    /* samples in this window (capped to UINT16_MAX) */
+} EmbedIQ_Telemetry_Batch_Entry_t;
+
+#define EMBEDIQ_TELEMETRY_ENTRY_SIZE  sizeof(EmbedIQ_Telemetry_Batch_Entry_t)
+
+_Static_assert(sizeof(EmbedIQ_Telemetry_Batch_Entry_t) == 18u,
+               "EmbedIQ_Telemetry_Batch_Entry_t must be 18 bytes packed "
+               "(2+1+1+4+4+4+2)");
+
 #ifdef __cplusplus
 }
 #endif

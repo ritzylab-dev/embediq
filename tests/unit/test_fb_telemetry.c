@@ -25,6 +25,10 @@
 #include <string.h>
 #include <math.h>
 
+/* Compile-time contract check — batch entry struct size must be stable */
+_Static_assert(sizeof(EmbedIQ_Telemetry_Batch_Entry_t) == 18u,
+               "batch entry size changed — update batch consumers");
+
 /* ---------------------------------------------------------------------------
  * Package-internal test API (implemented in fbs/services/fb_telemetry.c
  * under EMBEDIQ_PLATFORM_HOST). See that file for semantics.
