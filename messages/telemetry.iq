@@ -1,0 +1,60 @@
+// messages/telemetry.iq — EmbedIQ Telemetry schema
+//
+// Schema version 1. Namespace: com.embediq.telemetry
+// Message IDs in the fb_telemetry range: 0x0640 – 0x0671 (official namespace,
+// pre-allocated in messages_registry.json → official_allocations → fb_telemetry).
+//
+// Aligns with the OpenTelemetry metric taxonomy (gauge, counter, histogram)
+// plus a batch envelope. Application FBs publish one of the three metric
+// messages per observation; fb_telemetry aggregates over a window and emits
+// MSG_TELEMETRY_BATCH at the end of each window (or immediately on fault,
+// if EMBEDIQ_TELEMETRY_IMMEDIATE_FAULT is set).
+//
+// The unit_id field references EmbedIQ_Telemetry_Unit_t, declared in the
+// hand-authored companion header core/include/embediq_telemetry.h.
+// metric_id is application-assigned; fb_cloud_mqtt resolves it to a name
+// string from a table the application provides.
+//
+// Rules:
+//   - Message IDs are never reused. A retired ID is tombstoned here.
+//   - Fields are append-only. Never remove or reorder an existing field.
+//   - Increment schema_id in any EmbedIQ_Msg_t that carries this message
+//     when any field is added.
+//
+// @author  Ritesh Anand
+// @company embediq.com | ritzylab.com
+//
+// SPDX-License-Identifier: Apache-2.0
+
+version 1
+namespace "com.embediq.telemetry"
+
+// Gauge — instantaneous value (temperature, load, pressure, RPM).
+message MSG_TELEMETRY_GAUGE id=0x0640 {
+    metric_id : u16
+    value     : f32
+    unit_id   : u8
+}
+
+// Counter — monotonic increment since the last report.
+message MSG_TELEMETRY_COUNTER id=0x0641 {
+    metric_id : u16
+    delta     : u32
+    unit_id   : u8
+}
+
+// Histogram — single sample observation; fb_telemetry aggregates into buckets.
+message MSG_TELEMETRY_HISTOGRAM id=0x0642 {
+    metric_id   : u16
+    observation : f32
+    unit_id     : u8
+}
+
+// Batch envelope — emitted at end of aggregation window (or on fault).
+//   flags bit 0: fault_triggered  (window closed early due to fault)
+message MSG_TELEMETRY_BATCH id=0x0643 {
+    window_start_s : u32
+    window_dur_s   : u16
+    entry_count    : u8
+    flags          : u8
+}

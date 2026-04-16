@@ -132,6 +132,35 @@ extern "C" {
 /** Maximum number of NVM key-value entries in the in-memory cache. */
 #define EMBEDIQ_NVM_MAX_KEYS              64u
 
+/* ── fb_telemetry configuration ─────────────────────────────────────────
+ * Controls the telemetry collection window, aggregation table size,
+ * and payload field widths. All widths include the null terminator.
+ * ----------------------------------------------------------------------- */
+
+#ifndef EMBEDIQ_TELEMETRY_WINDOW_SEC
+#   define EMBEDIQ_TELEMETRY_WINDOW_SEC     30u
+#endif
+
+#ifndef EMBEDIQ_TELEMETRY_MAX_METRICS
+#   define EMBEDIQ_TELEMETRY_MAX_METRICS    32u
+#endif
+
+#ifndef EMBEDIQ_TELEMETRY_MAX_TAGS
+#   define EMBEDIQ_TELEMETRY_MAX_TAGS        4u
+#endif
+
+#ifndef EMBEDIQ_TELEMETRY_NAME_LEN
+#   define EMBEDIQ_TELEMETRY_NAME_LEN       24u
+#endif
+
+#ifndef EMBEDIQ_TELEMETRY_UNIT_LEN
+#   define EMBEDIQ_TELEMETRY_UNIT_LEN        8u
+#endif
+
+#ifndef EMBEDIQ_TELEMETRY_IMMEDIATE_FAULT
+#   define EMBEDIQ_TELEMETRY_IMMEDIATE_FAULT 1u
+#endif
+
 /* ---------------------------------------------------------------------------
  * Observatory verbosity level
  *

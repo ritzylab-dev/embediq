@@ -42,7 +42,9 @@ run_step "Generate message catalogs" bash -c '
     python3 tools/messages_iq/generate.py messages/core.iq \
         --out generated/ --output-name embediq_msg_catalog.h &&
     python3 tools/messages_iq/generate.py messages/thermostat.iq \
-        --out generated/ --output-name thermostat_msg_catalog.h
+        --out generated/ --output-name thermostat_msg_catalog.h &&
+    python3 tools/messages_iq/generate.py messages/telemetry.iq \
+        --out generated/ --output-name telemetry_msg_catalog.h
 '
 
 # ── Drift check ────────────────────────────────────────────────────────
@@ -52,8 +54,11 @@ run_step "Generated header drift check" bash -c '
         --out /tmp/iq_fresh/ --output-name embediq_msg_catalog.h &&
     python3 tools/messages_iq/generate.py messages/thermostat.iq \
         --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h &&
+    python3 tools/messages_iq/generate.py messages/telemetry.iq \
+        --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h &&
     diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h &&
-    diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
+    diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h &&
+    diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
 '
 
 # ── Build ──────────────────────────────────────────────────────────────
