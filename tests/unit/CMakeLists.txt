@@ -301,6 +301,31 @@ target_compile_options(test_hal_obs PRIVATE
 add_test(NAME unit_hal_obs COMMAND test_hal_obs)
 
 # ---------------------------------------------------------------------------
+# embediq_cfg typed configuration component (C1)
+# ---------------------------------------------------------------------------
+
+add_executable(test_embediq_cfg test_embediq_cfg.c)
+
+target_include_directories(test_embediq_cfg PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
+)
+
+target_link_libraries(test_embediq_cfg PRIVATE
+    embediq_cfg
+    embediq_driver_fbs
+    m
+)
+
+target_compile_options(test_embediq_cfg PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_embediq_cfg COMMAND test_embediq_cfg)
+
+# ---------------------------------------------------------------------------
 # Telemetry Service FB unit tests (Phase 2 S2)
 # ---------------------------------------------------------------------------
 
