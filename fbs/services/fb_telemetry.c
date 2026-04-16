@@ -369,7 +369,7 @@ EmbedIQ_FB_Handle_t fb_telemetry_register(void)
 
     static const EmbedIQ_FB_Config_t k_cfg = {
         .name               = "fb_telemetry",
-        .boot_phase         = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .boot_phase         = EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE,
         .init_fn            = telemetry_init,
         .subscriptions      = g_telemetry_subs,
         .subscription_count = 4u,

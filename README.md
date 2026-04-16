@@ -130,7 +130,7 @@ The event record format, TLV framing, and session structure are open and specifi
 - `.iqtrace` open binary format — TLV-framed, little-endian, forward-compatible, fully specified in `docs/observability/iqtrace_format.md` (Apache 2.0)
 - `tools/embediq_obs/` CLI — `embediq obs decode / stats / filter / export` — read any `.iqtrace` file from a laptop, no Studio required
 
-**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, hardware Driver FBs. Pro FBs (fb_ota, fb_telemetry, fb_cloud_mqtt) available at [embediq.com/pro](https://embediq.com/pro). See [ROADMAP.md](ROADMAP.md).
+**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, hardware Driver FBs. Pro FBs (`fb_ota`, `fb_cloud_mqtt`) available at [embediq.com/pro](https://embediq.com/pro). See [ROADMAP.md](ROADMAP.md).
 
 See [ROADMAP.md](ROADMAP.md) for the full timeline.
 
