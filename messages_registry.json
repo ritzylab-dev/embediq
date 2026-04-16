@@ -186,6 +186,38 @@
       "namespace":  "community",
       "source":     "messages/thermostat.iq",
       "description": "Temperature reading from fb_temp_sensor (example app)"
+    },
+    "MSG_TELEMETRY_GAUGE": {
+      "id_hex":     "0x0640",
+      "id_decimal": 1600,
+      "fb":         "fb_telemetry",
+      "namespace":  "official",
+      "source":     "messages/telemetry.iq",
+      "description": "Gauge observation — instantaneous value with unit_id"
+    },
+    "MSG_TELEMETRY_COUNTER": {
+      "id_hex":     "0x0641",
+      "id_decimal": 1601,
+      "fb":         "fb_telemetry",
+      "namespace":  "official",
+      "source":     "messages/telemetry.iq",
+      "description": "Counter delta — monotonic increment since last report"
+    },
+    "MSG_TELEMETRY_HISTOGRAM": {
+      "id_hex":     "0x0642",
+      "id_decimal": 1602,
+      "fb":         "fb_telemetry",
+      "namespace":  "official",
+      "source":     "messages/telemetry.iq",
+      "description": "Histogram sample — single observation, aggregated by fb_telemetry"
+    },
+    "MSG_TELEMETRY_BATCH": {
+      "id_hex":     "0x0643",
+      "id_decimal": 1603,
+      "fb":         "fb_telemetry",
+      "namespace":  "official",
+      "source":     "messages/telemetry.iq",
+      "description": "Batch envelope — emitted at end of aggregation window (or on fault)"
     }
   },
 
