@@ -394,7 +394,6 @@ Licensing and access: [embediq.com/pro](https://embediq.com/pro)
 | Pro FB              | Description                                                              |
 |---------------------|--------------------------------------------------------------------------|
 | `fb_ota`            | OTA firmware updates — rollback, A/B partitions, integrity verification  |
-| `fb_telemetry`      | Structured telemetry — batching, compression, cloud-agnostic transport   |
 | `fb_cloud_mqtt`     | Production MQTT — auto-reconnect, QoS, AWS/Azure/GCP provisioning       |
 | `fb_nvm` Pro        | Enhanced NVM — wear leveling, atomic writes, key-value store, encryption |
 | `fb_secure_boot`    | Verified boot chain, HSM integration, firmware signing, anti-rollback    |
