@@ -251,15 +251,13 @@ follow-up PR alongside the first production batch consumer.
 
 ## 6. Common mistakes
 
-### Registration order — register fb_telemetry before your publisher FBs
+### Wrong boot phase assumption
 
-Registering `fb_telemetry` after an application FB that publishes a
-`MSG_TELEMETRY_*` message means the subscription table has no route at
-the moment the first metric hits the bus. The message is dropped silently.
-The shipped `fb_telemetry` is at `EMBEDIQ_BOOT_PHASE_APPLICATION` (phase 3) —
-same phase as typical publisher FBs — so ordering within the phase is
-determined by registration order. **Call `fb_telemetry_register()` before
-the `*_register()` calls for any FB that publishes metrics.**
+fb_telemetry registers at `EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE` (phase 2).
+All application FBs run at `EMBEDIQ_BOOT_PHASE_APPLICATION` (phase 3). This
+means fb_telemetry is always fully initialized before any application FB's
+init sub-function runs. No registration-order precautions are required —
+the boot phase ordering guarantees delivery.
 
 ### metric_id collisions — use named constants, not raw literals
 
