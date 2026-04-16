@@ -25,6 +25,14 @@ No exceptions. No future owner can change this.
 - `tools/embediq_obs/` — the Observatory CLI (`decode`, `stats`, `filter`,
   `export`, `tail`) is Apache 2.0 forever. The data your firmware produces
   is permanently open.
+- `fb_telemetry` — the metric collection Service FB (`fbs/services/fb_telemetry.c`).
+  Provides OTel-aligned gauge, counter, and histogram reporting. Data your firmware
+  produces is permanently open. A cloud transport layer (`fb_cloud_mqtt`) may extend
+  it commercially — the collection layer is free unconditionally.
+- `embediq_cfg` — typed configuration helper (`core/include/embediq_cfg.h` +
+  `core/src/cfg/embediq_cfg.c`). Typed get/set wrapper over `fb_nvm`.
+  A device that cannot read its own configuration is not operating correctly.
+  Same rationale as `fb_watchdog` and `fb_nvm`.
 - All examples — thermostat, gateway, and all future examples in this repo
 
 **You can use EmbedIQ in a closed-source commercial product at zero cost, forever.**
@@ -41,7 +49,6 @@ never published as open source and are proprietary from day one.
 | Pro FB              | What it does                                                | Dev time saved |
 |---------------------|-------------------------------------------------------------|----------------|
 | `fb_ota`            | OTA with rollback, A/B partitions, integrity verification   | 2–3 months     |
-| `fb_telemetry`      | Structured telemetry, batching, compression, cloud-agnostic | 1–2 months     |
 | `fb_cloud_mqtt`     | Production MQTT, auto-reconnect, QoS, AWS/Azure/GCP         | 1–2 months     |
 | `fb_nvm` Pro        | Wear leveling, atomic writes, key-value store, encryption   | 3–4 weeks      |
 | `fb_secure_boot`    | Verified boot chain, HSM, firmware signing, anti-rollback   | 2–3 months     |

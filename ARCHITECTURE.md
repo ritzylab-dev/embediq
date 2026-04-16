@@ -92,7 +92,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 │  LAYER 2 — DRIVER FBs (Apache 2.0)                                         │
 │  fb_uart · fb_timer · fb_gpio · fb_i2c · fb_spi                             │
 │  fb_watchdog (basic) · fb_nvm (basic)                                        │
-│  Pro FBs (commercial licence): fb_ota · fb_telemetry · fb_cloud_mqtt · …   │
+│  Pro FBs (commercial licence): fb_ota · fb_cloud_mqtt · …                  │
 │  → embediq.com/pro                                                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — FRAMEWORK ENGINE                  (all Apache 2.0)               │
@@ -1275,8 +1275,8 @@ The following are Apache 2.0 forever — permanent, irrevocable:
 - The `.iqtrace` binary format specification — open forever
 - All examples and tests in this repository
 
-**EmbedIQ Pro** — production accelerator FBs (`fb_ota`, `fb_telemetry`,
-`fb_cloud_mqtt`, `fb_nvm` Pro, and others) are commercial and proprietary.
+**EmbedIQ Pro** — production accelerator FBs (`fb_ota`, `fb_cloud_mqtt`,
+`fb_nvm` Pro, and others) are commercial and proprietary.
 They plug into the Apache 2.0 framework via the standard FB interface.
 See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) and
 [embediq.com/pro](https://embediq.com/pro).
