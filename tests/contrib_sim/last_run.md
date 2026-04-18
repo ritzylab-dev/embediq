@@ -1,21 +1,21 @@
-# contrib_sim run — 2026-04-16 19:50 UTC
+# contrib_sim run — 2026-04-18 05:17 UTC
 
 **Branch:** dev
-**HEAD:** 0cce74f6c40bf024c7d2575bcdcc078070742424
+**HEAD:** af2a0a2d098f3371791205937652d6cb57ae2b83
 **Clone URL:** https://github.com/ritzylab-dev/embediq.git
 
 ---
 
-Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.5NPOfiQsaM/embediq'...
+Cloning into '/var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.ihmQHZQP3n/embediq'...
 -- The C compiler identification is AppleClang 16.0.0.16000026
 -- Detecting C compiler ABI info
 -- Detecting C compiler ABI info - done
 -- Check for working C compiler: /usr/bin/cc - skipped
 -- Detecting C compile features
 -- Detecting C compile features - done
--- Configuring done (1.8s)
+-- Configuring done (0.7s)
 -- Generating done (0.2s)
--- Build files have been written to: /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.5NPOfiQsaM/embediq/build
+-- Build files have been written to: /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.ihmQHZQP3n/embediq/build
 [  1%] Building C object CMakeFiles/embediq_crc.dir/components/embediq_crc/embediq_crc.c.o
 [  2%] Linking C static library libembediq_crc.a
 [  2%] Built target embediq_crc
@@ -165,61 +165,61 @@ ld: warning: ignoring duplicate libraries: '../../core/src/libembediq_fb_engine.
 [100%] Linking C executable test_lib_tls_stub
 ld: warning: ignoring duplicate libraries: '../../core/src/libembediq_fb_engine.a', '../../hal/posix/libembediq_hal_posix.a', '../../osal/posix/libembediq_osal_posix.a'
 [100%] Built target test_lib_tls_stub
-Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.5NPOfiQsaM/embediq/build
+Test project /var/folders/qw/frlylr_53mb4_zqvls9vvxvm0000gp/T/tmp.ihmQHZQP3n/embediq/build
       Start  1: unit_embediq_crc
- 1/25 Test  #1: unit_embediq_crc ....................   Passed    0.30 sec
+ 1/25 Test  #1: unit_embediq_crc ....................   Passed    0.23 sec
       Start  2: unit_platform_lib
- 2/25 Test  #2: unit_platform_lib ...................   Passed    0.28 sec
+ 2/25 Test  #2: unit_platform_lib ...................   Passed    0.25 sec
       Start  3: cli_obs_tool
- 3/25 Test  #3: cli_obs_tool ........................   Passed    0.14 sec
+ 3/25 Test  #3: cli_obs_tool ........................   Passed    0.13 sec
       Start  4: unit_osal_posix
- 4/25 Test  #4: unit_osal_posix .....................   Passed    0.41 sec
+ 4/25 Test  #4: unit_osal_posix .....................   Passed    0.39 sec
       Start  5: unit_fb_engine
  5/25 Test  #5: unit_fb_engine ......................   Passed    0.26 sec
       Start  6: unit_message_bus
- 6/25 Test  #6: unit_message_bus ....................   Passed    0.30 sec
+ 6/25 Test  #6: unit_message_bus ....................   Passed    0.29 sec
       Start  7: unit_fsm_engine
- 7/25 Test  #7: unit_fsm_engine .....................   Passed    0.27 sec
+ 7/25 Test  #7: unit_fsm_engine .....................   Passed    0.24 sec
       Start  8: unit_observatory
- 8/25 Test  #8: unit_observatory ....................   Passed    0.29 sec
+ 8/25 Test  #8: unit_observatory ....................   Passed    0.24 sec
       Start  9: unit_fb_watchdog
- 9/25 Test  #9: unit_fb_watchdog ....................   Passed    0.30 sec
+ 9/25 Test  #9: unit_fb_watchdog ....................   Passed    0.28 sec
       Start 10: unit_fb_timer
-10/25 Test #10: unit_fb_timer .......................   Passed    2.79 sec
+10/25 Test #10: unit_fb_timer .......................   Passed    2.78 sec
       Start 11: unit_blocking_dispatch
 11/25 Test #11: unit_blocking_dispatch ..............   Passed    0.27 sec
       Start 12: unit_dispatch_shutdown
-12/25 Test #12: unit_dispatch_shutdown ..............   Passed    0.29 sec
+12/25 Test #12: unit_dispatch_shutdown ..............   Passed    0.31 sec
       Start 13: unit_fb_nvm
-13/25 Test #13: unit_fb_nvm .........................   Passed    0.28 sec
+13/25 Test #13: unit_fb_nvm .........................   Passed    0.30 sec
       Start 14: unit_hal_contracts
 14/25 Test #14: unit_hal_contracts ..................   Passed    0.27 sec
       Start 15: unit_obs_capture
-15/25 Test #15: unit_obs_capture ....................   Passed    0.28 sec
+15/25 Test #15: unit_obs_capture ....................   Passed    0.27 sec
       Start 16: unit_osal_obs
-16/25 Test #16: unit_osal_obs .......................   Passed    0.29 sec
+16/25 Test #16: unit_osal_obs .......................   Passed    0.26 sec
       Start 17: unit_hal_obs
-17/25 Test #17: unit_hal_obs ........................   Passed    0.26 sec
+17/25 Test #17: unit_hal_obs ........................   Passed    0.28 sec
       Start 18: unit_embediq_cfg
-18/25 Test #18: unit_embediq_cfg ....................   Passed    0.28 sec
+18/25 Test #18: unit_embediq_cfg ....................   Passed    0.27 sec
       Start 19: unit_fb_telemetry
-19/25 Test #19: unit_fb_telemetry ...................   Passed    0.28 sec
+19/25 Test #19: unit_fb_telemetry ...................   Passed    0.25 sec
       Start 20: unit_test_harness
-20/25 Test #20: unit_test_harness ...................   Passed    0.29 sec
+20/25 Test #20: unit_test_harness ...................   Passed    0.24 sec
       Start 21: integration_thermostat_observable
-21/25 Test #21: integration_thermostat_observable ...   Passed    0.28 sec
+21/25 Test #21: integration_thermostat_observable ...   Passed    0.25 sec
       Start 22: integration_thermostat_full
-22/25 Test #22: integration_thermostat_full .........   Passed   15.52 sec
+22/25 Test #22: integration_thermostat_full .........   Passed   15.51 sec
       Start 23: integration_thermostat_capture
-23/25 Test #23: integration_thermostat_capture ......   Passed    0.45 sec
+23/25 Test #23: integration_thermostat_capture ......   Passed    0.36 sec
       Start 24: integration_gateway_full
-24/25 Test #24: integration_gateway_full ............   Passed   30.27 sec
+24/25 Test #24: integration_gateway_full ............   Passed   30.26 sec
       Start 25: lib_tls_stub
-25/25 Test #25: lib_tls_stub ........................   Passed    0.30 sec
+25/25 Test #25: lib_tls_stub ........................   Passed    0.24 sec
 
 100% tests passed, 0 tests failed out of 25
 
-Total Test time (real) =  54.95 sec
+Total Test time (real) =  54.47 sec
 
 ---
 
