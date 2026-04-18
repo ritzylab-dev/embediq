@@ -198,7 +198,7 @@ per-metric summary entries packed in the remaining payload bytes.
 
 You choose what subscribes to `MSG_TELEMETRY_BATCH`:
 
-- **`fb_cloud_mqtt`** (Phase 3 Pro) is the production cloud consumer.
+- **`fb_cloud_mqtt`** (Phase 3, Apache 2.0) is the production cloud consumer.
 - A **local logger FB** can persist batches to SD card or serial for
   long-running bench tests.
 - In **dev/test builds** you can subscribe in your own FB and print the
