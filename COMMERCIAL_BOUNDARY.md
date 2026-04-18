@@ -41,39 +41,31 @@ This is the answer to QP/C's GPLv3: Apache 2.0 means your firmware source code i
 
 ---
 
-## EmbedIQ Pro — production accelerators (commercial)
+## Service FBs — production accelerators (Apache 2.0)
 
-Production-grade FBs that save teams months of integration work. These were
-never published as open source and are proprietary from day one.
+All Service FBs are Apache 2.0. Production-grade cloud connectivity, OTA,
+provisioning, and diagnostics are open source and free unconditionally.
 
-| Pro FB              | What it does                                                | Dev time saved |
-|---------------------|-------------------------------------------------------------|----------------|
-| `fb_ota`            | OTA with rollback, A/B partitions, integrity verification   | 2–3 months     |
-| `fb_cloud_mqtt`     | Production MQTT, auto-reconnect, QoS, AWS/Azure/GCP         | 1–2 months     |
-| `fb_nvm` Pro        | Wear leveling, atomic writes, key-value store, encryption   | 3–4 weeks      |
-| `fb_secure_boot`    | Verified boot chain, HSM, firmware signing, anti-rollback   | 2–3 months     |
-| `fb_fleet_diag`     | Fleet diagnostics, remote debug, device health dashboards   | 3+ months      |
-| `fb_compliance_log` | EU AI Act compliant logging, tamper-evident audit trails    | 2–3 months     |
+| FB                  | What it does                                                |
+|---------------------|-------------------------------------------------------------|
+| `fb_cloud_mqtt`     | Production MQTT — auto-reconnect, QoS, AWS/Azure/GCP        |
+| `fb_ota`            | OTA with rollback, A/B partitions, integrity verification   |
+| `fb_provisioning`   | Factory, field, and cloud device provisioning               |
+| `fb_secure_boot`    | Verified boot chain, HSM, firmware signing, anti-rollback   |
+| `fb_fleet_diag`     | Fleet diagnostics, remote debug, device health              |
+| `fb_compliance_log` | EU AI Act compliant logging, tamper-evident audit trails    |
 
-**License:** Per-product commercial license. See [embediq.com/pro](https://embediq.com/pro) for pricing and access.
-
-Each Pro FB plugs into the Apache 2.0 framework via the standard FB interface.
-The framework does not require any Pro FB to function. Pro FBs enable your
-product's business model — OTA for update subscriptions, telemetry for
-analytics, cloud connectivity for fleet products.
+These FBs plug into the framework via the standard FB interface. The framework
+does not require any of them to function. See [ROADMAP.md](ROADMAP.md) for
+current development status of each.
 
 ---
 
-## EmbedIQ Studio and Cloud (commercial products)
+## EmbedIQ Studio (commercial)
 
-Two products built on top of the free core. The framework never requires
-either of them.
-
-**EmbedIQ Studio** — visual debugging and session replay. Turns the
+Visual debugging and session replay built on top of the free core. Turns the
 Observatory event stream into a visual timeline. Desktop/web application.
-Reads `.iqtrace` files — it does not own them.
-
-**EmbedIQ Cloud** — fleet observability and OTA management platform.
+Reads `.iqtrace` files — it does not own them. The framework never requires it.
 
 ---
 
@@ -89,7 +81,7 @@ The commercial products sit above the free core. They provide value on top of it
 
 Contributors must sign a Contributor License Agreement (CLA) before their first PR is merged.
 
-The CLA gives Ritzy Lab the right to use your contribution in future commercial products (Studio, Cloud). It does not change your rights to your own code. It does not make the core less open.
+The CLA gives Ritzy Lab the right to use your contribution in future commercial tools (Studio and Layer 4 tooling). It does not change your rights to your own code. It does not make the core less open.
 
 **Why a CLA:**
 - Without a CLA, Ritzy Lab cannot include community contributions in Studio or Cloud without individual relicensing negotiation

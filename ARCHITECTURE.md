@@ -92,8 +92,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 │  LAYER 2 — DRIVER FBs (Apache 2.0)                                         │
 │  fb_uart · fb_timer · fb_gpio · fb_i2c · fb_spi                             │
 │  fb_watchdog (basic) · fb_nvm (basic)                                        │
-│  Pro FBs (commercial licence): fb_ota · fb_cloud_mqtt · …                  │
-│  → embediq.com/pro                                                           │
+│  fb_telemetry · fb_cloud_mqtt · fb_ota · fb_provisioning (Apache 2.0, Phase 2/3)│
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — FRAMEWORK ENGINE                  (all Apache 2.0)               │
 │  FB Registry  ·  Endpoint Router  ·  Message Bus (3-queue)                  │
@@ -624,9 +623,9 @@ static_assert(offsetof(MSG_TEMP_READING_Payload_t, temperature_c) == 0,
 {
   "core":     { "range": [0, 1023],    "owner": "embediq/embediq" },
   "official": {
-    "fb_cloud_mqtt": { "range": [1024, 1099], "owner": "embediq/embediq-pro" },
-    "fb_ota":        { "range": [1100, 1149], "owner": "embediq/embediq-pro" },
-    "fb_nvm":        { "range": [1150, 1199], "owner": "embediq/embediq-pro" }
+    "fb_cloud_mqtt": { "range": [1024, 1099], "owner": "embediq/embediq" },
+    "fb_ota":        { "range": [1100, 1149], "owner": "embediq/embediq" },
+    "fb_nvm":        { "range": [1150, 1199], "owner": "embediq/embediq" }
   },
   "community": {
     "fb_modbus_rtu": { "range": [5120, 5179], "owner": "github.com/user/repo" }
@@ -1274,12 +1273,6 @@ The following are Apache 2.0 forever — permanent, irrevocable:
 - All tools — `messages.iq` generator, `embediq` CLI, Observatory CLI
 - The `.iqtrace` binary format specification — open forever
 - All examples and tests in this repository
-
-**EmbedIQ Pro** — production accelerator FBs (`fb_ota`, `fb_cloud_mqtt`,
-`fb_nvm` Pro, and others) are commercial and proprietary.
-They plug into the Apache 2.0 framework via the standard FB interface.
-See [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) and
-[embediq.com/pro](https://embediq.com/pro).
 
 ---
 

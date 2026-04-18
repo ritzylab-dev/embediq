@@ -383,23 +383,4 @@ what you need. Community demand directly influences phase priorities.
 
 ---
 
----
-
-## EmbedIQ Pro
-
-Commercial production accelerators, available separately.
-Each Pro FB plugs into the Apache 2.0 framework via the standard FB interface.
-Licensing and access: [embediq.com/pro](https://embediq.com/pro)
-
-| Pro FB              | Description                                                              |
-|---------------------|--------------------------------------------------------------------------|
-| `fb_ota`            | OTA firmware updates — rollback, A/B partitions, integrity verification  |
-| `fb_cloud_mqtt`     | Production MQTT — auto-reconnect, QoS, AWS/Azure/GCP provisioning       |
-| `fb_nvm` Pro        | Enhanced NVM — wear leveling, atomic writes, key-value store, encryption |
-| `fb_secure_boot`    | Verified boot chain, HSM integration, firmware signing, anti-rollback    |
-| `fb_fleet_diag`     | Fleet diagnostics, remote debug, device health dashboards                |
-| `fb_compliance_log` | EU AI Act compliant logging, tamper-evident audit trails                 |
-
----
-
 *Apache 2.0 core · embediq.com*
