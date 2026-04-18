@@ -93,3 +93,10 @@ What shipped:
 - Match:         ✅
 - dev post-release state: clean
 - Verified by:   Gate 15 agent pass
+
+## v0.2.3 — 2026-04-17 UTC
+- Tag SHA:       b8afa8ac3196d8e9d3e5911f9bdbfc8d424d36bc
+- main HEAD SHA: b8afa8ac3196d8e9d3e5911f9bdbfc8d424d36bc
+- Match:         ✅
+- dev post-release state: clean
+- Verified by:   Gate 15 agent pass
