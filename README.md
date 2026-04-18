@@ -36,9 +36,10 @@ The structural fix: every firmware concern — a UART driver, an OTA updater, a 
 │  Registry · Community BSPs · 3rd-party FB wrappers                 │
 │  External FBs (Python · Node.js · Java · any language)            │
 ├────────────────────────────────────────────────────────────────────┤
-│  Layer 2 · Driver FBs (Apache 2.0)                                 │
+│  Layer 2 · Driver FBs + Service FBs (Apache 2.0)                   │
 │  fb_uart · fb_timer · fb_gpio · fb_watchdog · fb_nvm               │
-│  Pro FBs: fb_ota · fb_telemetry · fb_cloud_mqtt → embediq.com/pro  │
+│  fb_telemetry (metrics) · embediq_cfg (config)                     │
+│  Pro FBs: fb_ota · fb_cloud_mqtt → embediq.com/pro                 │
 │                 ▼  typed messages only  ▼                          │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 1 · Framework Engine                 ← running on POSIX     │
@@ -129,7 +130,7 @@ The event record format, TLV framing, and session structure are open and specifi
 - `.iqtrace` open binary format — TLV-framed, little-endian, forward-compatible, fully specified in `docs/observability/iqtrace_format.md` (Apache 2.0)
 - `tools/embediq_obs/` CLI — `embediq obs decode / stats / filter / export` — read any `.iqtrace` file from a laptop, no Studio required
 
-**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, hardware Driver FBs. Pro FBs (fb_ota, fb_telemetry, fb_cloud_mqtt) available at [embediq.com/pro](https://embediq.com/pro). See [ROADMAP.md](ROADMAP.md).
+**Phase 2 — active.** FreeRTOS OSAL, ESP32 target, hardware Driver FBs. Pro FBs (`fb_ota`, `fb_cloud_mqtt`) available at [embediq.com/pro](https://embediq.com/pro). See [ROADMAP.md](ROADMAP.md).
 
 See [ROADMAP.md](ROADMAP.md) for the full timeline.
 
@@ -159,9 +160,9 @@ QP/C — the closest prior art, 60,000+ downloads per year for 19 years — ship
 
 The `.iqtrace` binary format and `embediq obs` CLI are Apache 2.0 forever — the data your firmware produces is permanently open. EmbedIQ Studio (future commercial) adds visual analysis on top; it never owns or restricts the underlying event data.
 
-The core framework, base Driver FBs, and infrastructure FBs are Apache 2.0
-forever. Production accelerators (fb_ota, fb_telemetry, fb_cloud_mqtt) are
-available as EmbedIQ Pro with commercial licensing. See
+The core framework, base Driver FBs, infrastructure FBs, `fb_telemetry`, and
+`embediq_cfg` are Apache 2.0 forever. Production accelerators (`fb_ota`,
+`fb_cloud_mqtt`) are available as EmbedIQ Pro with commercial licensing. See
 [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) for the exact line.
 
 ---
@@ -181,18 +182,31 @@ Embedded engineers and IoT leads who have shipped production RTOS firmware and r
 
 ## Documentation
 
-| Document                                                | Purpose                                                    |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| [ARCHITECTURE.md](ARCHITECTURE.md)                      | Complete technical reference — Layer Model, contracts, HAL |
-| [AGENTS.md](AGENTS.md)                                  | Read before generating any EmbedIQ code with an AI agent   |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                      | How to contribute — boundaries, process, CLA               |
-| [CODING_RULES.md](CODING_RULES.md)                      | Rules enforced on every PR                                 |
-| [ROADMAP.md](ROADMAP.md)                                | Phase 1→4 public roadmap                                   |
-| [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md)        | What is free forever vs future commercial                  |
-| [docs/observability/iqtrace_format.md](docs/observability/iqtrace_format.md) | Open `.iqtrace` binary format specification v1.1 |
-| [docs/architecture/AI_FIRST_ARCHITECTURE.md](docs/architecture/AI_FIRST_ARCHITECTURE.md) | AI-first architecture: constants, Code Review Gate, training data moat |
-| [docs/MIGRATION.md](docs/MIGRATION.md)                 | Four migration patterns: Greenfield, Add-Observatory, Strangler Fig, Module-Only |
-| [COMPLIANCE.md](COMPLIANCE.md)                          | Industry coverage table, MISRA stance, tamper evidence tiers, SBOM formats |
+### Start here — in order
+
+| Step | Guide | What you will do |
+|------|-------|-----------------|
+| 1 | [Run it now](#run-it-now) | Clone, build, run tests in under 5 minutes |
+| 2 | [docs/FIRST_FB.md](docs/FIRST_FB.md) | Write and register your first Functional Block |
+| 3 | [docs/TELEMETRY.md](docs/TELEMETRY.md) | Add gauge, counter, and histogram metric reporting to your FB |
+| 4 | [docs/CONFIG.md](docs/CONFIG.md) | Persist and read typed device configuration |
+| 5 | [examples/thermostat/](examples/thermostat/) | Study a complete 5-FB application with FSM and Observatory output |
+| 6 | [examples/gateway/](examples/gateway/) | Edge-to-cloud pipeline with offline resilience |
+
+### Reference
+
+| Document | Purpose |
+|----------|---------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Complete technical reference — Layer Model, contracts, HAL/OSAL |
+| [AGENTS.md](AGENTS.md) | Read before generating any EmbedIQ code with an AI agent |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute — boundaries, process, CLA |
+| [CODING_RULES.md](CODING_RULES.md) | Rules enforced on every PR |
+| [ROADMAP.md](ROADMAP.md) | Phase 1→4 public roadmap |
+| [COMMERCIAL_BOUNDARY.md](COMMERCIAL_BOUNDARY.md) | What is Apache 2.0 forever vs commercial |
+| [docs/observability/iqtrace_format.md](docs/observability/iqtrace_format.md) | Open `.iqtrace` binary format spec v1.1 |
+| [docs/architecture/AI_FIRST_ARCHITECTURE.md](docs/architecture/AI_FIRST_ARCHITECTURE.md) | AI-first architecture: event constants, Code Review Gate, training data moat |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | Four migration patterns: Greenfield, Add-Observatory, Strangler Fig, Module-Only |
+| [COMPLIANCE.md](COMPLIANCE.md) | Industry coverage — MISRA, tamper evidence, SBOM, safety_class encoding |
 
 ---
 

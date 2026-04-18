@@ -24,3 +24,26 @@ target_compile_options(embediq_fb_engine PRIVATE
     -Wextra
     -Werror
 )
+
+# ---------------------------------------------------------------------------
+# embediq_cfg — typed configuration helper (C1)
+#
+# Thin wrapper over embediq_nvm.h. Lives in core/src/ because it depends on
+# a framework contract (embediq_nvm.h), which components/ may not include.
+# The test/application binary links both embediq_cfg and the fb_nvm impl
+# (embediq_driver_fbs) to satisfy the embediq_nvm_* externs at final link.
+# ---------------------------------------------------------------------------
+
+add_library(embediq_cfg STATIC
+    cfg/embediq_cfg.c
+)
+
+target_include_directories(embediq_cfg PUBLIC
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_compile_options(embediq_cfg PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)

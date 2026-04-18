@@ -301,6 +301,56 @@ target_compile_options(test_hal_obs PRIVATE
 add_test(NAME unit_hal_obs COMMAND test_hal_obs)
 
 # ---------------------------------------------------------------------------
+# embediq_cfg typed configuration component (C1)
+# ---------------------------------------------------------------------------
+
+add_executable(test_embediq_cfg test_embediq_cfg.c)
+
+target_include_directories(test_embediq_cfg PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
+)
+
+target_link_libraries(test_embediq_cfg PRIVATE
+    embediq_cfg
+    embediq_driver_fbs
+    m
+)
+
+target_compile_options(test_embediq_cfg PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_embediq_cfg COMMAND test_embediq_cfg)
+
+# ---------------------------------------------------------------------------
+# Telemetry Service FB unit tests (Phase 2 S2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_telemetry test_fb_telemetry.c)
+
+target_include_directories(test_fb_telemetry PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/generated
+    ${CMAKE_SOURCE_DIR}/fbs/services
+)
+
+target_link_libraries(test_fb_telemetry PRIVATE
+    embediq_service_fbs
+    m
+)
+
+target_compile_options(test_fb_telemetry PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_telemetry COMMAND test_fb_telemetry)
+
+# ---------------------------------------------------------------------------
 # Test harness support library (P2-T5)
 # ---------------------------------------------------------------------------
 

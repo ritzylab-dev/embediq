@@ -111,7 +111,7 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 ├─────────────────────────────────────────────────────────────────┤
 │  LAYER 2 — DRIVER FBs (Apache 2.0)                               │
 │  fb_uart · fb_timer · fb_gpio · fb_watchdog (basic) · fb_nvm     │
-│  Pro FBs (commercial): fb_ota · fb_telemetry · fb_cloud_mqtt     │
+│  Pro FBs (commercial): fb_ota · fb_cloud_mqtt                   │
 ├─────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — FRAMEWORK ENGINE                                     │
 │  FB Registry · Endpoint Router · Message Bus (3-queue)          │
@@ -162,7 +162,8 @@ embediq/
 │       ├── registry/
 │       ├── fsm/
 │       ├── dispatcher/
-│       └── observatory/
+│       ├── observatory/
+│       └── cfg/
 │
 ├── osal/
 │   ├── posix/              ← macOS + Linux + WSL
@@ -175,7 +176,7 @@ embediq/
 │
 ├── fbs/                    ← portable Functional Blocks
 │   ├── drivers/            ← Driver FBs: fb_timer · fb_nvm · fb_watchdog
-│   └── services/           ← Service FBs: fb_cloud_mqtt · fb_ota (Phase 2)
+│   └── services/           ← Service FBs: fb_telemetry · fb_cloud_mqtt · fb_ota (Phase 2+)
 │
 ├── examples/
 │   ├── thermostat/         ← style reference for application FBs (Phase 1)
@@ -286,6 +287,8 @@ Never place .c files flat in core/src/ — they belong in their subdirectory.
 | Observatory CLI        | tools/embediq_obs/embediq_obs.py                          |
 | CLI tests              | tests/cli/test_<tool>.py                                  |
 | Components             | components/<fb_name>/<fb_name>.c                          |
+| Core config helper     | core/include/embediq_cfg.h (public API header)            |
+| Core config helper     | core/src/cfg/embediq_cfg.c (implementation)               |
 | Unit tests             | tests/unit/test_<module>.c                                |
 
 Rule: if you are about to create a .c file directly in core/src/ (not in a
@@ -340,14 +343,16 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Driver FBs    | fb_timer                       | STABLE      | fbs/drivers/ + hal/posix/hal_timer_posix.c                   |
 | Driver FBs    | fb_nvm                         | STABLE      | fbs/drivers/ + hal/posix/hal_flash_posix.c                   |
 | Driver FBs    | fb_watchdog                    | STABLE      | fbs/drivers/ + hal/posix/hal_wdg_posix.c                     |
+| Service FBs   | fb_telemetry                   | STABLE      | fbs/services/ — OTel-aligned gauge/counter/histogram, window batching, Apache 2.0 |
+| Core helpers  | embediq_cfg                    | STABLE      | core/include/embediq_cfg.h + core/src/cfg/ — typed get/set wrapper over fb_nvm   |
 | Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
 | Examples      | gateway                        | STABLE      | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
-> **EmbedIQ Pro FBs** (fb_ota, fb_telemetry, fb_cloud_mqtt) are commercial
-> modules developed in the private Pro repository. They are not open-source
-> roadmap items. See [embediq.com/pro](https://embediq.com/pro).
+> **EmbedIQ Pro FBs** (fb_ota, fb_cloud_mqtt) are commercial modules developed
+> in the private Pro repository. They are not open-source roadmap items.
+> See [embediq.com/pro](https://embediq.com/pro).
 
 ---
 

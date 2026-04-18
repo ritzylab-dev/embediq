@@ -107,27 +107,47 @@ required for any item in this phase. A developer with a Linux or macOS machine
 can contribute to every deliverable.
 
 **Cross-layer observability — OSAL and HAL hooks:**
-- [ ] XOBS-1: OSAL observation — `EMBEDIQ_OBS_EVT_OSAL_FAULT = 0x66` added to
+- [x] XOBS-1 (PR #92): OSAL observation — `EMBEDIQ_OBS_EVT_OSAL_FAULT = 0x66` added to
       `embediq_obs.h`. `EMBEDIQ_OSAL_OBS_*` obligation macros added to
       `embediq_osal.h`. POSIX OSAL updated to call macros on all failure paths.
       `tools/ci/check_osal_obs.py` CI script wired into pipeline (script exists in
       `tools/ci/` — wiring and source macros are the remaining work).
-- [ ] XOBS-2 (POSIX side): HAL observation — `EMBEDIQ_OBS_EVT_HAL_FAULT = 0x67`
+- [x] XOBS-2 (PR #93): HAL observation — `EMBEDIQ_OBS_EVT_HAL_FAULT = 0x67`
       added to `embediq_obs.h`. `HAL_OBS_EMIT_ERROR` macro added to `hal_defs.h`.
       All `hal/posix/` implementations updated to call macro on non-HAL_OK returns.
       `tools/ci/check_hal_obs.py` CI script wired into pipeline (script exists in
       `tools/ci/` — wiring and source macros are the remaining work).
-- [ ] XOBS-3 (queue depth): `EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH` (RESOURCE band 0x41)
+- [x] XOBS-3 (PR #95): `EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH` (RESOURCE band 0x41)
       — emitted when any FB queue exceeds `EMBEDIQ_QUEUE_WARN_THRESHOLD` (default
       75%). Configurable in `embediq_config.h`. Linux-compatible.
-- [ ] XOBS-4: Watchdog heartbeat — `EMBEDIQ_OBS_EVT_WDG_CHECKIN` (TIMING band
+- [x] XOBS-4 (PR #97): Watchdog heartbeat — `EMBEDIQ_OBS_EVT_WDG_CHECKIN` (TIMING band
       0x50) added to `fb_watchdog`. Periodic heartbeat on successful checkin.
       Gated by `EMBEDIQ_TRACE_TIMING` compile-time flag (off by default on
       constrained profiles).
 
 **Test infrastructure:**
-- [ ] Test harness — `embediq_test.h`, `bus_inject()`, scenario runner.
+- [x] Test harness (PR #98): `embediq_test.h`, `bus_inject()`, scenario runner.
       Allows deterministic replay of message sequences in unit tests.
+
+**Apache 2.0 Service FBs and core helpers:**
+- [x] fb_telemetry (PRs #113–#114) — Apache 2.0 Service FB. OTel-aligned gauge,
+      counter, and histogram metric collection. Window-based batching.
+      fbs/services/fb_telemetry.c. Messages: MSG_TELEMETRY_GAUGE/COUNTER/
+      HISTOGRAM/BATCH (0x0640–0x0643). Design: PM/FB_TELEMETRY_DESIGN.md.
+
+- [x] embediq_cfg (PR #115) — Apache 2.0 typed configuration helper.
+      core/include/embediq_cfg.h + core/src/cfg/embediq_cfg.c.
+      Typed get/set wrapper over fb_nvm. Not an FB — callable from init_fn.
+
+**Developer experience gap closure:**
+- [x] CI enforcement — `tools/ci/check_fb_calls.py` (PR #107).
+      Scans fbs/ for malloc, blocking calls, direct RTOS/POSIX calls, forbidden
+      system headers. `scripts/check.sh` local pre-push runner mirrors ci.yml.
+- [x] docs/FIRST_FB.md (PR #108) — step-by-step tutorial: a developer goes from
+      clone to a running, observable FB in ~20 minutes.
+- [x] docs/VENDORING.md + examples/service_fb_template/ (PR #109) — vendoring
+      rules documented from vendoring_check.py / vendoring_date_check.py source;
+      minimal Service FB template with ops-table pattern.
 
 **Schema and registry:**
 - [x] `messages_registry.json` — initial namespace allocations for all official FBs
@@ -293,6 +313,11 @@ without collision. AI band constants finalised from production data.
 | Phase 2: `messages_registry.json` — all official FB namespaces allocated | April 2026 |
 | Phase 2: Industrial gateway example (`examples/gateway/`) | April 2026 |
 | v0.1.2 tagged on main | March 2026 |
+| Phase 2: Open-core licensing docs + COMMERCIAL_BOUNDARY.md rewrite (PRs #102–#103) | April 2026 |
+| v0.2.1 tagged on main | April 2026 |
+| Phase 2: Developer experience gap closure — CI enforcement, FIRST_FB.md, Service FB template (PRs #107–#109) | April 2026 |
+| v0.2.2 tagged on main | April 2026 |
+| Phase 2: fb_telemetry Apache 2.0 (PRs #113–#114), embediq_cfg Apache 2.0 (PR #115), docs (PRs #116–#118) | April 2026 |
 
 ---
 
@@ -369,7 +394,6 @@ Licensing and access: [embediq.com/pro](https://embediq.com/pro)
 | Pro FB              | Description                                                              |
 |---------------------|--------------------------------------------------------------------------|
 | `fb_ota`            | OTA firmware updates — rollback, A/B partitions, integrity verification  |
-| `fb_telemetry`      | Structured telemetry — batching, compression, cloud-agnostic transport   |
 | `fb_cloud_mqtt`     | Production MQTT — auto-reconnect, QoS, AWS/Azure/GCP provisioning       |
 | `fb_nvm` Pro        | Enhanced NVM — wear leveling, atomic writes, key-value store, encryption |
 | `fb_secure_boot`    | Verified boot chain, HSM integration, firmware signing, anti-rollback    |
