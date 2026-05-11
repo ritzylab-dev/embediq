@@ -87,3 +87,12 @@ jobs:
 
       - name: Binary blob detection — warning
         run: python3 tools/ci/binary_blob_check.py
+
+      - name: Install cppcheck for MISRA scan
+        run: |
+          CPPCHECK_VERSION=$(apt-cache policy cppcheck | grep Candidate | awk '{print $2}')
+          echo "Installing cppcheck $CPPCHECK_VERSION"
+          sudo apt-get install -y cppcheck
+
+      - name: MISRA-C:2012 scan — warning only (cppcheck, R-02, I-07 adjacent)
+        run: python3 tools/ci/check_misra.py
