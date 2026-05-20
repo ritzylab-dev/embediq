@@ -222,7 +222,25 @@ extern "C" {
                                                 state_or_flag: (uint8_t)(-(err_code))
                                                                1=INVALID 2=BUSY 3=TIMEOUT 4=IO.
                                                 msg_id: 0 (no message context). */
-/* 0x68–0x6F reserved */
+#define EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID      0x68u /**< Config blob rejected at boot —
+                                                          magic mismatch or CRC32 failure.
+                                                          Firmware falls back to compiled-in
+                                                          defaults and continues boot safely.
+                                                          source_fb_id: fb_nvm endpoint index.
+                                                          state_or_flag: 0=magic_fail
+                                                                         1=crc_fail
+                                                                         2=major_version_mismatch.
+                                                          msg_id: 0 (no message context). */
+#define EMBEDIQ_OBS_EVT_CFG_MUTABILITY_REJECT 0x69u /**< Fleet push attempted to overwrite
+                                                          a factory or user-class config key.
+                                                          Entry silently skipped — no data changed.
+                                                          IEC 62443 commissioning immutability.
+                                                          source_fb_id: fb_nvm endpoint index.
+                                                          state_or_flag: mutability class of the
+                                                            rejected key (0=factory 2=user).
+                                                          msg_id: low 16 bits of key name CRC32
+                                                            (key name itself is never logged). */
+/* 0x6A–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */
 
