@@ -36,6 +36,19 @@ jobs:
           diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
           diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
 
+      - name: Generate config_iq artifacts
+        run: |
+          python3 tools/config_iq/generate.py config/config.iq \
+              --out generated/
+
+      - name: Verify config_iq generated files match schema (drift check)
+        run: |
+          mkdir -p /tmp/cfg_fresh
+          python3 tools/config_iq/generate.py config/config.iq \
+              --out /tmp/cfg_fresh/
+          diff generated/embediq_cfg_generated.h /tmp/cfg_fresh/embediq_cfg_generated.h
+          diff generated/embediq_cfg_validate.c   /tmp/cfg_fresh/embediq_cfg_validate.c
+
       - name: Build (host platform)
         run: |
           cmake -B build -DEMBEDIQ_PLATFORM=host
