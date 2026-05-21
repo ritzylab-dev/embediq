@@ -11,10 +11,14 @@
  *   - val_len:   uint16_t
  *   - schema_id: uint16_t
  *
- * Persistence:
- *   On init: hal_flash_read(0, g_nvm, sizeof(g_nvm))
- *   On any write/delete: hal_flash_write(0, g_nvm, sizeof(g_nvm))
- *   The HAL owns where it's stored.  The FB owns the schema.
+ * Persistence (Item 4 PR-D blob format):
+ *   On init: hal_flash_read(0, &s_persist_buf, sizeof(s_persist_buf))
+ *     Verifies EIQ\0 magic and CRC-32/ISO-HDLC. Falls back to empty store
+ *     on any validation failure (power-loss safe).
+ *   On any write/delete: hal_flash_write(0, &s_persist_buf, sizeof(s_persist_buf))
+ *     Header (16 bytes) + CRC-verified payload (8576 bytes) = 8592 bytes total.
+ *     Single-call write — HAL atomicity contract (PR-A) guarantees all-or-nothing.
+ *   The HAL owns where it's stored.  The FB owns the blob format and schema.
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE (2)
  *
@@ -28,6 +32,7 @@
  *
  * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
  *   nvm__init_state()   — clear cache + create mutex
+ *   nvm__load_state()   — trigger nvm_load() (simulates power-on reload)
  *
  * Zero POSIX headers.  R-02: no malloc in this file.
  *
@@ -49,6 +54,9 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "embediq_cfg_validate.h"  /* cfg_schema_entry_t, cfg_mut_t, cfg_schema_lookup() */
+#include "embediq_crc.h"           /* embediq_crc32() — CRC-32/ISO-HDLC */
+
 /* ---------------------------------------------------------------------------
  * Sizing constants (all derived from embediq_config.h — I-08)
  * ------------------------------------------------------------------------- */
@@ -56,6 +64,39 @@
 #define NVM_KEY_SIZE      EMBEDIQ_NVM_KEY_SIZE          /* from embediq_config.h */
 #define NVM_VAL_SIZE      EMBEDIQ_NVM_VAL_SIZE          /* from embediq_config.h */
 #define NVM_MAX_KEYS      EMBEDIQ_NVM_MAX_KEYS          /* from embediq_config.h */
+
+/* ---------------------------------------------------------------------------
+ * Blob format constants — Item 4 PR-D (power-loss atomicity contract)
+ * ------------------------------------------------------------------------- */
+
+/** 4-byte magic at the start of every persisted blob. */
+static const uint8_t k_nvm_blob_magic[4] = {'E', 'I', 'Q', '\0'};
+
+/** Blob format version — increment major on breaking layout change. */
+#define NVM_BLOB_VER_MAJOR  1u
+#define NVM_BLOB_VER_MINOR  0u
+
+/**
+ * Blob header — 16 bytes, written before the g_nvm[] payload on every persist.
+ *
+ * Layout (little-endian, no struct padding on all supported targets):
+ *   magic[4]        — 'E','I','Q','\0'
+ *   version_major   — NVM_BLOB_VER_MAJOR
+ *   version_minor   — NVM_BLOB_VER_MINOR
+ *   entry_count     — NVM_MAX_KEYS (uint16_t)
+ *   crc32           — CRC-32/ISO-HDLC over the g_nvm[] payload (uint32_t)
+ *   reserved[4]     — zero-filled, reserved for future use
+ *
+ * Total: 4+1+1+2+4+4 = 16 bytes.
+ */
+typedef struct {
+    uint8_t  magic[4];
+    uint8_t  version_major;
+    uint8_t  version_minor;
+    uint16_t entry_count;
+    uint32_t crc32;
+    uint8_t  reserved[4];
+} nvm_blob_header_t;
 
 /* ---------------------------------------------------------------------------
  * Internal types
@@ -76,6 +117,18 @@ typedef struct {
 static nvm_entry_t      g_nvm[NVM_MAX_KEYS];
 static EmbedIQ_Mutex_t *g_mutex       = NULL;
 static EmbedIQ_FB_Handle_t g_nvm_fb   = NULL;
+
+/**
+ * Composite persist buffer — header + payload in one allocation.
+ * Static (R-02: no malloc). Sized at compile time.
+ * Used by both nvm_persist() (write) and nvm_load() (read) to ensure
+ * a single hal_flash_write() call — the HAL's atomicity guarantee covers
+ * the whole blob as one unit.
+ */
+static struct {
+    nvm_blob_header_t hdr;
+    nvm_entry_t       entries[NVM_MAX_KEYS];
+} s_persist_buf;
 
 /* ---------------------------------------------------------------------------
  * Internal helpers
@@ -107,12 +160,60 @@ static uint8_t find_free_slot(void)
 
 static void nvm_persist(void)
 {
-    hal_flash_write(0u, g_nvm, sizeof(g_nvm));
+    /* Build header. */
+    s_persist_buf.hdr.magic[0]       = k_nvm_blob_magic[0];
+    s_persist_buf.hdr.magic[1]       = k_nvm_blob_magic[1];
+    s_persist_buf.hdr.magic[2]       = k_nvm_blob_magic[2];
+    s_persist_buf.hdr.magic[3]       = k_nvm_blob_magic[3];
+    s_persist_buf.hdr.version_major  = NVM_BLOB_VER_MAJOR;
+    s_persist_buf.hdr.version_minor  = NVM_BLOB_VER_MINOR;
+    s_persist_buf.hdr.entry_count    = (uint16_t)NVM_MAX_KEYS;
+    s_persist_buf.hdr.reserved[0]    = 0u;
+    s_persist_buf.hdr.reserved[1]    = 0u;
+    s_persist_buf.hdr.reserved[2]    = 0u;
+    s_persist_buf.hdr.reserved[3]    = 0u;
+
+    /* Copy live cache into payload and compute CRC over payload only. */
+    memcpy(s_persist_buf.entries, g_nvm, sizeof(g_nvm));
+    s_persist_buf.hdr.crc32 = embediq_crc32(s_persist_buf.entries,
+                                              sizeof(s_persist_buf.entries));
+
+    /* Single atomic write — HAL atomicity contract (PR-A: hal_flash.h) ensures
+     * either the full blob lands or nothing changes. */
+    hal_flash_write(0u, &s_persist_buf, sizeof(s_persist_buf));
 }
 
 static void nvm_load(void)
 {
-    hal_flash_read(0u, g_nvm, sizeof(g_nvm));
+    /* Read the full blob (header + payload) in a single call. */
+    int rc = hal_flash_read(0u, &s_persist_buf, sizeof(s_persist_buf));
+    if (rc != HAL_OK) {
+        /* Flash unreadable — start with defaults (empty store). */
+        memset(g_nvm, 0, sizeof(g_nvm));
+        return;
+    }
+
+    /* Verify magic — catches erased flash, pre-PR-D blobs, and corrupt files. */
+    if (memcmp(s_persist_buf.hdr.magic, k_nvm_blob_magic,
+               sizeof(k_nvm_blob_magic)) != 0) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
+                               0u, 0u, 0u, 0u);   /* state 0 = magic_fail */
+        memset(g_nvm, 0, sizeof(g_nvm));
+        return;
+    }
+
+    /* Verify CRC-32/ISO-HDLC over the payload. */
+    uint32_t computed = embediq_crc32(s_persist_buf.entries,
+                                       sizeof(s_persist_buf.entries));
+    if (computed != s_persist_buf.hdr.crc32) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
+                               0u, 0u, 1u, 0u);   /* state 1 = crc_fail */
+        memset(g_nvm, 0, sizeof(g_nvm));
+        return;
+    }
+
+    /* Blob valid — copy payload to live cache. */
+    memcpy(g_nvm, s_persist_buf.entries, sizeof(g_nvm));
 }
 
 /* ---------------------------------------------------------------------------
@@ -165,6 +266,22 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
     if (!g_mutex)                    return EMBEDIQ_ERR;
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
+
+    /* Mutability guard — factory-class keys are immutable at runtime.
+     * IEC 62443 commissioning: fleet push cannot overwrite factory provisioning.
+     * Silently reject — emit Observatory event for audit trail. */
+    {
+        const cfg_schema_entry_t *schema = cfg_schema_lookup(key);
+        if (schema != NULL && schema->mutability == CFG_MUT_FACTORY) {
+            uint16_t key_crc = (uint16_t)(embediq_crc32(key, strlen(key)) & 0xFFFFu);
+            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_MUTABILITY_REJECT,
+                                   0u, 0u,
+                                   (uint8_t)CFG_MUT_FACTORY,
+                                   key_crc);
+            embediq_osal_mutex_unlock(g_mutex);
+            return EMBEDIQ_ERR;
+        }
+    }
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
@@ -272,6 +389,15 @@ void nvm__init_state(void)
     if (!g_mutex) {
         g_mutex = embediq_osal_mutex_create();
     }
+}
+
+/**
+ * Reload NVM state from flash (test-only: simulates power-on reload).
+ * Paired with nvm__init_state() — call after init to test blob loading.
+ */
+void nvm__load_state(void)
+{
+    nvm_load();
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */

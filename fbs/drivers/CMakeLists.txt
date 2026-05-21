@@ -9,6 +9,7 @@ add_library(embediq_driver_fbs STATIC
     fb_timer.c
     fb_nvm.c
     fb_watchdog.c
+    ${CMAKE_SOURCE_DIR}/generated/embediq_cfg_validate.c
 )
 
 target_include_directories(embediq_driver_fbs PUBLIC
@@ -17,6 +18,7 @@ target_include_directories(embediq_driver_fbs PUBLIC
 
 target_link_libraries(embediq_driver_fbs PUBLIC
     embediq_fb_engine
+    embediq_crc
 )
 
 target_compile_options(embediq_driver_fbs PRIVATE

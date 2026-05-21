@@ -404,21 +404,28 @@ def generate_header(keys):
 # Validation-table generator — embediq_cfg_validate.c
 # ---------------------------------------------------------------------------
 
-_C_FILE_HEADER = """\
+# ---------------------------------------------------------------------------
+# Validation-table header generator — embediq_cfg_validate.h
+# ---------------------------------------------------------------------------
+
+_C_VALIDATE_H = """\
 /*
- * embediq_cfg_validate.c — Auto-generated configuration validation table
+ * embediq_cfg_validate.h — Auto-generated configuration schema types and lookup
  *
  * Generated from config/config.iq. Do not edit manually.
  * To regenerate: python3 tools/config_iq/generate.py config/config.iq --out generated/
  *
- * Used by: fb_nvm.c blob loader (Item 4 PR-D) and embediq_nvs_gen.py (Item 4 PR-C).
- * At boot: unknown keys are skipped. Mutability is enforced against this table.
+ * Declares cfg_mut_t, cfg_type_t, cfg_schema_entry_t, and cfg_schema_lookup().
+ * Included by: embediq_cfg_validate.c and fbs/drivers/fb_nvm.c (Item 4 PR-D).
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+
+#ifndef EMBEDIQ_CFG_VALIDATE_H
+#define EMBEDIQ_CFG_VALIDATE_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -454,6 +461,42 @@ typedef struct {
         struct { const char *dflt; uint8_t max_len;         } str;
     } val;
 } cfg_schema_entry_t;
+
+/**
+ * Look up a key in the generated schema table.
+ *
+ * @param key  NUL-terminated key name (dot notation).
+ * @return     Pointer to matching cfg_schema_entry_t, or NULL if key is unknown.
+ */
+const cfg_schema_entry_t *cfg_schema_lookup(const char *key);
+
+#endif /* EMBEDIQ_CFG_VALIDATE_H */
+"""
+
+
+def generate_validate_header():
+    """Return the full text of embediq_cfg_validate.h (static — no key input needed)."""
+    return _C_VALIDATE_H
+
+
+_C_FILE_HEADER = """\
+/*
+ * embediq_cfg_validate.c — Auto-generated configuration validation table
+ *
+ * Generated from config/config.iq. Do not edit manually.
+ * To regenerate: python3 tools/config_iq/generate.py config/config.iq --out generated/
+ *
+ * Used by: fb_nvm.c blob loader (Item 4 PR-D) and embediq_nvs_gen.py (Item 4 PR-C).
+ * At boot: unknown keys are skipped. Mutability is enforced against this table.
+ *
+ * @author  Ritesh Anand
+ * @company embediq.com | ritzylab.com
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "embediq_cfg_validate.h"
+#include <string.h>   /* strcmp — used by cfg_schema_lookup() */
 """
 
 
@@ -495,6 +538,17 @@ def generate_validate(keys):
     out.append('#define EMBEDIQ_CFG_SCHEMA_COUNT \\')
     out.append('    ((uint16_t)(sizeof(k_cfg_schema) / sizeof(k_cfg_schema[0])))')
     out.append('')
+    out.append('const cfg_schema_entry_t *cfg_schema_lookup(const char *key)')
+    out.append('{')
+    out.append('    uint16_t i;')
+    out.append('    for (i = 0u; i < EMBEDIQ_CFG_SCHEMA_COUNT; i++) {')
+    out.append('        if (strcmp(key, k_cfg_schema[i].key) == 0) {')
+    out.append('            return &k_cfg_schema[i];')
+    out.append('        }')
+    out.append('    }')
+    out.append('    return NULL;')
+    out.append('}')
+    out.append('')
     return '\n'.join(out)
 
 
@@ -530,11 +584,13 @@ def main():
         return 1
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'embediq_cfg_validate.h').write_text(generate_validate_header(), encoding='utf-8')
     (out_dir / 'embediq_cfg_generated.h').write_text(generate_header(keys), encoding='utf-8')
     (out_dir / 'embediq_cfg_validate.c').write_text(generate_validate(keys), encoding='utf-8')
 
-    print(f'OK  Generated embediq_cfg_generated.h + embediq_cfg_validate.c '
-          f'({len(keys)} key(s), schema v{version}, namespace {namespace})')
+    print(f'OK  Generated embediq_cfg_validate.h + embediq_cfg_generated.h + '
+          f'embediq_cfg_validate.c ({len(keys)} key(s), schema v{version}, '
+          f'namespace {namespace})')
     return 0
 
 
