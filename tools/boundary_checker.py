@@ -18,16 +18,24 @@ Layer rules (a file in layer X may only include from allowed layers):
   hal/posix/       → allowed: core/include/hal/ only (no framework headers)
   hal/esp32/       → allowed: core/include/hal/ only
   hal/stm32/       → allowed: core/include/hal/ only
-  fbs/drivers/     → allowed: core/include/, core/include/hal/
+  fbs/drivers/     → allowed: core/include/, core/include/hal/, components/, generated/
                      STRICT: unrecognised quote-includes treated as vendor BSP
-  fbs/services/    → allowed: core/include/ only (NO core/include/hal/ — service FBs are platform-agnostic)
+  fbs/services/    → allowed: core/include/ (NO core/include/hal/ — service FBs are platform-agnostic),
+                     components/, generated/
                      STRICT: unrecognised quote-includes treated as vendor BSP
 
 Rules:
   - Same-layer includes are always allowed.
   - System headers (#include <...>) are always allowed.
-  - Headers in unknown layers (build/, generated/, tools/) are skipped,
-    EXCEPT in strict layers (fbs/drivers/, fbs/services/) where they are violations.
+  - components/ utility libraries (e.g. embediq_crc — LIB-3) carry zero
+    framework dependencies and exist to be consumed by the layers above them;
+    Driver and Service FBs may include them directly.
+  - generated/ headers are auto-generated framework contracts (message
+    catalogs, config schema). They live on the global include path
+    (CMakeLists include_directories(generated)) and are sanctioned for
+    Driver/Service FB use — they are NOT treated as vendor BSPs.
+  - Headers in unknown layers (build/, tools/) are skipped, EXCEPT in strict
+    layers (fbs/drivers/, fbs/services/) where they are violations.
 
 Exit codes: 0 = clean, 1 = violations found.
 
@@ -76,10 +84,12 @@ _ALLOWED = {
     'hal/posix':       {'core/include/hal', 'core/include'},
     'hal/esp32':       {'core/include/hal', 'core/include'},
     'hal/stm32':       {'core/include/hal', 'core/include'},
-    # Driver FBs — may use all framework contracts (incl. HAL) but not impl paths
-    'fbs/drivers':     {'core/include', 'core/include/hal'},
-    # Service FBs — platform-agnostic: must NOT include HAL contracts
-    'fbs/services':    {'core/include'},
+    # Driver FBs — may use all framework contracts (incl. HAL), component
+    # utility libraries (LIB-3), and generated contracts; but not impl paths.
+    'fbs/drivers':     {'core/include', 'core/include/hal', 'components'},
+    # Service FBs — platform-agnostic: must NOT include HAL contracts, but
+    # may use component utility libraries and generated contracts.
+    'fbs/services':    {'core/include', 'components'},
 }
 
 # Layers where an unresolvable quote-include is a vendor BSP violation
@@ -127,12 +137,36 @@ def _build_header_index(repo_root):
                 idx[fname] = layer
     return idx
 
+# ── Generated-header index ───────────────────────────────────────────────────
+
+def _build_generated_headers(repo_root):
+    """
+    Return a set of header basenames living in generated/.
+
+    These are auto-generated framework contracts (message catalogs, config
+    schema). They are sanctioned for Driver/Service FB use even though
+    generated/ is not itself a recognised layer — see the strict-layer
+    exception in _check_file(). Indexing them separately (rather than via
+    _layer_of) keeps every other layer's resolution unchanged: a generated
+    header included from a non-strict layer is still skipped as "unknown".
+    """
+    gen = set()
+    gen_dir = os.path.join(repo_root, 'generated')
+    if os.path.isdir(gen_dir):
+        for dirpath, _dirnames, filenames in os.walk(gen_dir):
+            for fname in filenames:
+                if fname.endswith(('.h', '.hpp')):
+                    gen.add(fname)
+    return gen
+
+
 # ── Per-file include check ───────────────────────────────────────────────────
 
 _INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
 
 
-def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
+def _check_file(abs_path, rel_path, repo_root, file_layer, header_index,
+                generated_headers):
     """Return a list of violation strings for the given file."""
     allowed  = _ALLOWED[file_layer]
     file_dir = os.path.dirname(abs_path)
@@ -159,6 +193,11 @@ def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
                 if inc_layer is None:
                     # Unknown layer (generated/, tools/, vendor BSP, etc.)
                     if file_layer in _VENDOR_BSP_STRICT:
+                        # generated/ headers are auto-generated framework
+                        # contracts (catalogs, config schema) — sanctioned for
+                        # Driver/Service FB use, not vendor BSPs.
+                        if os.path.basename(inc) in generated_headers:
+                            continue
                         violations.append(
                             f'VIOLATION: {rel_path}:{lineno}: '
                             f'{file_layer} must not include unrecognised headers '
@@ -199,9 +238,10 @@ def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
 # ── Main walker ──────────────────────────────────────────────────────────────
 
 def run(repo_root):
-    header_index   = _build_header_index(repo_root)
-    all_violations = []
-    skip           = {'build', '.git', '__pycache__'}
+    header_index      = _build_header_index(repo_root)
+    generated_headers = _build_generated_headers(repo_root)
+    all_violations    = []
+    skip              = {'build', '.git', '__pycache__'}
 
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = [d for d in dirnames if d not in skip]
@@ -214,7 +254,8 @@ def run(repo_root):
             if file_layer not in _ALLOWED:
                 continue  # layer not under our rules
             violations = _check_file(abs_path, rel_path, repo_root,
-                                     file_layer, header_index)
+                                     file_layer, header_index,
+                                     generated_headers)
             all_violations.extend(violations)
 
     for v in sorted(all_violations):

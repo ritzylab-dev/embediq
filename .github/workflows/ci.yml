@@ -46,6 +46,7 @@ jobs:
           mkdir -p /tmp/cfg_fresh
           python3 tools/config_iq/generate.py config/config.iq \
               --out /tmp/cfg_fresh/
+          diff generated/embediq_cfg_validate.h /tmp/cfg_fresh/embediq_cfg_validate.h
           diff generated/embediq_cfg_generated.h /tmp/cfg_fresh/embediq_cfg_generated.h
           diff generated/embediq_cfg_validate.c   /tmp/cfg_fresh/embediq_cfg_validate.c
 
