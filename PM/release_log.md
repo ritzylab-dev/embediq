@@ -100,3 +100,24 @@ What shipped:
 - Match:         ✅
 - dev post-release state: clean
 - Verified by:   Gate 15 agent pass
+
+## v0.3.0 — 2026-05-26 UTC
+- Tag SHA (v0.3.0^{}):  1610a63273c620668eae17dc7bdd70ccec1b30f5
+- main HEAD SHA:         1610a63273c620668eae17dc7bdd70ccec1b30f5
+- Match:                 ✅ CONFIRMED
+- dev post-release:      clean — git log v0.3.0..origin/dev empty
+- Verified by:           Gate 15 agent pass
+
+What shipped (PRs #126–#137 above v0.2.4):
+- PR #126: docs(arch): flat FSM philosophy and thread model sections (Item 2)
+- PR #127: feat(ci): MISRA-C:2012 scan via cppcheck, warning-only (Item 1)
+- PR #128: feat(item4-pr-a): contract alignment — nvm.h, hal atomicity, obs events
+- PR #129: feat(item4-pr-b): config.iq schema + generator + CI drift-check
+- PR #130: feat(item4-pr-c): embediq_nvs_gen.py build-time NVM blob generator
+- PR #131: feat(item4-pr-d): fb_nvm blob header, CRC-32, factory-key mutability
+- PR #132: feat(bridge): Item 5a — fb_bridge daemon + External FB C API + unit tests
+- PR #133: fix(ci): allowlist core/src/bridge/ in check_fb_calls.py
+- PR #134: feat(bridge): Item 5b — Python generator + embediq-python SDK + 30 tests
+- PR #135: feat(bridge): Item 5c — integration test, CI steps, BRIDGE.md docs
+- PR #136: feat(bridge): Item 5d — telemetry_observer.py example
+- PR #137: chore: Gate 14B contrib_sim — 26 tests pass, SHA verified
