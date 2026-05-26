@@ -38,3 +38,33 @@ target_compile_options(embediq_bridge PRIVATE
     -Wextra
     -Werror
 )
+
+# ---------------------------------------------------------------------------
+# Socket-transport variant — used by Item 5c integration test only.
+# Compiles the same sources with EMBEDIQ_BRIDGE_TRANSPORT_SOCKET instead of
+# QUEUE. Requires EMBEDIQ_PLATFORM_HOST (set by root CMakeLists when
+# -DEMBEDIQ_PLATFORM=host). PRIVATE compile definitions only — this variant
+# must not propagate SOCKET transport to consumers.
+# ---------------------------------------------------------------------------
+add_library(embediq_bridge_socket STATIC
+    fb_bridge.c
+    ${CMAKE_SOURCE_DIR}/core/src/bridge/embediq_ext_fb.c
+)
+
+target_include_directories(embediq_bridge_socket PUBLIC
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(embediq_bridge_socket PRIVATE
+    embediq_fb_engine
+)
+
+target_compile_definitions(embediq_bridge_socket PRIVATE
+    EMBEDIQ_BRIDGE_TRANSPORT_SOCKET
+)
+
+target_compile_options(embediq_bridge_socket PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)

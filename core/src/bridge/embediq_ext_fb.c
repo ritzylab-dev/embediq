@@ -1,3 +1,7 @@
+#if defined(EMBEDIQ_BRIDGE_TRANSPORT_SOCKET) && defined(EMBEDIQ_PLATFORM_HOST)
+#  define _POSIX_C_SOURCE 200809L   /* strnlen, struct timeval, suseconds_t */
+#endif
+
 /*
  * embediq_ext_fb.c — External FB C API implementation — static pool + transport dispatch
  *
@@ -26,6 +30,7 @@
 #  include <errno.h>
 #  include <stdlib.h>     /* getenv */
 #  include <sys/socket.h>
+#  include <sys/time.h>   /* struct timeval, suseconds_t */
 #  include <sys/types.h>
 #  include <sys/un.h>
 #  include <unistd.h>

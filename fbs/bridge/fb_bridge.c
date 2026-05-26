@@ -210,7 +210,10 @@ typedef struct {
 static ext_socket_slot_t g_socket_pool[EMBEDIQ_BRIDGE_MAX_EXT_FBS];
 
 static int               g_unix_fd          = -1;
-static int               g_tcp_fd           = -1;   /* deferred — stays -1 in Item 5a */
+/* TCP transport deferred to Item 6 — declared for forward compatibility.
+ * Marked unused so -Werror -Wunused-variable passes once the SOCKET transport
+ * variant of this TU is compiled (Item 5c integration test). */
+static int               g_tcp_fd __attribute__((unused)) = -1;
 static EmbedIQ_Queue_t  *g_fd_queue         = NULL; /* listener -> mux fd handoff   */
 static EmbedIQ_Task_t   *g_listener_task    = NULL;
 static EmbedIQ_Task_t   *g_mux_task         = NULL;

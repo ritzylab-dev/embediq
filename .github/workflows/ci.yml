@@ -50,6 +50,26 @@ jobs:
           diff generated/embediq_cfg_generated.h /tmp/cfg_fresh/embediq_cfg_generated.h
           diff generated/embediq_cfg_validate.c   /tmp/cfg_fresh/embediq_cfg_validate.c
 
+      - name: Generate Python message stubs (--lang python)
+        run: |
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --lang python --out tools/embediq_python/embediq/msgs/
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --lang python --out tools/embediq_python/embediq/msgs/
+
+      - name: Verify Python stubs match .iq source (drift check)
+        run: |
+          mkdir -p /tmp/py_fresh/
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --lang python --out /tmp/py_fresh/
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --lang python --out /tmp/py_fresh/
+          diff tools/embediq_python/embediq/msgs/core_msgs.py /tmp/py_fresh/core_msgs.py
+          diff tools/embediq_python/embediq/msgs/telemetry_msgs.py /tmp/py_fresh/telemetry_msgs.py
+
+      - name: Python SDK unit tests
+        run: python3 tests/python/test_ext_fb.py
+
       - name: Build (host platform)
         run: |
           cmake -B build -DEMBEDIQ_PLATFORM=host
