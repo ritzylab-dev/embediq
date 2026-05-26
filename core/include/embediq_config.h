@@ -244,6 +244,22 @@ extern "C" {
  *  if exceeded. 16 slots correspond to the 0xE0–0xEF library source ID range. */
 #define EMBEDIQ_MAX_LIB_INITS           16u
 
+/* ---------------------------------------------------------------------------
+ * Bridge Daemon configuration (fb_bridge — Item 5)
+ *
+ * External FBs are processes or threads that join the bus through fb_bridge.
+ * Pool sized at compile time (R-02 — no malloc). Queue depth applies to the
+ * queue transport (in-process / RTOS); socket transport reads frames from
+ * the network stack.
+ * ------------------------------------------------------------------------- */
+
+#define EMBEDIQ_BRIDGE_MAX_EXT_FBS           8u    /* max simultaneous External FBs */
+#define EMBEDIQ_BRIDGE_QUEUE_DEPTH          32u    /* queue transport: msgs per direction per External FB */
+#define EMBEDIQ_BRIDGE_IDENTIFY_TIMEOUT_MS 5000u   /* ms to wait for IDENTIFY frame before closing socket */
+#define EMBEDIQ_BRIDGE_HEARTBEAT_MS        5000u   /* default heartbeat interval (overridden by env var at runtime) */
+#define EMBEDIQ_BRIDGE_NAME_LEN             32u    /* External FB name buffer length (NUL-terminated) */
+#define EMBEDIQ_BRIDGE_MAX_SUB_PER_EXT_FB   16u    /* max msg_ids any one External FB may subscribe to */
+
 #ifdef __cplusplus
 }
 #endif

@@ -322,6 +322,31 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
 }
 
 /* ---------------------------------------------------------------------------
+ * embediq_bus_bridge_route() — Item 5
+ *
+ * Stamps a caller-supplied virtual endpoint id (0x40-0x7F per Item 5 Topic 3D)
+ * as source_endpoint_id and routes the message through the same private
+ * pipeline as embediq_publish(). Used by embediq_ext_fb.c to inject
+ * External-FB-originated messages onto the bus without occupying a real
+ * endpoint slot in g_ep[]/g_registry[].
+ *
+ * NOT inside any #ifdef EMBEDIQ_PLATFORM_HOST guard — this is production code
+ * that must be available on RTOS builds for queue transport as well. The
+ * function does not include any bridge header (I-09): it relies only on the
+ * already-static route_message() helper in this same translation unit.
+ * ------------------------------------------------------------------------- */
+embediq_err_t embediq_bus_bridge_route(uint8_t virtual_ep_id,
+                                       EmbedIQ_Msg_t *msg)
+{
+    if (msg == NULL) {
+        return EMBEDIQ_ERR_INVALID;
+    }
+    msg->source_endpoint_id = virtual_ep_id;
+    route_message(msg);
+    return EMBEDIQ_OK;
+}
+
+/* ---------------------------------------------------------------------------
  * Public: message_bus_recv_ep()
  *
  * Non-blocking receive used by the per-FB dispatch loop.

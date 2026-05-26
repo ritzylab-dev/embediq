@@ -113,6 +113,28 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out);
  */
 int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *msg);
 
+/* ---------------------------------------------------------------------------
+ * Bridge routing — Item 5
+ *
+ * Stamps the supplied virtual endpoint id as source_endpoint_id and routes
+ * the message on the bus. Used by embediq_ext_fb.c on both socket and queue
+ * transport paths so that External FB-originated messages carry a valid
+ * source identity (0x40-0x7F virtual range) without occupying a real
+ * endpoint slot.
+ *
+ * NOT wrapped in EMBEDIQ_PLATFORM_HOST — available on all targets. This
+ * declaration is a bare function signature; it pulls in no bridge headers,
+ * preserving I-09 (native bus compiles without bridge code when
+ * EMBEDIQ_BRIDGE is not defined).
+ *
+ * @param virtual_ep_id  Virtual endpoint id (0x40-0x7F) to stamp into msg.
+ * @param msg            Message to route. Modified in place: source_endpoint_id
+ *                       is overwritten. Copied by value into subscriber queues
+ *                       by the underlying routing path.
+ * @return EMBEDIQ_OK on success, EMBEDIQ_ERR_INVALID if msg is NULL.
+ */
+int32_t embediq_bus_bridge_route(uint8_t virtual_ep_id, EmbedIQ_Msg_t *msg);
+
 #ifdef __cplusplus
 }
 #endif
