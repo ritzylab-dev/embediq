@@ -2,7 +2,7 @@
  * embediq_nvm.h — Non-volatile memory key-value store contract
  *
  * Abstract interface for persisting key-value pairs across power cycles.
- * The POSIX implementation stores data as JSON under ~/.embediq/.
+ * The POSIX implementation stores data as a binary blob via hal_flash_posix.c (hal/posix/).
  * The ESP32 implementation uses NVS (Non-Volatile Storage).
  *
  * All operations are synchronous from the caller's perspective.
@@ -37,11 +37,14 @@ extern "C" {
  * Sizing limits
  * ------------------------------------------------------------------------- */
 
-/** Maximum key length including the NUL terminator (bytes). */
-#define EMBEDIQ_NVM_KEY_MAX  32u
+/** Maximum key length including the NUL terminator (bytes).
+ *  Matches EMBEDIQ_NVM_KEY_SIZE in embediq_config.h — fb_nvm.c uses config.h as authority. */
+#define EMBEDIQ_NVM_KEY_MAX  64u
 
-/** Maximum value payload size (bytes). */
-#define EMBEDIQ_NVM_VAL_MAX  256u
+/** Maximum value payload size (bytes).
+ *  Matches EMBEDIQ_NVM_VAL_SIZE in embediq_config.h — fb_nvm.c uses config.h as authority.
+ *  String values may use up to 63 bytes usable (64 minus NUL terminator). */
+#define EMBEDIQ_NVM_VAL_MAX  64u
 
 /* ---------------------------------------------------------------------------
  * Key-value operations

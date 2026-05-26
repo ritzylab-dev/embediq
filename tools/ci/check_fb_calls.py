@@ -33,6 +33,8 @@ from pathlib import Path
 #
 # core/src/bus/       — message bus implementation (IS the OSAL consumer)
 # core/src/registry/  — FB engine (creates dispatch tasks via OSAL)
+# core/src/bridge/    — External FB connection layer (creates per-connection
+#                       inbound/outbound OSAL queues for external processes)
 # fb_timer.c          — Platform FB: OSAL timer bridge (R-sub-11)
 # fb_watchdog.c       — Platform FB: OSAL watchdog bridge (R-sub-11)
 # fb_nvm.c            — Platform FB: OSAL NVM bridge (R-sub-11)
@@ -41,6 +43,9 @@ from pathlib import Path
 ALLOWLIST_PATHS = [
     'core/src/bus/',
     'core/src/registry/',
+    'core/src/bridge/',    # External FB connection layer — Layer 1 framework
+                           # infrastructure that manages per-connection OSAL
+                           # queues. Same category as core/src/bus/.
     'fbs/drivers/fb_timer.c',
     'fbs/drivers/fb_watchdog.c',
     'fbs/drivers/fb_nvm.c',

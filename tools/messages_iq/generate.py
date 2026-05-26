@@ -56,6 +56,22 @@ _TYPE_MAP = {
     'bool': 'bool',
 }
 
+# Python annotation type for each .iq scalar — used by --lang python.
+_PYTHON_TYPE_MAP = {
+    'u8':   'int',   'u16':  'int',   'u32':  'int',   'u64':  'int',
+    'i8':   'int',   'i16':  'int',   'i32':  'int',   'i64':  'int',
+    'f32':  'float', 'f64':  'float',
+    'bool': 'bool',
+}
+
+# struct.Struct format code for each .iq scalar — used by --lang python.
+_STRUCT_FMT_MAP = {
+    'u8':   'B',  'u16':  'H',  'u32':  'I',  'u64':  'Q',
+    'i8':   'b',  'i16':  'h',  'i32':  'i',  'i64':  'q',
+    'f32':  'f',  'f64':  'd',
+    'bool': '?',
+}
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -273,18 +289,110 @@ def generate_header(version, namespace, messages, source_path, output_name):
 
 
 # ---------------------------------------------------------------------------
+# Python output target (--lang python)
+# ---------------------------------------------------------------------------
+
+def generate_python(version, namespace, messages, source_path, output_name):
+    """Return the complete content of the generated Python message stub as a string."""
+    src   = Path(source_path).name
+    regen = (f'python3 tools/messages_iq/generate.py {source_path}'
+             f' --lang python --out <output_dir>/')
+    lines = []
+
+    # File header
+    lines += [
+        f'# {output_name} -- Generated Python message stubs',
+        '#',
+        f'# Source:    {src}',
+        f'# Namespace: {namespace}',
+        f'# Schema:    version {version}',
+        '#',
+        '# DO NOT EDIT -- regenerate with:',
+        f'#   {regen}',
+        '#',
+        '# @author  Ritesh Anand',
+        '# @company embediq.com | ritzylab.com',
+        '#',
+        '# SPDX-License-Identifier: Apache-2.0',
+        '',
+        'import struct',
+        'from dataclasses import dataclass',
+        'from typing import Any',
+        '',
+    ]
+
+    registry_entries = []
+
+    for msg in messages:
+        name   = msg['name']
+        msg_id = msg['id']
+        fields = msg['fields']
+
+        # struct format string for this payload (little-endian).
+        fmt = '<' + ''.join(_STRUCT_FMT_MAP[f['iq_type']] for f in fields)
+
+        lines.append(f'# --- {name} (0x{msg_id:04X}) ---')
+        lines.append(f'{name} = 0x{msg_id:04X}')
+        lines.append('')
+        lines.append('')
+        lines.append(f'@dataclass')
+        lines.append(f'class {name}_Payload:')
+        if fields:
+            for f in fields:
+                py_type = _PYTHON_TYPE_MAP[f['iq_type']]
+                lines.append(f'    {f["name"]}: {py_type}')
+        else:
+            lines.append(f'    pass  # no fields')
+        lines.append('')
+        lines.append(f'    _STRUCT = struct.Struct({fmt!r})')
+        lines.append('')
+        lines.append(f'    @classmethod')
+        lines.append(f"    def unpack(cls, data: bytes) -> '{name}_Payload':")
+        if fields:
+            field_names = ', '.join(f['name'] for f in fields)
+            lines.append(f'        ({field_names},) = cls._STRUCT.unpack_from(data)')
+            lines.append(f'        return cls({field_names})')
+        else:
+            lines.append(f'        return cls()')
+        lines.append('')
+        lines.append(f'    def pack(self) -> bytes:')
+        if fields:
+            args = ', '.join(f'self.{f["name"]}' for f in fields)
+            lines.append(f'        return self._STRUCT.pack({args})')
+        else:
+            lines.append(f"        return b''")
+        lines.append('')
+        lines.append('')
+
+        registry_entries.append(f'    {name}: {name}_Payload,')
+
+    # Registry dict at the end — used by EmbedIQMsg.decode() for typed payloads.
+    lines.append('# Registry: maps msg_id -> payload dataclass')
+    lines.append('# Used by EmbedIQMsg.decode() to return typed objects.')
+    lines.append('_MSG_REGISTRY = {')
+    lines.extend(registry_entries)
+    lines.append('}')
+    lines.append('')
+
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate a C message catalog header from a .iq schema file.')
+        description='Generate a message catalog (C header or Python module) from a .iq schema file.')
     parser.add_argument('schema',
                         help='Path to the .iq input schema file')
     parser.add_argument('--out', required=True, metavar='DIR',
                         help='Output directory (created if absent)')
     parser.add_argument('--output-name', metavar='FILENAME', default=None,
-                        help='Output filename (default: <schema_stem>_msg_catalog.h)')
+                        help='Output filename (default: <schema_stem>_msg_catalog.h, '
+                             'or <schema_stem>_msgs.py with --lang python)')
+    parser.add_argument('--lang', choices=['c', 'python'], default='c',
+                        help='Output language (default: c)')
     args = parser.parse_args()
 
     schema_path = Path(args.schema)
@@ -294,9 +402,12 @@ def main():
         print(f'ERROR: schema not found: {schema_path}', file=sys.stderr)
         return 1
 
-    # Default output filename: <stem>_msg_catalog.h (e.g. core → core_msg_catalog.h)
+    # Default output filename per language target.
     # --output-name overrides for backward compatibility with embediq_msg_catalog.h
-    output_name = args.output_name or f'{schema_path.stem}_msg_catalog.h'
+    if args.lang == 'python':
+        output_name = args.output_name or f'{schema_path.stem}_msgs.py'
+    else:
+        output_name = args.output_name or f'{schema_path.stem}_msg_catalog.h'
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -312,7 +423,10 @@ def main():
         print(f'WARNING: no messages found in {schema_path}', file=sys.stderr)
 
     out_path = out_dir / output_name
-    content  = generate_header(version, namespace, messages, schema_path, output_name)
+    if args.lang == 'python':
+        content = generate_python(version, namespace, messages, schema_path, output_name)
+    else:
+        content = generate_header(version, namespace, messages, schema_path, output_name)
     out_path.write_text(content, encoding='utf-8')
 
     print(f'OK  Generated {out_path}  ({len(messages)} message(s))')

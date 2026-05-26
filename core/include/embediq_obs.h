@@ -163,6 +163,26 @@ extern "C" {
 #define EMBEDIQ_OBS_EVT_LIFECYCLE           0x30u /**< FB lifecycle state transition */
 #define EMBEDIQ_OBS_EVT_FSM_TRANS           0x31u /**< FSM state machine transition */
 
+#define EMBEDIQ_OBS_EVT_EXTFB_CONNECTED    0x32u
+/**< External FB connected and identified on the bridge.
+ *   source_fb_id:  fb_bridge endpoint index (0x00-0x3F).
+ *   target_fb_id:  External FB virtual endpoint ID (0x40-0x7F).
+ *   state_or_flag: transport (0=socket, 1=queue).
+ *   msg_id:        0 (no message context).
+ *   Gating:        EMBEDIQ_OBS_EMIT_STATE -- active when EMBEDIQ_TRACE_STATE=1.
+ *   Emit from:     bridge_mux on CONNECTED entry (socket) or embediq_ext_fb_init()
+ *                  (queue transport). */
+
+#define EMBEDIQ_OBS_EVT_EXTFB_DISCONNECTED 0x33u
+/**< External FB disconnected from bridge.
+ *   source_fb_id:  fb_bridge endpoint index (0x00-0x3F).
+ *   target_fb_id:  External FB virtual endpoint ID (0x40-0x7F).
+ *   state_or_flag: reason (0=clean, 1=timeout, 2=pool_full, 3=protocol_error).
+ *   msg_id:        0 (no message context).
+ *   Gating:        EMBEDIQ_OBS_EMIT_STATE.
+ *   Emit from:     bridge_mux on DISCONNECTING entry (socket) or
+ *                  embediq_ext_fb_deinit() (queue transport). */
+
 /* RESOURCE family (0x40–0x4F) — resource acquisition and pressure events */
 #define EMBEDIQ_OBS_EVT_LIB_INIT          0x40u  /**< Library global init completed (once per boot per library) */
 #define EMBEDIQ_OBS_EVT_LIB_DEINIT        0x41u  /**< Library global deinit called at shutdown */
@@ -222,7 +242,25 @@ extern "C" {
                                                 state_or_flag: (uint8_t)(-(err_code))
                                                                1=INVALID 2=BUSY 3=TIMEOUT 4=IO.
                                                 msg_id: 0 (no message context). */
-/* 0x68–0x6F reserved */
+#define EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID      0x68u /**< Config blob rejected at boot —
+                                                          magic mismatch or CRC32 failure.
+                                                          Firmware falls back to compiled-in
+                                                          defaults and continues boot safely.
+                                                          source_fb_id: fb_nvm endpoint index.
+                                                          state_or_flag: 0=magic_fail
+                                                                         1=crc_fail
+                                                                         2=major_version_mismatch.
+                                                          msg_id: 0 (no message context). */
+#define EMBEDIQ_OBS_EVT_CFG_MUTABILITY_REJECT 0x69u /**< Fleet push attempted to overwrite
+                                                          a factory or user-class config key.
+                                                          Entry silently skipped — no data changed.
+                                                          IEC 62443 commissioning immutability.
+                                                          source_fb_id: fb_nvm endpoint index.
+                                                          state_or_flag: mutability class of the
+                                                            rejected key (0=factory 2=user).
+                                                          msg_id: low 16 bits of key name CRC32
+                                                            (key name itself is never logged). */
+/* 0x6A–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */
 

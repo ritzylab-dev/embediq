@@ -727,6 +727,108 @@ in application FB sub-functions.
 
 ---
 
+## Flat FSM — Intentional Design Choice
+
+EmbedIQ uses flat (single-level) FSMs within sub-functions. It does not implement
+hierarchical state machines (HSMs) — no QP/C-style state inheritance, no UML
+statechart nesting. This is a deliberate architectural decision, not a capability gap.
+
+**Why not HSMs?** The QP/C argument for nesting is that parent states handle shared
+events, avoiding state-code duplication. EmbedIQ solves the same problem differently:
+through FB composition. When two concerns share behaviour or guarded state transitions,
+decompose them into two FBs that communicate by typed message. Each FB owns a simple,
+flat FSM. The message between them replaces the parent–child inheritance.
+
+**Example — cloud connection + telemetry buffering:**
+
+```
+Without composition (HSM approach):
+  CONNECTED ─── fault ──→ RECONNECTING
+      └── child: BUFFERING ── flush_done ──→ FLUSHING
+  Parent handles reconnect. Child inherits reconnect guard.
+  One FSM. State space doubles for every cross-cutting concern.
+
+With FB composition (EmbedIQ approach):
+  fb_cloud_mqtt FSM:    DISCONNECTED → CONNECTING → CONNECTED → RECONNECTING
+  fb_telemetry FSM:     IDLE → BUFFERING → FLUSHING
+
+  fb_cloud_mqtt publishes MSG_CLOUD_DISCONNECTED on entering RECONNECTING.
+  fb_telemetry subscribes to MSG_CLOUD_DISCONNECTED → transitions to BUFFERING.
+
+  Same guard. Zero state inheritance. Each FB independently observable and testable.
+```
+
+**What you gain with composition:**
+- Every transition in every FSM is captured by Observatory independently. A flat FSM
+  inside one FB produces a readable, unambiguous event trace. An HSM flattens concern
+  boundaries; Observatory cannot tell you which logical layer caused the transition.
+- Each FB is independently replaceable. Swap fb_cloud_mqtt with a different transport;
+  fb_telemetry does not change because the message contract is the interface.
+- Each FB is independently testable. Inject MSG_CLOUD_DISCONNECTED; assert fb_telemetry
+  enters BUFFERING. No HSM harness required. No parent-state scaffolding.
+
+**The rule:** If you feel the need for nested states inside one FB, ask whether the
+hierarchy represents two separate concerns. If yes — decompose into two FBs and
+connect them by message. If the states genuinely belong to one atomic concern
+(e.g., a protocol parser's byte-level framing), flat FSM within one sub-function
+is the correct pattern.
+
+---
+
+## Thread Model — Gateway vs. Constrained Targets
+
+EmbedIQ v1 executor policy: one dedicated OS thread per FB.
+
+### Gateway-class devices (Linux hosts, Raspberry Pi, resource-rich MCUs)
+
+One thread per FB is the correct and complete model. The OS scheduler separates FB
+execution. No FB can starve another. Priority is set per-FB via
+`EmbedIQ_FB_Config_t.priority`. Blocking I/O in one FB (e.g., a cloud publish
+waiting on network) does not block other FBs. This matches the actor model exactly:
+each FB is an independent actor with its own message queue and dedicated executor.
+
+Design rule for gateway targets: one FB per concern. FB count is not a resource
+concern on these platforms.
+
+### Constrained targets (small MCUs with limited RAM and thread budget)
+
+The sub-function consolidation pattern applies when the platform imposes a thread
+budget. One FB owns multiple sub-functions. The FB's single thread dispatches to
+each sub-function by message subscription. Multiple concerns live inside one FB —
+not because they are logically coupled, but because the platform cannot allocate
+an independent thread for each.
+
+The sub-function model (see "Sub-function Model" above) is designed for exactly
+this. Each sub-function has its own subscription list, optional FSM, and lifecycle
+callbacks. From the bus perspective, the FB is still a single endpoint. From the
+developer perspective, each sub-function is a separate concern — independently
+readable, independently maintainable.
+
+**This is not a workaround.** Concurrency model and concern decomposition are
+orthogonal. The bus contract is unchanged. Messages still drive everything. The
+only difference is that N sub-functions share one thread instead of one FB owning
+one thread. The design discipline (no direct calls, no shared state across concerns,
+observable by default) is identical.
+
+### Decision rule
+
+| Platform | Thread budget | Pattern |
+| -------- | ------------- | ------- |
+| Linux / Raspberry Pi / high-resource MCU | No constraint | One FB per concern. Thread-per-FB. |
+| Constrained MCU (< 4 threads for application FBs) | Limited | Sub-function consolidation. One FB, N sub-functions, one thread. |
+
+If consolidating concerns into one FB on a constrained target, document the
+consolidation rationale in a comment above the FB registration:
+
+```c
+// Consolidated FB: sensor_hub owns vibration + temperature + current on this
+// platform to stay within the 4-thread application budget.
+// Each concern is a separate sub-function with independent subscriptions and FSM.
+// Decompose back to three FBs when porting to a resource-rich target.
+```
+
+---
+
 ## ISR-to-Message Boundary
 
 ```

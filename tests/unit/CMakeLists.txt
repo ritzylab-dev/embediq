@@ -394,3 +394,33 @@ target_compile_options(test_harness PRIVATE
 )
 
 add_test(NAME unit_test_harness COMMAND test_harness)
+
+# ---------------------------------------------------------------------------
+# fb_bridge C framework unit tests (Item 5a)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_bridge test_fb_bridge.c)
+
+target_include_directories(test_fb_bridge PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/fbs/bridge
+)
+
+target_compile_definitions(test_fb_bridge PRIVATE
+    EMBEDIQ_PLATFORM_HOST
+    EMBEDIQ_BRIDGE_TRANSPORT_QUEUE
+)
+
+target_link_libraries(test_fb_bridge PRIVATE
+    embediq_fb_engine
+    embediq_bridge
+    embediq_test_support
+)
+
+target_compile_options(test_fb_bridge PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_bridge COMMAND test_fb_bridge)

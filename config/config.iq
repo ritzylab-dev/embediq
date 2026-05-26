@@ -1,0 +1,27 @@
+# config.iq — EmbedIQ configuration schema
+#
+# Machine-readable schema for all runtime configuration keys.
+# One key per line: name, type, mutability, default, optional range, optional sensitive.
+#
+# Types:    u32, i32, f32, bool, str[N]  (N = max bytes excluding NUL, max 63)
+# Mutability:
+#   factory  — set at manufacturing, never overwritable at runtime
+#   fleet    — cloud-pushable at any time
+#   user     — set during local provisioning, not cloud-overwritable
+#   firmware — written by firmware internals only, no runtime setter generated
+#
+# @author  Ritesh Anand
+# @company embediq.com | ritzylab.com
+
+version 1
+namespace "com.embediq.demo"
+
+#  key                    type      mutability  default       range           sensitive
+config mqtt.host           str[63]   fleet       ""
+config mqtt.port           u32       fleet       1883          1..65535
+config report_interval_ms  u32       fleet       30000         100..86400000
+config device_id           str[63]   factory     ""
+config log_level           u32       fleet       1             0..3
+config wifi.ssid           str[63]   user        ""
+config wifi.psk            str[63]   user        ""                            sensitive
+config boot_count          u32       firmware    0

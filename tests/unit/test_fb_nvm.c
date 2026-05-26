@@ -41,6 +41,7 @@
  * ------------------------------------------------------------------------- */
 
 extern void        nvm__init_state(void);
+extern void        nvm__load_state(void);   /* triggers nvm_load() — test-only */
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -279,6 +280,149 @@ static void test_hal_flash_page_size_nonzero(void)
     ASSERT(ps > 0u, "hal_flash_page_size returns non-zero");
 }
 
+/* -------------------------------------------------------------------------
+ * Tests added by Item 4 PR-D — blob header, CRC validation, mutability
+ * ----------------------------------------------------------------------- */
+
+/* test_blob_file_starts_with_magic
+ * After a persist, the backing file must begin with the 4-byte EIQ\0 magic.
+ *
+ * TDD: FAILS before implementation (file starts with raw g_nvm key bytes).
+ *      PASSES after implementation (nvm_persist writes the blob header).
+ */
+static void test_blob_file_starts_with_magic(void)
+{
+    setup();
+
+    const uint8_t val[] = {0x11};
+    embediq_nvm_set("blob_hdr_check", val, 1u);
+
+    FILE *f = fopen(TEST_NVM_PATH, "rb");
+    ASSERT(f != NULL, "backing file exists for magic-header check");
+    if (!f) return;
+    uint8_t hdr[4] = {0};
+    size_t  n = fread(hdr, 1u, sizeof(hdr), f);
+    fclose(f);
+
+    ASSERT(n == 4u
+           && hdr[0] == 'E'
+           && hdr[1] == 'I'
+           && hdr[2] == 'Q'
+           && hdr[3] == '\0',
+           "blob file starts with EIQ\\0 magic — nvm_persist writes header");
+}
+
+/* test_blob_file_size_after_persist
+ * After a persist, the backing file must be exactly 8592 bytes:
+ *   16-byte nvm_blob_header_t + NVM_MAX_KEYS * sizeof(nvm_entry_t)
+ *   = 16 + 64 * 134 = 16 + 8576 = 8592.
+ *
+ * TDD: FAILS before implementation (file is 8576 bytes, no header).
+ *      PASSES after implementation.
+ */
+static void test_blob_file_size_after_persist(void)
+{
+    setup();
+
+    const uint8_t val[] = {0x22};
+    embediq_nvm_set("size_check", val, 1u);
+
+    FILE *f = fopen(TEST_NVM_PATH, "rb");
+    ASSERT(f != NULL, "backing file exists for size check");
+    if (!f) return;
+    fseek(f, 0L, SEEK_END);
+    long sz = ftell(f);
+    fclose(f);
+
+    /* 16-byte header + 64 * 134-byte entries */
+    ASSERT(sz == 8592L,
+           "blob file is exactly 8592 bytes (16-byte header + 8576-byte payload)");
+}
+
+/* test_factory_key_set_rejected
+ * embediq_nvm_set() on a factory-class key must return EMBEDIQ_ERR.
+ * "device_id" is declared factory in config/config.iq.
+ *
+ * TDD: FAILS before implementation (no mutability check — set succeeds).
+ *      PASSES after implementation.
+ */
+static void test_factory_key_set_rejected(void)
+{
+    setup();
+
+    const uint8_t val[] = {0xAA, 0xBB, 0xCC};
+    embediq_err_t rc = embediq_nvm_set("device_id", val, 3u);
+    ASSERT(rc == EMBEDIQ_ERR,
+           "embediq_nvm_set() on a factory-class key returns EMBEDIQ_ERR");
+}
+
+/* test_blob_crc_corrupt_causes_fallback
+ * Corrupting a payload byte in the backing file must cause nvm_load() to
+ * detect a CRC mismatch and fall back to an empty store.
+ *
+ * Corruption offset = 80:
+ *   Pre-impl  file layout: raw g_nvm from offset 0.  Byte 80 =
+ *     entry-0 val[16] (val_len=1 so unused — get still succeeds → FAIL).
+ *   Post-impl file layout: 16-byte header + g_nvm from offset 16.
+ *     Byte 80 = entry-0 val[0] (stored value) — CRC computed over this
+ *     byte, so changing it invalidates the CRC → fallback → PASS.
+ *
+ * TDD: FAILS before implementation (key still found, corrupt byte unused).
+ *      PASSES after implementation (CRC mismatch → fallback → key absent).
+ */
+static void test_blob_crc_corrupt_causes_fallback(void)
+{
+    setup();
+
+    const uint8_t val[] = {0x42};   /* must NOT be 0xFF to ensure corruption changes the byte */
+    embediq_nvm_set("crc_test", val, 1u);
+
+    /* Corrupt one byte of the backing file at offset 80. */
+    FILE *f = fopen(TEST_NVM_PATH, "r+b");
+    ASSERT(f != NULL, "backing file exists for CRC corruption test");
+    if (!f) return;
+    fseek(f, 80L, SEEK_SET);
+    uint8_t corrupt = 0xFFu;
+    fwrite(&corrupt, 1u, 1u, f);
+    fclose(f);
+
+    /* Simulate restart — clear in-memory cache and reload from flash. */
+    nvm__init_state();
+    nvm__load_state();
+
+    uint8_t  buf[EMBEDIQ_MSG_MAX_PAYLOAD];
+    uint32_t len = sizeof(buf);
+    embediq_err_t rc = embediq_nvm_get("crc_test", buf, &len);
+    ASSERT(rc == EMBEDIQ_ERR,
+           "CRC-corrupted blob causes fallback — key absent after reload");
+}
+
+/* test_blob_persist_and_reload_roundtrip
+ * A value stored before a simulated restart must survive the reload cycle
+ * (blob format is valid — magic + CRC both pass).
+ *
+ * Regression test: PASSES before and after implementation.
+ * Included to ensure round-trip correctness is preserved after PR-D changes.
+ */
+static void test_blob_persist_and_reload_roundtrip(void)
+{
+    setup();
+
+    const uint8_t val[] = {0xCA, 0xFE, 0xBA, 0xBE};
+    embediq_nvm_set("reload_test", val, 4u);
+
+    /* Simulate restart — clear in-memory cache and reload from flash. */
+    nvm__init_state();
+    nvm__load_state();
+
+    uint8_t  buf[EMBEDIQ_MSG_MAX_PAYLOAD];
+    uint32_t len = sizeof(buf);
+    embediq_err_t rc = embediq_nvm_get("reload_test", buf, &len);
+
+    ASSERT(rc == EMBEDIQ_OK && len == 4u && memcmp(buf, val, 4u) == 0,
+           "value survives persist + reload cycle (blob round-trip correct)");
+}
+
 /* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
@@ -298,6 +442,13 @@ int main(void)
     test_hal_flash_read_uninitialised_returns_ok();
     test_hal_flash_erase_zeros_region();
     test_hal_flash_page_size_nonzero();
+
+    /* PR-D: blob header, CRC, mutability tests */
+    test_blob_file_starts_with_magic();
+    test_blob_file_size_after_persist();
+    test_factory_key_set_rejected();
+    test_blob_crc_corrupt_causes_fallback();
+    test_blob_persist_and_reload_roundtrip();
 
     printf("\n");
     if (g_tests_failed == 0) {

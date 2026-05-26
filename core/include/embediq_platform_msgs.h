@@ -77,6 +77,42 @@ extern "C" {
 /* 0x05DF — MSG_OTA_FAILED          (reserved — P2 implementation) */
 /* 0x05E0–0x063F — reserved for additional OTA events              */
 
+/* ---------------------------------------------------------------------------
+ * fb_bridge -- External FB bus messages (0x06A4-0x06D4)
+ *
+ * IDs assigned at implementation (Item 5a). Range 0x06A7-0x06D4 reserved.
+ * ------------------------------------------------------------------------- */
+
+#include <stdint.h>
+#include "embediq_config.h"           /* EMBEDIQ_BRIDGE_NAME_LEN */
+
+#define MSG_BRIDGE_EXTFB_CONNECTED    0x06A4u  /**< External FB connected + identified */
+#define MSG_BRIDGE_EXTFB_DISCONNECTED 0x06A5u  /**< External FB slot released (all disconnect reasons) */
+#define MSG_BRIDGE_FAULT              0x06A6u  /**< fb_bridge internal fault */
+/* 0x06A7-0x06D4 -- reserved for future bridge events */
+
+/* MSG_BRIDGE_EXTFB_CONNECTED payload -- 36 bytes (fits 64-byte bus payload cap) */
+typedef struct __attribute__((packed)) {
+    uint8_t  virtual_endpoint_id;   /* 0x40-0x7F */
+    uint8_t  transport;              /* 0=socket, 1=queue */
+    uint16_t reserved;
+    char     name[EMBEDIQ_BRIDGE_NAME_LEN];   /* External FB name from IDENTIFY frame / init call */
+} EmbedIQ_Msg_BridgeExtFbConnected_t;
+
+/* MSG_BRIDGE_EXTFB_DISCONNECTED payload -- 4 bytes */
+typedef struct __attribute__((packed)) {
+    uint8_t  virtual_endpoint_id;   /* 0x40-0x7F */
+    uint8_t  reason;                /* 0=clean, 1=timeout, 2=pool_full, 3=protocol_error */
+    uint16_t reserved;
+} EmbedIQ_Msg_BridgeExtFbDisconnected_t;
+
+/* MSG_BRIDGE_FAULT payload -- 4 bytes */
+typedef struct __attribute__((packed)) {
+    uint8_t  fault_code;            /* 0=pool_exhausted, 1=socket_error, 2=parse_error */
+    uint8_t  transport;             /* 0=socket, 1=queue */
+    uint16_t reserved;
+} EmbedIQ_Msg_BridgeFault_t;
+
 #ifdef __cplusplus
 }
 #endif

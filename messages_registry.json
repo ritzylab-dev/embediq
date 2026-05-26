@@ -7,65 +7,211 @@
     "CI lint verifies no two messages.iq files in the repo define the same ID.",
     "Ranges are first-come, first-served within the community namespace."
   ],
-
   "namespaces": {
     "core": {
-      "range": [0, 1023],
-      "range_hex": ["0x0000", "0x03FF"],
+      "range": [
+        0,
+        1023
+      ],
+      "range_hex": [
+        "0x0000",
+        "0x03FF"
+      ],
       "owner": "embediq/embediq",
       "description": "Framework internals: lifecycle, fault, Observatory, watchdog, boot phases. Never use in application or community FBs."
     },
     "official": {
-      "range": [1024, 5119],
-      "range_hex": ["0x0400", "0x13FF"],
+      "range": [
+        1024,
+        5119
+      ],
+      "range_hex": [
+        "0x0400",
+        "0x13FF"
+      ],
       "owner": "embediq/embediq",
       "description": "Official EmbedIQ component FBs. Assigned by embediq/embediq repository maintainers."
     },
     "community": {
-      "range": [5120, 65535],
-      "range_hex": ["0x1400", "0xFFFF"],
+      "range": [
+        5120,
+        65535
+      ],
+      "range_hex": [
+        "0x1400",
+        "0xFFFF"
+      ],
       "description": "Community and third-party FBs. Reserve a range here before publishing."
     }
   },
-
   "core_allocations": {
-    "system_lifecycle":   { "range": [0, 49],    "description": "FB lifecycle: init, start, stop, fault, boot phase events" },
-    "bus_control":        { "range": [50, 99],   "description": "Bus control: subscribe, unsubscribe, registry events" },
-    "observatory":        { "range": [100, 149], "description": "Observatory internal events: session start/stop, level change" },
-    "fault":              { "range": [150, 199], "description": "Fault and error codes: FAULT_*, ERROR_*" },
-    "boot":               { "range": [200, 249], "description": "Boot phase events: phase_start, phase_complete, phase_fault" },
-    "watchdog_core":      { "range": [250, 299], "description": "Watchdog internal messages: kick, miss_detected, reset_reason" },
-    "reserved_core":      { "range": [300, 1023], "description": "Reserved for future core system use" }
+    "system_lifecycle": {
+      "range": [
+        0,
+        49
+      ],
+      "description": "FB lifecycle: init, start, stop, fault, boot phase events"
+    },
+    "bus_control": {
+      "range": [
+        50,
+        99
+      ],
+      "description": "Bus control: subscribe, unsubscribe, registry events"
+    },
+    "observatory": {
+      "range": [
+        100,
+        149
+      ],
+      "description": "Observatory internal events: session start/stop, level change"
+    },
+    "fault": {
+      "range": [
+        150,
+        199
+      ],
+      "description": "Fault and error codes: FAULT_*, ERROR_*"
+    },
+    "boot": {
+      "range": [
+        200,
+        249
+      ],
+      "description": "Boot phase events: phase_start, phase_complete, phase_fault"
+    },
+    "watchdog_core": {
+      "range": [
+        250,
+        299
+      ],
+      "description": "Watchdog internal messages: kick, miss_detected, reset_reason"
+    },
+    "reserved_core": {
+      "range": [
+        300,
+        1023
+      ],
+      "description": "Reserved for future core system use"
+    }
   },
-
   "official_allocations": {
-    "fb_uart":            { "range": [1024, 1099], "description": "UART platform FB: frame_rx, tx_request, overflow_event" },
-    "fb_nvm":             { "range": [1100, 1149], "description": "NVM platform FB: get, set, delete, schema_migration" },
-    "fb_watchdog":        { "range": [1150, 1199], "description": "Watchdog FB: register, checkin, unregister, reset_reason" },
-    "fb_timer":           { "range": [1200, 1249], "description": "Timer FB: tick_1ms, tick_10ms, tick_100ms, tick_1sec" },
-    "fb_gpio":            { "range": [1250, 1299], "description": "GPIO platform FB: pin_event, pin_set_request" },
-    "fb_i2c":             { "range": [1300, 1349], "description": "I2C platform FB: transfer_request, transfer_complete, error" },
-    "fb_spi":             { "range": [1350, 1399], "description": "SPI platform FB: transfer_request, transfer_complete, error" },
-    "fb_cloud_mqtt":      { "range": [1400, 1499], "description": "MQTT cloud FB: publish, subscribe, connect, disconnect, error" },
-    "fb_ota":             { "range": [1500, 1599], "description": "OTA FB: download_start, chunk, complete, verify, rollback" },
-    "fb_telemetry":       { "range": [1600, 1649], "description": "Telemetry FB: batch_ready, publish_request, flush" },
-    "fb_provisioning":    { "range": [1650, 1699], "description": "Provisioning FB: identity_ready, config_received, factory_reset" },
-    "fb_bridge":          { "range": [1700, 1749], "description": "Bridge FB: external_fb_connect, external_fb_message, disconnect" },
-    "fb_logger":          { "range": [1750, 1799], "description": "Logger FB: log_entry, log_flush, level_change" },
-    "reserved_official":  { "range": [1800, 5119], "description": "Reserved for future official EmbedIQ components" }
+    "fb_uart": {
+      "range": [
+        1024,
+        1099
+      ],
+      "description": "UART platform FB: frame_rx, tx_request, overflow_event"
+    },
+    "fb_nvm": {
+      "range": [
+        1100,
+        1149
+      ],
+      "description": "NVM platform FB: get, set, delete, schema_migration"
+    },
+    "fb_watchdog": {
+      "range": [
+        1150,
+        1199
+      ],
+      "description": "Watchdog FB: register, checkin, unregister, reset_reason"
+    },
+    "fb_timer": {
+      "range": [
+        1200,
+        1249
+      ],
+      "description": "Timer FB: tick_1ms, tick_10ms, tick_100ms, tick_1sec"
+    },
+    "fb_gpio": {
+      "range": [
+        1250,
+        1299
+      ],
+      "description": "GPIO platform FB: pin_event, pin_set_request"
+    },
+    "fb_i2c": {
+      "range": [
+        1300,
+        1349
+      ],
+      "description": "I2C platform FB: transfer_request, transfer_complete, error"
+    },
+    "fb_spi": {
+      "range": [
+        1350,
+        1399
+      ],
+      "description": "SPI platform FB: transfer_request, transfer_complete, error"
+    },
+    "fb_cloud_mqtt": {
+      "range": [
+        1400,
+        1499
+      ],
+      "description": "MQTT cloud FB: publish, subscribe, connect, disconnect, error"
+    },
+    "fb_ota": {
+      "range": [
+        1500,
+        1599
+      ],
+      "description": "OTA FB: download_start, chunk, complete, verify, rollback"
+    },
+    "fb_telemetry": {
+      "range": [
+        1600,
+        1649
+      ],
+      "description": "Telemetry FB: batch_ready, publish_request, flush"
+    },
+    "fb_provisioning": {
+      "range": [
+        1650,
+        1699
+      ],
+      "description": "Provisioning FB: identity_ready, config_received, factory_reset"
+    },
+    "fb_bridge": {
+      "range": [
+        1700,
+        1749
+      ],
+      "description": "Bridge FB: external_fb_connect, external_fb_message, disconnect"
+    },
+    "fb_logger": {
+      "range": [
+        1750,
+        1799
+      ],
+      "description": "Logger FB: log_entry, log_flush, level_change"
+    },
+    "reserved_official": {
+      "range": [
+        1800,
+        5119
+      ],
+      "description": "Reserved for future official EmbedIQ components"
+    }
   },
-
   "community_allocations": {
-    "_instructions": "Add your entry here in a PR. Format: name, range (within 5120–65535), owner (GitHub URL), contact (email or GitHub handle).",
+    "_instructions": "Add your entry here in a PR. Format: name, range (within 5120\u201365535), owner (GitHub URL), contact (email or GitHub handle).",
     "thermostat_example": {
-      "range": [5120, 5135],
+      "range": [
+        5120,
+        5135
+      ],
       "owner": "github.com/ritzylab-dev/embediq",
       "contact": "dev@embediq.com",
       "description": "Smart thermostat example application (examples/thermostat/). MSG_TEMP_READING = 0x1400.",
       "license": "Apache-2.0"
     },
     "gateway_example": {
-      "range": [5136, 5151],
+      "range": [
+        5136,
+        5151
+      ],
       "owner": "github.com/ritzylab-dev/embediq",
       "contact": "dev@embediq.com",
       "description": "Industrial edge gateway example (examples/gateway/). MSG_FIELD_READING=0x1410, MSG_ALERT=0x1411, MSG_TELEMETRY=0x1412.",
@@ -73,7 +219,10 @@
     },
     "_example": {
       "fb_modbus_rtu_example": {
-        "range": [5136, 5195],
+        "range": [
+          5136,
+          5195
+        ],
         "owner": "github.com/example/fb_modbus_rtu",
         "contact": "maintainer@example.com",
         "description": "Modbus RTU over fb_uart. Reads/writes coils and registers.",
@@ -81,151 +230,172 @@
       }
     }
   },
-
   "defined_messages": {
     "MSG_FB_STATE_CHANGE": {
-      "id_hex":     "0x0001",
+      "id_hex": "0x0001",
       "id_decimal": 1,
-      "fb":         "core",
-      "namespace":  "core",
-      "source":     "messages/core.iq",
+      "fb": "core",
+      "namespace": "core",
+      "source": "messages/core.iq",
       "description": "FB lifecycle state transition"
     },
     "MSG_FB_FAULT": {
-      "id_hex":     "0x0002",
+      "id_hex": "0x0002",
       "id_decimal": 2,
-      "fb":         "core",
-      "namespace":  "core",
-      "source":     "messages/core.iq",
+      "fb": "core",
+      "namespace": "core",
+      "source": "messages/core.iq",
       "description": "FB fault report via embediq_fb_report_fault()"
     },
     "MSG_SYS_OTA_REQUEST": {
-      "id_hex":     "0x0003",
+      "id_hex": "0x0003",
       "id_decimal": 3,
-      "fb":         "core",
-      "namespace":  "core",
-      "source":     "messages/core.iq",
-      "description": "OTA update imminent — FBs must flush state"
+      "fb": "core",
+      "namespace": "core",
+      "source": "messages/core.iq",
+      "description": "OTA update imminent \u2014 FBs must flush state"
     },
     "MSG_SYS_OTA_READY": {
-      "id_hex":     "0x0004",
+      "id_hex": "0x0004",
       "id_decimal": 4,
-      "fb":         "core",
-      "namespace":  "core",
-      "source":     "messages/core.iq",
+      "fb": "core",
+      "namespace": "core",
+      "source": "messages/core.iq",
       "description": "FB state flushed, safe to proceed with OTA"
     },
     "MSG_SYS_SHUTDOWN": {
-      "id_hex":     "0x0005",
+      "id_hex": "0x0005",
       "id_decimal": 5,
-      "fb":         "core",
-      "namespace":  "core",
-      "source":     "messages/core.iq",
+      "fb": "core",
+      "namespace": "core",
+      "source": "messages/core.iq",
       "description": "System shutdown broadcast before bootloader"
     },
     "MSG_SYSTEM_READY": {
-      "id_hex":     "0x0020",
+      "id_hex": "0x0020",
       "id_decimal": 32,
-      "fb":         "core",
-      "namespace":  "core",
-      "source":     "messages/core.iq",
-      "description": "Boot phase complete — all FBs in phase initialised"
+      "fb": "core",
+      "namespace": "core",
+      "source": "messages/core.iq",
+      "description": "Boot phase complete \u2014 all FBs in phase initialised"
     },
     "MSG_WDG_MISSED_CHECKIN": {
-      "id_hex":     "0x047E",
+      "id_hex": "0x047E",
       "id_decimal": 1150,
-      "fb":         "fb_watchdog",
-      "namespace":  "official",
-      "source":     "core/include/embediq_platform_msgs.h",
+      "fb": "fb_watchdog",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
       "description": "A registered FB missed its checkin deadline"
     },
     "MSG_WDG_RESET_REASON": {
-      "id_hex":     "0x047F",
+      "id_hex": "0x047F",
       "id_decimal": 1151,
-      "fb":         "fb_watchdog",
-      "namespace":  "official",
-      "source":     "core/include/embediq_platform_msgs.h",
+      "fb": "fb_watchdog",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
       "description": "Reset reason emitted once on startup"
     },
     "MSG_TIMER_1MS": {
-      "id_hex":     "0x04B0",
+      "id_hex": "0x04B0",
       "id_decimal": 1200,
-      "fb":         "fb_timer",
-      "namespace":  "official",
-      "source":     "core/include/embediq_platform_msgs.h",
+      "fb": "fb_timer",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
       "description": "Published every 1 ms"
     },
     "MSG_TIMER_10MS": {
-      "id_hex":     "0x04B1",
+      "id_hex": "0x04B1",
       "id_decimal": 1201,
-      "fb":         "fb_timer",
-      "namespace":  "official",
-      "source":     "core/include/embediq_platform_msgs.h",
+      "fb": "fb_timer",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
       "description": "Published every 10 ms"
     },
     "MSG_TIMER_100MS": {
-      "id_hex":     "0x04B2",
+      "id_hex": "0x04B2",
       "id_decimal": 1202,
-      "fb":         "fb_timer",
-      "namespace":  "official",
-      "source":     "core/include/embediq_platform_msgs.h",
+      "fb": "fb_timer",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
       "description": "Published every 100 ms"
     },
     "MSG_TIMER_1SEC": {
-      "id_hex":     "0x04B3",
+      "id_hex": "0x04B3",
       "id_decimal": 1203,
-      "fb":         "fb_timer",
-      "namespace":  "official",
-      "source":     "core/include/embediq_platform_msgs.h",
+      "fb": "fb_timer",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
       "description": "Published every 1 second"
     },
     "MSG_TEMP_READING": {
-      "id_hex":     "0x1400",
+      "id_hex": "0x1400",
       "id_decimal": 5120,
-      "fb":         "thermostat",
-      "namespace":  "community",
-      "source":     "messages/thermostat.iq",
+      "fb": "thermostat",
+      "namespace": "community",
+      "source": "messages/thermostat.iq",
       "description": "Temperature reading from fb_temp_sensor (example app)"
     },
     "MSG_TELEMETRY_GAUGE": {
-      "id_hex":     "0x0640",
+      "id_hex": "0x0640",
       "id_decimal": 1600,
-      "fb":         "fb_telemetry",
-      "namespace":  "official",
-      "source":     "messages/telemetry.iq",
-      "description": "Gauge observation — instantaneous value with unit_id"
+      "fb": "fb_telemetry",
+      "namespace": "official",
+      "source": "messages/telemetry.iq",
+      "description": "Gauge observation \u2014 instantaneous value with unit_id"
     },
     "MSG_TELEMETRY_COUNTER": {
-      "id_hex":     "0x0641",
+      "id_hex": "0x0641",
       "id_decimal": 1601,
-      "fb":         "fb_telemetry",
-      "namespace":  "official",
-      "source":     "messages/telemetry.iq",
-      "description": "Counter delta — monotonic increment since last report"
+      "fb": "fb_telemetry",
+      "namespace": "official",
+      "source": "messages/telemetry.iq",
+      "description": "Counter delta \u2014 monotonic increment since last report"
     },
     "MSG_TELEMETRY_HISTOGRAM": {
-      "id_hex":     "0x0642",
+      "id_hex": "0x0642",
       "id_decimal": 1602,
-      "fb":         "fb_telemetry",
-      "namespace":  "official",
-      "source":     "messages/telemetry.iq",
-      "description": "Histogram sample — single observation, aggregated by fb_telemetry"
+      "fb": "fb_telemetry",
+      "namespace": "official",
+      "source": "messages/telemetry.iq",
+      "description": "Histogram sample \u2014 single observation, aggregated by fb_telemetry"
     },
     "MSG_TELEMETRY_BATCH": {
-      "id_hex":     "0x0643",
+      "id_hex": "0x0643",
       "id_decimal": 1603,
-      "fb":         "fb_telemetry",
-      "namespace":  "official",
-      "source":     "messages/telemetry.iq",
-      "description": "Batch envelope — emitted at end of aggregation window (or on fault)"
+      "fb": "fb_telemetry",
+      "namespace": "official",
+      "source": "messages/telemetry.iq",
+      "description": "Batch envelope \u2014 emitted at end of aggregation window (or on fault)"
+    },
+    "MSG_BRIDGE_EXTFB_CONNECTED": {
+      "id_hex": "0x06A4",
+      "id_decimal": 1700,
+      "fb": "fb_bridge",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
+      "description": "External FB connected and identified on the bridge"
+    },
+    "MSG_BRIDGE_EXTFB_DISCONNECTED": {
+      "id_hex": "0x06A5",
+      "id_decimal": 1701,
+      "fb": "fb_bridge",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
+      "description": "External FB slot released (all disconnect reasons)"
+    },
+    "MSG_BRIDGE_FAULT": {
+      "id_hex": "0x06A6",
+      "id_decimal": 1702,
+      "fb": "fb_bridge",
+      "namespace": "official",
+      "source": "core/include/embediq_platform_msgs.h",
+      "description": "fb_bridge internal fault: pool exhaustion, protocol error, socket error"
     }
   },
-
   "tombstoned": {
     "_description": "Retired message IDs. These are never recycled. If you encounter these IDs in old firmware, they are no longer valid.",
     "_entries": []
   },
-
   "_meta": {
     "version": "1.0.0",
     "created": "2026-03",
