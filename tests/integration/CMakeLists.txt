@@ -107,3 +107,44 @@ target_compile_options(test_gateway_full PRIVATE
 
 add_test(NAME integration_gateway_full COMMAND test_gateway_full)
 set_tests_properties(integration_gateway_full PROPERTIES TIMEOUT 60)
+
+# ---------------------------------------------------------------------------
+# Bridge socket integration test (Item 5c)
+#
+# Boots fb_bridge with EMBEDIQ_BRIDGE_TRANSPORT_SOCKET, fork/exec
+# bridge_client.py to connect via Unix socket, confirms MSG_BRIDGE_EXTFB_CONNECTED
+# and a test message arrive on the internal bus. Timeout 30 seconds.
+# ---------------------------------------------------------------------------
+
+add_executable(test_bridge_socket
+    test_bridge_socket.c
+)
+
+target_include_directories(test_bridge_socket PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_bridge_socket PRIVATE
+    embediq_bridge_socket
+    embediq_driver_fbs
+)
+
+target_compile_definitions(test_bridge_socket PRIVATE
+    EMBEDIQ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+target_compile_options(test_bridge_socket PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+# integration_bridge_socket is Linux-only at runtime: the design (Topic 1)
+# uses AF_UNIX + SOCK_SEQPACKET for message-boundary preservation, which
+# macOS/Darwin does not implement for Unix domain sockets. The binary still
+# compiles on macOS (development convenience); ctest skips registering it
+# so `ctest` is green on macOS hosts. CI runs on Ubuntu and exercises it.
+if(NOT APPLE)
+    add_test(NAME integration_bridge_socket COMMAND test_bridge_socket)
+    set_tests_properties(integration_bridge_socket PROPERTIES TIMEOUT 30)
+endif()
