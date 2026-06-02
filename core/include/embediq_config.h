@@ -260,6 +260,27 @@ extern "C" {
 #define EMBEDIQ_BRIDGE_NAME_LEN             32u    /* External FB name buffer length (NUL-terminated) */
 #define EMBEDIQ_BRIDGE_MAX_SUB_PER_EXT_FB   16u    /* max msg_ids any one External FB may subscribe to */
 
+/* ---------------------------------------------------------------------------
+ * TLS connection pool
+ *
+ * Number of independent TLS connection slots allocated at compile time.
+ * Each slot holds one complete mbedTLS context (~20–40 KB on POSIX,
+ * ~15–30 KB on constrained targets depending on cipher configuration).
+ *
+ * Override this value in your platform build before including this header:
+ *   - Constrained MCU (256 KB RAM class): set to 1
+ *   - Gateway/Linux with MQTT + OTA: keep default 2
+ *   - Products with 3+ simultaneous cloud connections: set to 3+
+ *
+ * Slot naming is a product integration concern — not defined here.
+ * Example in platform config:
+ *   #define MY_TLS_SLOT_MQTT  0u
+ *   #define MY_TLS_SLOT_OTA   1u
+ * ------------------------------------------------------------------------- */
+#ifndef EMBEDIQ_TLS_MAX_CONNECTIONS
+#  define EMBEDIQ_TLS_MAX_CONNECTIONS   2u
+#endif
+
 #ifdef __cplusplus
 }
 #endif
