@@ -313,6 +313,197 @@ to register a 17th library source is a build error with a clear diagnostic messa
 
 ---
 
+## Bridge and External FB Architecture
+
+### What an External FB Is
+
+An External FB is any process outside the EmbedIQ C runtime that communicates
+with the native message bus. This includes Python scripts, Node.js processes,
+AI inference agents, brownfield RTOS tasks, and safety-critical sidecar processes.
+
+The unified concept: regardless of language or transport, every out-of-process
+participant is an External FB. It has a name, subscribes to message IDs, publishes
+typed messages, and appears as a named endpoint on the bus — identical to a native FB
+from the perspective of any other FB.
+
+### Three-Layer Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Layer 3 — Language SDKs  (separate packages)                    │
+│  embediq-python  │  embediq-node (future)  │  embediq-c-api      │
+├──────────────────┴──────────────────────────┴────────────────────┤
+│  Layer 2 — External FB Protocol  (one spec, platform-agnostic)   │
+│  subscribe · publish · recv · identify · health                  │
+├───────────────────────────────────────────────────────────────────┤
+│  Layer 1 — Transport  (inside EmbedIQ C framework)               │
+│  Socket transport (POSIX/Unix socket + TCP, TLV framing)         │
+│  Queue transport (OSAL queues, in-process / RTOS brownfield)     │
+├───────────────────────────────────────────────────────────────────┤
+│  fb_bridge — Service FB on the native bus                        │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+**Layer 1 — Transport** lives in `core/src/bridge/`. Two compile-time implementations
+selected by `EMBEDIQ_BRIDGE_TRANSPORT_SOCKET` or `EMBEDIQ_BRIDGE_TRANSPORT_QUEUE`.
+
+**Layer 2 — Protocol** is the External FB wire spec. Five operations: subscribe,
+publish, recv, identify, health. All transports implement this contract.
+
+**Layer 3 — Language SDKs** are separate packages:
+- `embediq-python` (package: `embediq-python/`) — socket transport, Apache 2.0
+- `embediq-c-api` — ships with the EmbedIQ C framework via `core/include/embediq_ext_fb.h`
+
+### External FB C API (embediq_ext_fb.h)
+
+```c
+embediq_ext_fb_t  *embediq_ext_fb_init(const char *name);
+embediq_err_t      embediq_ext_fb_subscribe(embediq_ext_fb_t *h, const uint16_t *ids, uint8_t n);
+embediq_err_t      embediq_ext_fb_publish(embediq_ext_fb_t *h, const EmbedIQ_Msg_t *msg);
+embediq_err_t      embediq_ext_fb_recv(embediq_ext_fb_t *h, EmbedIQ_Msg_t *out, uint32_t timeout_ms);
+void               embediq_ext_fb_deinit(embediq_ext_fb_t *h);
+```
+
+Static pool: `EMBEDIQ_BRIDGE_MAX_EXT_FBS` slots (default 8, in `embediq_config.h`). No malloc (R-02).
+
+### File Placement
+
+| Module | Path |
+|--------|------|
+| fb_bridge daemon | `core/src/bridge/embediq_ext_fb.c` |
+| External FB C API contract | `core/include/embediq_ext_fb.h` |
+| Bridge contract | `core/include/embediq_bridge.h` |
+| Python SDK | `sdk/python/embediq-python/` |
+| Bridge example | `examples/bridge/telemetry_observer.py` |
+
+### Transport Selection
+
+Compile-time flag (CMake):
+- `EMBEDIQ_BRIDGE_TRANSPORT_SOCKET` — Unix socket + TCP, TLV framing. For Linux External FBs.
+- `EMBEDIQ_BRIDGE_TRANSPORT_QUEUE` — OSAL queues, direct `EmbedIQ_Msg_t`. For RTOS brownfield tasks.
+
+Native bus compiles without bridge code when neither flag is defined (I-09).
+
+---
+
+## Config Schema System (config.iq)
+
+### What config.iq Is
+
+`config.iq` is a machine-readable schema file that defines every configuration
+key in the firmware: name, type, valid range, and mutability. It is the
+authoritative source of truth for configuration — the same relationship that
+`messages.iq` has to message payloads.
+
+### Two-Part Output
+
+The generator (`tools/config_iq/generate.py`) reads `config/config.iq` and emits
+two artifacts, committed to the repo:
+
+```
+generated/embediq_cfg_generated.h     — typed C accessor declarations
+generated/embediq_cfg_validate.c      — validation table (unknown keys rejected at compile time)
+```
+
+CI drift-check enforces consistency between `config.iq` and committed generated files.
+Same pattern as `messages.iq` / `generated/embediq_msg_catalog.h`.
+
+### Build-Time Config Baking (embediq_nvs_gen.py)
+
+`tools/config_iq/embediq_nvs_gen.py` takes a human-readable values file (JSON or CSV),
+validates every key against `config.iq`, and produces a binary NVM blob.
+
+```
+Linux:  nvm_image.bin → EMBEDIQ_NVM_PATH=./nvm_image.bin
+RTOS:   nvm_image.bin → esptool.py flashes to NVM partition
+```
+
+The schema, generator, and blob format are identical on both platforms.
+Platform difference is fully encapsulated in the existing HAL flash contract.
+
+### Developer Workflow
+
+1. Define `config/config.iq` — keys, types, valid ranges
+2. Run generator → commits `generated/embediq_cfg_generated.h` and `generated/embediq_cfg_validate.c`
+3. Write `config_values.json` — per-environment values
+4. `python3 tools/config_iq/embediq_nvs_gen.py config_values.json --out nvm_image.bin`
+5. Linux: `EMBEDIQ_NVM_PATH=./nvm_image.bin` / RTOS: flash `nvm_image.bin`
+
+---
+
+## TLS Transport Architecture (Item 5.5)
+
+### Call Stack
+
+TLS is a transport primitive. It sits below the MQTT and OTA ops tables.
+No Service FB (fb_cloud_mqtt, fb_ota) ever calls TLS directly.
+
+```
+fb_cloud_mqtt (Service FB, Layer 2)
+    ↓ calls
+embediq_mqtt_ops_t  — connect(host, port, client_id), synchronous
+    ↓ internally uses
+embediq_tls_ops_t   — configure(), connect_async(), send(), recv(), disconnect()
+    ↓ implemented by
+hal_tls_posix.c     — mbedTLS 3.6.1 on POSIX/Linux (Phase 2)
+hal_tls_freertos.c  — mbedTLS on FreeRTOS (Phase 3 — stub until then)
+```
+
+### Contract Design Decisions (ops table v2)
+
+**configure() — credentials are stable, connections are not:**
+Credentials (CA cert, client cert, private key) are stable for the lifetime of a
+device deployment. TCP connections fail and reconnect. These are different lifecycles
+and must not be collapsed into one function call.
+
+```c
+embediq_err_t (*configure)(const char *ca_cert_pem,
+                            const char *client_cert_pem,   /* NULL = server-only TLS */
+                            const char *client_key_pem);   /* NULL = server-only TLS */
+```
+
+Credentials are PEM content (`const char*` — NUL-terminated), not file paths.
+Caller reads the file or flash cert store and passes the content.
+configure() must be called before the first connect_async().
+configure() may be called again while connected — applies to the NEXT connect_async().
+
+**No bus dependency in transport:**
+`embediq_tls.h` does not include `embediq_bus.h`. Transport must not depend on the
+message bus. The connect_async callback uses `void *user_ctx` (not `embediq_bus_token_t*`),
+enabling use from both FB contexts and platform implementation contexts (OSAL semaphore signal).
+
+**embediq_tls_err_t — actionable error codes:**
+`EMBEDIQ_OK / EMBEDIQ_ERR` is too coarse for production embedded products.
+Reconnect policy, cert rotation alerts, and compliance logging all require knowing
+whether failure was DNS, TCP, handshake, cert expiry, cert rejection, or misconfiguration.
+See `core/include/ops/embediq_tls.h` for the full `embediq_tls_err_t` definition.
+
+### Static Pool — Multiple Simultaneous Connections
+
+The ops table functions carry no context pointer. mbedTLS state must live in static
+variables. A single static variable = one connection at a time. For products that
+need simultaneous MQTT + OTA download, a static pool is required.
+
+`hal_tls_posix.c` maintains `EMBEDIQ_TLS_MAX_CONNECTIONS` slots (default 2, in
+`embediq_config.h` with `#ifndef` guard for per-product override).
+
+```c
+/* Access a specific TLS connection slot.
+ * Returns NULL if idx >= EMBEDIQ_TLS_MAX_CONNECTIONS. */
+const embediq_tls_ops_t *hal_tls_posix_ops_slot(uint8_t idx);
+```
+
+Slot naming is a product integration concern — not defined in the framework.
+Each product's platform code names its slots (e.g., `#define SLOT_MQTT 0u`).
+
+### Memory Guidance
+
+Each TLS slot allocates one mbedTLS context set at compile time (~20–40KB on POSIX,
+~15–30KB on constrained targets depending on cipher suite configuration).
+Override `EMBEDIQ_TLS_MAX_CONNECTIONS` to 1 on constrained MCU targets (256KB RAM class).
+
+---
+
 ## The Functional Block
 
 The FB is the unit of everything. Every concern in your firmware is one FB.
@@ -418,6 +609,9 @@ not with the layer that implements it.
 | `embediq_mqtt.h` | MQTT ops table + FSM | Layer 2 Service FB |
 | `embediq_meta.h` | FB metadata | Layer 3 Registry |
 | `embediq_bridge.h` | External FB bridge | Layer 3 |
+| `core/include/ops/embediq_tls.h`  | TLS transport ops table | HAL TLS implementations |
+| `core/include/ops/embediq_mqtt.h` | MQTT platform ops table | Layer 2 Service FB (fb_cloud_mqtt) |
+| `core/include/ops/embediq_ota.h`  | OTA platform ops table  | Layer 2 Service FB (fb_ota) |
 | `core/include/hal/*.h` | HAL peripheral access | Layer 2 Driver FBs |
 | `core/include/hal/hal_obs_stream.h` | Observatory binary stream | Layer 1 Observatory |
 
