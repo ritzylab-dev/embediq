@@ -19,7 +19,7 @@ used by EmbedIQ (client mode, certificate validation, MQTT over TLS).
 ## Source status
 
 mbedTLS 3.6.1 source committed to third_party/mbedtls/ in Item 5.5 PR-B.
-Only library/ and include/mbedtls/ are committed — programs, tests, docs,
+Only library/, include/mbedtls/, and include/psa/ are committed — programs, tests, docs,
 and scripts are excluded. The LICENSE file is included.
 
 EmbedIQ config file: include/mbedtls_embediq_posix_config.h
