@@ -61,7 +61,7 @@ _LINE_COMMENT_RE  = re.compile(r"//.*$")
 _STRING_LIT_RE    = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 # Directories to skip entirely.
-_SKIP_DIRS = {"build", ".git", "generated"}
+_SKIP_DIRS = {"build", ".git", "generated", "third_party"}
 
 
 def _strip_block_comments(source):
