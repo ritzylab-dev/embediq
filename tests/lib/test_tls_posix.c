@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
+#include <time.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <pthread.h>
@@ -90,13 +90,15 @@ static void start_echo_server(int port, bool mutual)
         " %d %s/server.crt %s/server.key %s/ca.crt %s &",
         port, CERT_DIR, CERT_DIR, CERT_DIR, mutual_flag);
     (void)system(cmd);
-    usleep(200000); /* 200 ms — let Python server start */
+    struct timespec ts_wait = { .tv_sec = 0, .tv_nsec = 200000000L };
+    nanosleep(&ts_wait, NULL);   /* 200 ms — let Python server start */
 }
 
 static void stop_echo_server(void)
 {
     (void)system("pkill -f tls_echo_server.py 2>/dev/null || true");
-    usleep(50000);
+    struct timespec ts_wait = { .tv_sec = 0, .tv_nsec = 50000000L };
+    nanosleep(&ts_wait, NULL);
 }
 
 /* ---------------------------------------------------------------------------
@@ -335,9 +337,11 @@ static void test_slot_isolation(void)
     s0->disconnect();
     stop_echo_server();
 
-    /* slot 1 was configured independently — its state should be unaffected */
-    ASSERT(s1->configure(ca, NULL, NULL) != EMBEDIQ_TLS_OK ||
-           true, /* just verifying no crash */ "slot 1 state must be independent of slot 0");
+    /* slot 1 was configured independently — its ops table must remain intact
+     * after slot 0's configure+connect+disconnect sequence. */
+    ASSERT(s1 != NULL, "slot 1 ops table must remain non-NULL after slot 0 operations");
+    ASSERT(s1->version == EMBEDIQ_TLS_OPS_VERSION,
+           "slot 1 version must be intact after slot 0 configure+connect+disconnect");
 }
 #endif
 
