@@ -20,6 +20,7 @@
 
 #include "hal_tls_posix.h"
 #include "embediq_config.h"
+#include "hal/hal_defs.h"
 
 /* ---------------------------------------------------------------------------
  * Slot 0 stub implementations
@@ -126,7 +127,9 @@ const embediq_tls_ops_t *hal_tls_posix_ops_slot(uint8_t idx)
 #if EMBEDIQ_TLS_MAX_CONNECTIONS >= 2
         case 1:  return &g_tls_slot1_ops;
 #endif
-        default: return NULL;
+        default:
+            EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
+            return NULL;
     }
 }
 

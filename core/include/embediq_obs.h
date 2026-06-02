@@ -88,7 +88,8 @@ extern "C" {
 #define EMBEDIQ_HAL_SRC_TIMER     0xD5u
 #define EMBEDIQ_HAL_SRC_WDG        0xD6u
 #define EMBEDIQ_HAL_SRC_OBS_STREAM 0xD7u  /**< Observatory binary stream HAL */
-/* 0xD8–0xDF reserved for additional HAL peripherals */
+#define EMBEDIQ_HAL_SRC_TLS        0xD8u  /**< TLS transport HAL */
+/* 0xD9–0xDF reserved for additional HAL peripherals */
 
 /* Library source IDs (0xE0–0xEF) — assigned by embediq_platform_lib_declare() */
 #define EMBEDIQ_LIB_SRC_BASE      0xE0u  /**< First library source slot */
