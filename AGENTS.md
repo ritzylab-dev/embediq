@@ -101,8 +101,8 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 │  LAYER 4 — COMMERCIAL (future)                                  │
 │  EmbedIQ Studio · EmbedIQ Cloud · AI Coder                     │
 ├─────────────────────────────────────────────────────────────────┤
-│  CLIENT SDKs (future)                                           │
-│  embediq-python · embediq-js · embediq-rust                     │
+│  CLIENT SDKs                                                    │
+│  embediq-python (SHIPPED v0.3.0) · embediq-js (future)         │
 ├─────────────────────────────────────────────────────────────────┤
 │  LAYER 3 — ECOSYSTEM                                            │
 │  Bridge daemon · bridge/websocket · bridge/unix_socket          │
@@ -154,6 +154,7 @@ embediq/
 │
 ├── core/                   ← LOCKED after v1.0 freeze
 │   ├── include/            ← all contract headers (never change)
+│   │   ├── ops/            ← ops table contracts: embediq_tls.h · embediq_mqtt.h · embediq_ota.h
 │   │   └── hal/            ← HAL contract headers (hal_flash, hal_gpio,
 │   │                          hal_i2c, hal_spi, hal_timer, hal_uart,
 │   │                          hal_wdg, hal_obs_stream)
@@ -163,7 +164,8 @@ embediq/
 │       ├── fsm/
 │       ├── dispatcher/
 │       ├── observatory/
-│       └── cfg/
+│       ├── cfg/
+│       └── bridge/         ← fb_bridge daemon + External FB C API implementation
 │
 ├── osal/
 │   ├── posix/              ← macOS + Linux + WSL
@@ -180,7 +182,8 @@ embediq/
 │
 ├── examples/
 │   ├── thermostat/         ← style reference for application FBs (Phase 1)
-│   └── gateway/            ← industrial edge gateway reference (Phase 1, 6 FBs)
+│   ├── gateway/            ← industrial edge gateway reference (Phase 1, 6 FBs)
+│   └── bridge/             ← telemetry_observer.py — External FB example using embediq-python
 │
 ├── tests/
 │   ├── unit/               ← unit tests (host, no hardware)
@@ -192,7 +195,25 @@ embediq/
 │   ├── validator.py        ← validates embediq_config.h sizing constants
 │   ├── boundary_checker.py ← enforces layer include rules in CI
 │   ├── messages_iq/        ← messages.iq → C struct generator
+│   ├── config_iq/          ← config.iq schema generator + embediq_nvs_gen.py
 │   └── embediq_obs/        ← Observatory CLI (embediq_obs.py)
+│
+├── config/
+│   └── config.iq           ← configuration schema (keys, types, valid ranges)
+│
+├── generated/              ← generated C headers from .iq files (committed, CI drift-checked)
+│   ├── embediq_msg_catalog.h
+│   └── embediq_cfg_generated.h
+│
+├── sdk/
+│   └── python/
+│       └── embediq-python/ ← Python External FB SDK (Apache 2.0, v0.3.0)
+│
+├── components/
+│   └── embediq_crc/        ← CRC-32 utility (component library, no state, no platform dep)
+│
+├── third_party/
+│   └── mbedtls/            ← mbedTLS 3.6.1 vendor manifest (source committed in Item 5.5 PR-B)
 │
 └── docs/
     ├── MIGRATION.md        ← four migration patterns: Greenfield, Add-Observatory, Strangler Fig, Module-Only
@@ -290,6 +311,15 @@ Never place .c files flat in core/src/ — they belong in their subdirectory.
 | Core config helper     | core/include/embediq_cfg.h (public API header)            |
 | Core config helper     | core/src/cfg/embediq_cfg.c (implementation)               |
 | Unit tests             | tests/unit/test_<module>.c                                |
+| Bridge daemon impl     | `core/src/bridge/embediq_ext_fb.c` |
+| External FB C API      | `core/include/embediq_ext_fb.h` |
+| Ops table contracts    | `core/include/ops/embediq_<name>.h` |
+| Ops table POSIX impls  | `hal/posix/ops/hal_<name>_posix.c` |
+| Config schema          | `config/config.iq` |
+| Generated C headers    | `generated/embediq_cfg_generated.h` (regenerated from config.iq) |
+| Python SDK             | `sdk/python/embediq-python/` |
+| Bridge examples        | `examples/bridge/` |
+| CRC-32 utility         | `components/embediq_crc/` |
 
 Rule: if you are about to create a .c file directly in core/src/ (not in a
 subdirectory), STOP — wrong location. Check this table first.
@@ -317,7 +347,7 @@ See docs/architecture/lifecycle.md for full protocol description.
 
 ## 8. Current Build Status
 
-> **Last updated:** Obs-6 complete — all pre-hardware tasks done (March 2026)
+> **Last updated:** v0.3.0 complete — Items 1, 2, 4, 5 shipped (June 2026)
 
 | Layer         | Module                         | Status      | Notes                                                        |
 | ------------- | ------------------------------ | ----------- | ------------------------------------------------------------ |
@@ -345,12 +375,89 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Driver FBs    | fb_watchdog                    | STABLE      | fbs/drivers/ + hal/posix/hal_wdg_posix.c                     |
 | Service FBs   | fb_telemetry                   | STABLE      | fbs/services/ — OTel-aligned gauge/counter/histogram, window batching, Apache 2.0 |
 | Core helpers  | embediq_cfg                    | STABLE      | core/include/embediq_cfg.h + core/src/cfg/ — typed get/set wrapper over fb_nvm   |
+| Tools         | MISRA-C:2012 CI scan           | STABLE      | `tools/ci/check_misra.py` — cppcheck + MISRA addon, warning-only, wired into CI |
+| Tools         | config.iq schema generator     | STABLE      | `tools/config_iq/generate.py` — generates typed C accessors + validation table |
+| Tools         | embediq_nvs_gen.py             | STABLE      | `tools/config_iq/embediq_nvs_gen.py` — build-time NVM blob generator           |
+| Driver FBs    | fb_nvm (v2)                    | STABLE      | blob header, CRC-32, factory-key mutability, schema validation                 |
+| Layer 3       | fb_bridge daemon               | STABLE      | `core/src/bridge/` — socket + queue transport, TLV framing                     |
+| Layer 3       | External FB C API              | STABLE      | `core/include/embediq_ext_fb.h` — static pool, no malloc                       |
+| Layer 3       | embediq-python SDK             | STABLE      | `sdk/python/embediq-python/` — Python External FB, Apache 2.0                  |
+| Layer 3       | telemetry_observer.py          | STABLE      | `examples/bridge/` — External FB example                                       |
+| HAL           | hal/posix/ops/hal_tls_posix.c  | STUB        | mbedTLS stub — real implementation in Item 5.5 PR-C                            |
 | Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
 | Examples      | gateway                        | STABLE      | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
 
 **Status values:** `NOT_STARTED` · `IN_PROGRESS` · `STABLE`
 
 
+
+---
+
+## 8A. External FB Pattern — How to Write an External FB
+
+An External FB is a process outside the EmbedIQ C runtime. It communicates with
+the native bus via fb_bridge. It appears as a named endpoint on the bus.
+
+### Python External FB (embediq-python SDK)
+
+```python
+from embediq import ExternalFB
+
+class MyFB(ExternalFB):
+    name = "my_fb"
+
+    def on_connect(self):
+        self.subscribe(MSG_TELEMETRY_GAUGE, MSG_TELEMETRY_COUNTER)
+
+    def on_message(self, msg):
+        # msg.msg_id, msg.payload
+        pass
+
+    def on_disconnect(self):
+        pass
+
+if __name__ == "__main__":
+    fb = MyFB()
+    fb.connect()
+    fb.run()   # blocks — dispatches messages until SIGINT
+```
+
+### Agent Rules for External FBs
+
+- External FBs run in BRIDGE boot phase (Phase 4). They start after all native FBs.
+- Message IDs must be in the correct namespace. Community IDs: 0x1400–0xFFFF.
+  Reserve range in `messages_registry.json` before use.
+- External FBs are best-effort: Layer 3 runs at lowest priority. Never block native bus throughput.
+- The Python SDK is in `sdk/python/embediq-python/`. BRIDGE.md has the full protocol spec.
+
+---
+
+## 8B. config.iq Pattern — How to Add Configuration Keys
+
+To add a new configuration key:
+
+1. Add the key to `config/config.iq`:
+```
+key "mqtt_broker_host" type=string max_len=63 mutable=true default="localhost"
+key "mqtt_broker_port" type=uint16 min=1 max=65535 mutable=true default=8883
+```
+
+2. Run the generator:
+```bash
+python3 tools/config_iq/generate.py config/config.iq --out generated/
+```
+
+3. Commit both `config/config.iq` AND the updated `generated/embediq_cfg_generated.h`
+   in the same PR. Never split them. CI drift-check enforces consistency.
+
+4. Access the config key in C code via the generated typed accessor:
+```c
+char host[64];
+embediq_cfg_get_mqtt_broker_host(host, sizeof(host));
+```
+
+**Agent rule:** Never hand-edit `generated/*.h` files. Always regenerate from `config.iq`.
+Committing hand-edited generated files fails the CI drift-check.
 
 ---
 
@@ -434,6 +541,14 @@ the Core header is correct. Update MODULE.md to match.
 | Industry compliance table, SBOM formats, safety_class      | `COMPLIANCE.md`                               |
 | Migration patterns — Greenfield/Add-Observatory/Strangler  | `docs/MIGRATION.md`                           |
 | Message ID namespace allocations                  | `messages_registry.json`                      |
+| Bridge protocol spec, External FB wire format | `docs/bridge/BRIDGE.md` |
+| External FB Python SDK usage | `sdk/python/embediq-python/README.md` |
+| External FB example | `examples/bridge/telemetry_observer.py` |
+| Config schema definition | `config/config.iq` |
+| Config accessor usage | `generated/embediq_cfg_generated.h` |
+| Config blob generator | `tools/config_iq/embediq_nvs_gen.py --help` |
+| TLS ops table contract | `core/include/ops/embediq_tls.h` |
+| MQTT ops table contract | `core/include/ops/embediq_mqtt.h` |
 
 ---
 
