@@ -72,11 +72,11 @@ static void test_connect_returns_err(void)
     ASSERT(rc != EMBEDIQ_TLS_OK, "stub connect_async must not return EMBEDIQ_TLS_OK");
 }
 
-static void test_disconnect_returns_err(void)
+static void test_disconnect_non_connected_returns_ok(void)
 {
     const embediq_tls_ops_t *ops = hal_tls_posix_ops();
     embediq_tls_err_t rc = ops->disconnect();
-    ASSERT(rc != EMBEDIQ_TLS_OK, "stub disconnect must not return EMBEDIQ_TLS_OK");
+    ASSERT(rc == EMBEDIQ_TLS_OK, "disconnect on non-connected slot must return EMBEDIQ_TLS_OK");
 }
 
 static void test_send_returns_err(void)
@@ -124,7 +124,7 @@ int main(void)
     test_fn_pointers_non_null();
     test_configure_stub();
     test_connect_returns_err();
-    test_disconnect_returns_err();
+    test_disconnect_non_connected_returns_ok();
     test_send_returns_err();
     test_recv_returns_err();
     test_slot0_non_null();
