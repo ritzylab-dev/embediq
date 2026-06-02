@@ -2,11 +2,14 @@
 #
 # Builds embediq_hal_posix from:
 #   peripherals/ — HAL peripheral implementations (timer, flash, wdg, obs_stream)
-#   ops/         — Ops table implementations (TLS stub — OpenSSL impl in Phase 2)
+#   ops/         — Ops table implementations (TLS stub — mbedTLS impl in Item 5.5 PR-C)
 #
 # Peripheral files: zero embediq_*.h includes (layer boundary enforced by boundary_checker).
 # Ops files: include ops table headers from core/include/ops/ — this is correct.
 # The ops table implementation bridges the HAL and ops contract layers by design.
+#
+# TLS ops (hal_tls_posix.c) links against embediq_mbedtls so that PR-C can
+# replace the stubs with real mbedTLS calls without any further CMake changes.
 
 add_library(embediq_hal_posix STATIC
     peripherals/hal_timer_posix.c
@@ -28,4 +31,7 @@ target_compile_options(embediq_hal_posix PRIVATE
     -Werror
 )
 
-target_link_libraries(embediq_hal_posix PUBLIC embediq_fb_engine)
+target_link_libraries(embediq_hal_posix
+    PUBLIC  embediq_fb_engine
+    PRIVATE embediq_mbedtls
+)
