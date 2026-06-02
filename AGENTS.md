@@ -375,15 +375,15 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Driver FBs    | fb_watchdog                    | STABLE      | fbs/drivers/ + hal/posix/hal_wdg_posix.c                     |
 | Service FBs   | fb_telemetry                   | STABLE      | fbs/services/ — OTel-aligned gauge/counter/histogram, window batching, Apache 2.0 |
 | Core helpers  | embediq_cfg                    | STABLE      | core/include/embediq_cfg.h + core/src/cfg/ — typed get/set wrapper over fb_nvm   |
-| Tools | MISRA-C:2012 CI scan | STABLE | `tools/ci/check_misra.py` — cppcheck + MISRA addon, warning-only, wired into CI |
-| Tools | config.iq schema generator | STABLE | `tools/config_iq/generate.py` — generates typed C accessors + validation table |
-| Tools | embediq_nvs_gen.py | STABLE | `tools/config_iq/embediq_nvs_gen.py` — build-time NVM blob generator |
-| Driver FBs | fb_nvm (v2) | STABLE | blob header, CRC-32, factory-key mutability, schema validation |
-| Layer 3 | fb_bridge daemon | STABLE | `core/src/bridge/` — socket + queue transport, TLV framing |
-| Layer 3 | External FB C API | STABLE | `core/include/embediq_ext_fb.h` — static pool, no malloc |
-| Layer 3 | embediq-python SDK | STABLE | `sdk/python/embediq-python/` — Python External FB, Apache 2.0 |
-| Layer 3 | telemetry_observer.py | STABLE | `examples/bridge/` — External FB example |
-| HAL | hal/posix/ops/hal_tls_posix.c | STUB | mbedTLS stub — real implementation in Item 5.5 PR-C |
+| Tools         | MISRA-C:2012 CI scan           | STABLE      | `tools/ci/check_misra.py` — cppcheck + MISRA addon, warning-only, wired into CI |
+| Tools         | config.iq schema generator     | STABLE      | `tools/config_iq/generate.py` — generates typed C accessors + validation table |
+| Tools         | embediq_nvs_gen.py             | STABLE      | `tools/config_iq/embediq_nvs_gen.py` — build-time NVM blob generator           |
+| Driver FBs    | fb_nvm (v2)                    | STABLE      | blob header, CRC-32, factory-key mutability, schema validation                 |
+| Layer 3       | fb_bridge daemon               | STABLE      | `core/src/bridge/` — socket + queue transport, TLV framing                     |
+| Layer 3       | External FB C API              | STABLE      | `core/include/embediq_ext_fb.h` — static pool, no malloc                       |
+| Layer 3       | embediq-python SDK             | STABLE      | `sdk/python/embediq-python/` — Python External FB, Apache 2.0                  |
+| Layer 3       | telemetry_observer.py          | STABLE      | `examples/bridge/` — External FB example                                       |
+| HAL           | hal/posix/ops/hal_tls_posix.c  | STUB        | mbedTLS stub — real implementation in Item 5.5 PR-C                            |
 | Examples      | thermostat                     | STABLE      | 5 FBs, FSM cycles, Observatory output, zero printf           |
 | Examples      | gateway                        | STABLE      | 6 FBs, edge-to-cloud pipeline, offline resilience, Observatory, zero printf |
 

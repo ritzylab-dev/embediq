@@ -605,8 +605,6 @@ not with the layer that implements it.
 | `embediq_nvm.h` | NVM key-value store | Layer 2+, Application |
 | `embediq_timer.h` | Timer tick messages | Layer 2+, Application |
 | `embediq_wdg.h` | Watchdog checkin | Layer 2+, Application |
-| `embediq_ota.h` | OTA ops table + FSM | Layer 2 Service FB |
-| `embediq_mqtt.h` | MQTT ops table + FSM | Layer 2 Service FB |
 | `embediq_meta.h` | FB metadata | Layer 3 Registry |
 | `embediq_bridge.h` | External FB bridge | Layer 3 |
 | `core/include/ops/embediq_tls.h`  | TLS transport ops table | HAL TLS implementations |
