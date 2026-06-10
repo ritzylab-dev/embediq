@@ -21,6 +21,10 @@ static const cfg_schema_entry_t k_cfg_schema[] = {
     /* key                   type           mutability       sens  val */
     { "mqtt.host",           CFG_TYPE_STR,  CFG_MUT_FLEET,   false, { .str = { .dflt = "", .max_len = 63 } } },
     { "mqtt.port",           CFG_TYPE_U32,  CFG_MUT_FLEET,   false, { .u32 = { .dflt = 1883, .min = 1, .max = 65535 } } },
+    { "mqtt.client_id",      CFG_TYPE_STR,  CFG_MUT_FACTORY, false, { .str = { .dflt = "", .max_len = 63 } } },
+    { "mqtt.username",       CFG_TYPE_STR,  CFG_MUT_FLEET,   false, { .str = { .dflt = "", .max_len = 63 } } },
+    { "mqtt.password",       CFG_TYPE_STR,  CFG_MUT_FLEET,   true,  { .str = { .dflt = "", .max_len = 63 } } },
+    { "mqtt.keepalive_sec",  CFG_TYPE_U32,  CFG_MUT_FLEET,   false, { .u32 = { .dflt = 60, .min = 0, .max = 65535 } } },
     { "report_interval_ms",  CFG_TYPE_U32,  CFG_MUT_FLEET,   false, { .u32 = { .dflt = 30000, .min = 100, .max = 86400000 } } },
     { "device_id",           CFG_TYPE_STR,  CFG_MUT_FACTORY, false, { .str = { .dflt = "", .max_len = 63 } } },
     { "log_level",           CFG_TYPE_U32,  CFG_MUT_FLEET,   false, { .u32 = { .dflt = 1, .min = 0, .max = 3 } } },

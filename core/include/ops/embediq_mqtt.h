@@ -1,9 +1,16 @@
 /*
- * embediq_mqtt.h — Cloud MQTT transport contract
+ * embediq_mqtt.h — Cloud MQTT transport contract (v2)
  *
- * Defines the platform operations table and connection FSM states for
- * MQTT 3.1.1 transport. fb_cloud_mqtt (Phase 2, P2-T4) owns the FSM,
- * reconnection policy, and message routing — NOT the socket transport.
+ * Defines embediq_mqtt_ops_t: the ops table contract for MQTT 3.1.1 transport.
+ * fb_cloud_mqtt (Layer 2 Service FB) owns the FSM, reconnection policy, and
+ * message routing — NOT the socket transport or TLS.
+ *
+ * Version history:
+ *   v1 — initial contract: connect(host, port, client_id) — incomplete
+ *   v2 — connect() now takes embediq_mqtt_connect_params_t covering all
+ *         MQTT CONNECT packet fields (LWT, keepalive, username, password,
+ *         clean_session, connect_timeout). Reason: MQTT CONNECT is one
+ *         atomic packet — all parameters go together.
  *
  * Platform integration pattern:
  *   1. Platform boot code calls embediq_mqtt_register_ops() with a populated
@@ -13,11 +20,15 @@
  *      on_receive() is registered by fb_cloud_mqtt — do not call directly.
  *
  * All ops functions MUST be safe to call from the fb_cloud_mqtt dispatch thread.
- * connect() may block up to its configured timeout; all other ops must return
+ * connect() may block up to connect_timeout_ms; all other ops must return
  * within 50 ms.
  *
+ * Platform independence: fb_cloud_mqtt is a Service FB. It never includes
+ * platform headers. All platform-specific code lives in hal_mqtt_<target>.c.
+ * boundary_checker.py CI enforces this invariant.
+ *
  * I-01: Compiles standalone with zero OSAL or BSP dependencies.
- * R-03: C11. Fixed-width types from <stdint.h> only.
+ * R-03: C11. Fixed-width types from <stdint.h> and <stdbool.h> only.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -30,18 +41,61 @@
 
 #include "embediq_osal.h"  /* embediq_err_t */
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * MQTT platform operations table
+ * ABI version
  * ------------------------------------------------------------------------- */
 
 /** ABI version for embediq_mqtt_ops_t. Increment on any breaking field change. */
-#define EMBEDIQ_MQTT_OPS_VERSION  1u
+#define EMBEDIQ_MQTT_OPS_VERSION  2u
 
+/* ---------------------------------------------------------------------------
+ * MQTT CONNECT parameters
+ *
+ * Passed to connect() in a single struct — the MQTT CONNECT packet is one
+ * atomic operation. All parameters are sent to the broker together.
+ *
+ * fb_cloud_mqtt builds this struct from embediq_cfg reads at init and on
+ * MSG_CFG_RELOAD. The will_topic is derived from client_id:
+ *   "embediq/{client_id}/status"
+ *
+ * All pointer fields remain valid for the duration of the connect() call.
+ * The platform implementation must not retain pointers after connect() returns.
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    /* --- Variable — may change on MSG_CFG_RELOAD --- */
+    const char    *host;               /**< Broker hostname or IP (NUL-terminated). */
+    uint16_t       port;               /**< 1883 = plain MQTT; 8883 = MQTT over TLS. */
+    const char    *client_id;          /**< MQTT client identifier (NUL-terminated, unique per device). */
+    const char    *username;           /**< NULL = no username auth. */
+    const char    *password;           /**< NULL = no password. Sensitive — never log. */
+
+    /* --- Stable — set once at boot, rarely changes --- */
+    uint16_t       keepalive_sec;      /**< MQTT keepalive interval in seconds.
+                                        *   0 = keepalive disabled.
+                                        *   Default: 60. Cellular: use 120–300. */
+    bool           clean_session;      /**< true = broker discards session on disconnect.
+                                        *   Default: true. */
+    uint32_t       connect_timeout_ms; /**< Max ms to wait for CONNACK.
+                                        *   0 = use EMBEDIQ_MQTT_CONNECT_TIMEOUT_MS. */
+
+    /* --- Last Will and Testament (LWT) --- */
+    const char    *will_topic;         /**< NULL = no LWT. Derived: "embediq/{client_id}/status". */
+    const uint8_t *will_payload;       /**< LWT payload bytes. NULL if will_topic is NULL. */
+    uint32_t       will_payload_len;   /**< Length of will_payload in bytes. */
+    uint8_t        will_qos;           /**< LWT QoS: 0 or 1. */
+    bool           will_retain;        /**< true = broker retains LWT message (recommended). */
+
+} embediq_mqtt_connect_params_t;
+
+/* ---------------------------------------------------------------------------
+ * MQTT platform operations table
+ * ------------------------------------------------------------------------- */
 typedef struct {
     /**
      * MUST BE FIRST — ABI versioning (I-17).
@@ -50,17 +104,18 @@ typedef struct {
     uint32_t version;
 
     /**
-     * Open a TCP connection and send MQTT CONNECT.
+     * Open a TCP/TLS connection and send MQTT CONNECT.
      *
-     * @param host       Broker hostname or IP address (NUL-terminated).
-     * @param port       Broker port (default 1883, TLS 8883).
-     * @param client_id  MQTT client identifier (NUL-terminated, unique per device).
-     * @return EMBEDIQ_OK if CONNACK received and accepted, EMBEDIQ_ERR otherwise.
+     * Blocks until CONNACK is received or connect_timeout_ms elapses.
+     * For TLS (port 8883): platform implementation calls
+     * hal_tls_posix_ops_slot(0)->connect_async() internally and waits.
+     *
+     * @param params  All MQTT CONNECT parameters. Pointer valid for duration of call.
+     * @return EMBEDIQ_OK if CONNACK received and accepted; EMBEDIQ_ERR otherwise.
      */
-    embediq_err_t (*connect)(const char *host, uint16_t port,
-                             const char *client_id);
+    embediq_err_t (*connect)(const embediq_mqtt_connect_params_t *params);
 
-    /** Send MQTT DISCONNECT and close the TCP connection. */
+    /** Send MQTT DISCONNECT and close the connection. */
     embediq_err_t (*disconnect)(void);
 
     /**
@@ -70,8 +125,7 @@ typedef struct {
      * @param payload  Message payload bytes.
      * @param len      Payload length in bytes.
      * @param qos      QoS level: 0 = at-most-once, 1 = at-least-once.
-     *                 v1: QoS 2 is not required.
-     * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if not connected or send fails.
+     * @return EMBEDIQ_OK on success; EMBEDIQ_ERR if not connected or send fails.
      */
     embediq_err_t (*publish)(const char *topic,
                              const uint8_t *payload, uint32_t len,
@@ -80,9 +134,9 @@ typedef struct {
     /**
      * Subscribe to a topic filter.
      *
-     * @param topic  NUL-terminated topic filter string (may contain wildcards).
-     * @param qos    Requested QoS level for incoming messages.
-     * @return EMBEDIQ_OK if SUBACK received, EMBEDIQ_ERR otherwise.
+     * @param topic  NUL-terminated topic filter (may contain wildcards).
+     * @param qos    Requested QoS level.
+     * @return EMBEDIQ_OK if SUBACK received; EMBEDIQ_ERR otherwise.
      */
     embediq_err_t (*subscribe)(const char *topic, uint8_t qos);
 
@@ -90,11 +144,10 @@ typedef struct {
     embediq_err_t (*unsubscribe)(const char *topic);
 
     /**
-     * Callback invoked by the platform transport when a message arrives on a
-     * subscribed topic. Registered by fb_cloud_mqtt at init — do not set
-     * or call directly.
+     * Callback invoked by the platform when a message arrives on a subscribed topic.
+     * Registered by fb_cloud_mqtt at init — do not set or call directly.
      *
-     * @param topic    NUL-terminated topic string of the received message.
+     * @param topic    NUL-terminated topic of the received message.
      * @param payload  Received payload bytes.
      * @param len      Payload length.
      */
@@ -112,7 +165,7 @@ typedef struct {
  *
  * @param ops  Pointer to a statically allocated ops table. Must remain valid
  *             for the lifetime of the process.
- * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if ops is NULL or any fn pointer is NULL.
+ * @return EMBEDIQ_OK on success; EMBEDIQ_ERR if ops is NULL or any fn pointer is NULL.
  */
 embediq_err_t embediq_mqtt_register_ops(const embediq_mqtt_ops_t *ops);
 
