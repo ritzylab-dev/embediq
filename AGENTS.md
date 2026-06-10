@@ -375,6 +375,7 @@ See docs/architecture/lifecycle.md for full protocol description.
 | Driver FBs    | fb_watchdog                    | STABLE      | fbs/drivers/ + hal/posix/hal_wdg_posix.c                     |
 | Service FBs   | fb_telemetry                   | STABLE      | fbs/services/ — OTel-aligned gauge/counter/histogram, window batching, Apache 2.0 |
 | Core helpers  | embediq_cfg                    | STABLE      | core/include/embediq_cfg.h + core/src/cfg/ — typed get/set wrapper over fb_nvm   |
+| Service FBs   | fb_cloud_mqtt                  | NOT_STARTED | fbs/services/ — MQTT 3.1.1, TLS, auto-reconnect, outage buffer, platform-independent |
 | Tools         | MISRA-C:2012 CI scan           | STABLE      | `tools/ci/check_misra.py` — cppcheck + MISRA addon, warning-only, wired into CI |
 | Tools         | config.iq schema generator     | STABLE      | `tools/config_iq/generate.py` — generates typed C accessors + validation table |
 | Tools         | embediq_nvs_gen.py             | STABLE      | `tools/config_iq/embediq_nvs_gen.py` — build-time NVM blob generator           |
