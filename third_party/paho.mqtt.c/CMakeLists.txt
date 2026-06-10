@@ -65,6 +65,12 @@ target_compile_definitions(embediq_paho_mqtt PUBLIC
     NO_TLS_GATEWAY=1
 )
 
+# PTHREAD_MUTEX_ERRORCHECK requires _GNU_SOURCE on Linux GCC.
+# Paho's upstream CMakeLists sets this — reproduce it here.
+target_compile_definitions(embediq_paho_mqtt PRIVATE
+    $<$<PLATFORM_ID:Linux>:_GNU_SOURCE>
+)
+
 # Suppress vendored source warnings (D-LIB-3: we do not own or modify this source)
 target_compile_options(embediq_paho_mqtt PRIVATE
     -Wno-unused-parameter
