@@ -17,6 +17,7 @@ add_library(embediq_hal_posix STATIC
     peripherals/hal_wdg_posix.c
     peripherals/hal_obs_stream_posix.c
     ops/hal_tls_posix.c
+    ops/hal_mqtt_posix.c
 )
 
 target_include_directories(embediq_hal_posix PRIVATE

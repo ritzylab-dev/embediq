@@ -10,6 +10,7 @@ add_library(embediq_fb_engine STATIC
     fsm/fsm_engine.c
     observatory/obs.c
     embediq_platform.c
+    embediq_mqtt.c
 )
 
 target_include_directories(embediq_fb_engine PUBLIC

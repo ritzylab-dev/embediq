@@ -169,6 +169,17 @@ typedef struct {
  */
 embediq_err_t embediq_mqtt_register_ops(const embediq_mqtt_ops_t *ops);
 
+/** Get the registered MQTT ops table. Returns NULL if none registered. */
+const embediq_mqtt_ops_t *embediq_mqtt_ops_get(void);
+
+/** Register the on_receive callback (called by fb_cloud_mqtt at init). */
+void embediq_mqtt_set_on_receive(
+    void (*cb)(const char *topic, const uint8_t *payload, uint32_t len));
+
+/** Invoke the registered on_receive callback (called by hal_mqtt_posix). */
+void embediq_mqtt_on_receive_call(const char *topic,
+                                   const uint8_t *payload, uint32_t len);
+
 /* ---------------------------------------------------------------------------
  * MQTT FSM states — observable via Observatory events
  * ------------------------------------------------------------------------- */
