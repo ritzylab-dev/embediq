@@ -504,6 +504,149 @@ Override `EMBEDIQ_TLS_MAX_CONNECTIONS` to 1 on constrained MCU targets (256KB RA
 
 ---
 
+## fb_cloud_mqtt — Cloud MQTT Transport (Item 6)
+
+### Architecture
+
+fb_cloud_mqtt is a Service FB (Layer 2). It owns the MQTT FSM, reconnection
+policy, cloud outage buffering, and message routing. It is platform-independent:
+zero POSIX headers, zero FreeRTOS headers. The platform difference lives entirely
+in the MQTT ops table implementation.
+
+```
+fb_cloud_mqtt (Service FB, Layer 2 — platform-independent)
+    ↓ calls
+embediq_mqtt_ops_t  — connect(params), disconnect(), publish(), subscribe()
+    ↓ internally uses (for TLS connections)
+embediq_tls_ops_t   — configure(), connect_async(), send(), recv(), disconnect()
+    ↓ implemented by
+hal_mqtt_posix.c    — Paho MQTT C on POSIX/Linux (Phase 2)
+hal_mqtt_freertos.c — CoreMQTT on FreeRTOS (Phase 3 — stub until then)
+```
+
+**Platform independence invariant:** fb_cloud_mqtt lives in `fbs/services/`.
+boundary_checker.py CI check enforces zero platform headers.
+
+### MQTT ops table (v2)
+
+The MQTT CONNECT packet is one atomic operation — all parameters sent together.
+`connect()` receives a params struct covering all MQTT CONNECT fields:
+
+```c
+typedef struct {
+    const char    *host;
+    uint16_t       port;
+    const char    *client_id;
+    const char    *username;           /* NULL = no auth */
+    const char    *password;           /* NULL = no password; sensitive */
+    uint16_t       keepalive_sec;      /* 0 = disabled; 60 default; 120-300 for cellular */
+    bool           clean_session;
+    uint32_t       connect_timeout_ms; /* 0 = use EMBEDIQ_MQTT_CONNECT_TIMEOUT_MS */
+    const char    *will_topic;         /* NULL = no LWT; derived: embediq/{client_id}/status */
+    const uint8_t *will_payload;       /* e.g. '{"online":false}' */
+    uint32_t       will_payload_len;
+    uint8_t        will_qos;
+    bool           will_retain;
+} embediq_mqtt_connect_params_t;
+```
+
+`EMBEDIQ_MQTT_OPS_VERSION` = 2. All fields use `<stdint.h>` + `<stdbool.h>` types only —
+portable to any target.
+
+fb_cloud_mqtt builds this struct from `embediq_cfg` reads at init and on MSG_CFG_RELOAD.
+
+### FSM topology
+
+```
+DISCONNECTED ──connect()──► CONNECTING ──CONNACK──► CONNECTED
+                                │                       │
+                           timeout/err              loss/err
+                                │                       │
+                                └──────► RECONNECTING ◄─┘
+                                              │
+                                         fatal err
+                                              │
+                                          ERROR
+```
+
+- RECONNECTING: exponential backoff — starts at `EMBEDIQ_MQTT_RECONNECT_BASE_MS` (2 s),
+  doubles each failure, ceiling at `EMBEDIQ_MQTT_MAX_RECONNECT_INTERVAL_MS` (5 min).
+  Timer uses `MSG_TIMER_1SEC` bus messages — platform-independent.
+  Never gives up. MSG_CFG_RELOAD resets immediately.
+- ERROR: only for unrecoverable failures (invalid config, fatal ops table error).
+
+### Cloud outage buffer
+
+Static ring buffer of `EmbedIQ_Msg_t` entries inside fb_cloud_mqtt.
+Size: `EMBEDIQ_MQTT_RING_BUFFER_SIZE` (default 64, `#ifndef` guard — override per product).
+Drop policy: drop oldest when full (recency is more valuable than history).
+Flush: on reconnect, publish oldest-first before accepting new messages.
+
+### MQTT topic mapping
+
+Outbound (device → cloud):
+
+| Bus message | MQTT topic | Notes |
+|------------|-----------|-------|
+| MSG_TELEMETRY_BATCH | `embediq/{client_id}/telemetry` | fb_telemetry produces |
+| MSG_MQTT_PUBLISH | `embediq/{client_id}/telemetry` | Any FB direct publish |
+
+Inbound (cloud → device):
+
+| MQTT topic | Bus message | Notes |
+|-----------|------------|-------|
+| `embediq/{id}/state/desired` | MSG_CFG_RELOAD | Config push; triggers NVM re-read |
+| `embediq/{id}/cmd` | MSG_MQTT_CMD_RX | Commands: ota_check, rotate_cert, reboot |
+
+Last Will and Testament (auto on ungraceful disconnect):
+
+| MQTT topic | Payload | Notes |
+|-----------|---------|-------|
+| `embediq/{client_id}/status` | `{"online":false}` | `retain=true`; cloud bridge marks device offline |
+
+### Command routing
+
+Cloud sends `{"cmd": "reboot"|"ota_check"|"rotate_cert"|...}` to `embediq/{id}/cmd`.
+fb_cloud_mqtt maps to bus messages:
+- `"reboot"` → MSG_SYS_SHUTDOWN
+- `"ota_check"`, `"rotate_cert"`, unknown → MSG_MQTT_CMD_RX (application FBs subscribe)
+
+### Configuration keys (config.iq)
+
+```
+mqtt.host          str[63]  fleet    ""        — broker hostname or IP
+mqtt.port          u32      fleet    1883      1..65535
+mqtt.client_id     str[63]  factory  ""        — unique device identifier
+mqtt.username      str[63]  fleet    ""        — NULL if no auth
+mqtt.password      str[63]  fleet    ""        sensitive — broker password
+mqtt.keepalive_sec u32      fleet    60        0..65535
+```
+
+### TLS credential provisioning
+
+For TLS connections (port 8883): platform boot code reads CA cert content from
+storage (filesystem on Linux, flash cert store on RTOS), calls
+`hal_tls_posix_ops_slot(0)->configure(ca_pem, client_cert_pem, client_key_pem)`.
+hal_mqtt_posix.c's init function (registered via `platform_lib_declare()`)
+performs this before fb_cloud_mqtt starts.
+For plain MQTT (port 1883): no TLS configure call needed.
+
+### MQTT message IDs (0x0578–0x05DB range)
+
+```c
+MSG_MQTT_CONNECTED    0x0578   CONNECTED state entered
+MSG_MQTT_DISCONNECTED 0x0579   DISCONNECTED or RECONNECTING state entered
+MSG_MQTT_CMD_RX       0x057A   Inbound cloud command received
+```
+
+### Library
+
+Phase 2 (POSIX): Eclipse Paho MQTT C — Apache 2.0, vendored in `third_party/paho.mqtt.c/`.
+Phase 3 (FreeRTOS): CoreMQTT — MIT, zero dynamic allocation, same ops table contract.
+`fbs/services/fb_cloud_mqtt.c` never includes Paho or CoreMQTT headers (D-LIB-4).
+
+---
+
 ## The Functional Block
 
 The FB is the unit of everything. Every concern in your firmware is one FB.
