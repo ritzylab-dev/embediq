@@ -50,8 +50,8 @@ static char s_client_id[EMBEDIQ_NVM_VAL_SIZE];
 static char s_username[EMBEDIQ_NVM_VAL_SIZE];
 static char s_password[EMBEDIQ_NVM_VAL_SIZE];
 
-/* Topic buffers: "embediq/" + client_id (max 63) + "/telemetry" + NUL */
-#define MQTT_TOPIC_MAX 80u
+/* Derived: "embediq/" (8) + client_id (EMBEDIQ_NVM_VAL_SIZE-1) + "/telemetry" (10) + NUL (1) */
+#define MQTT_TOPIC_MAX  (EMBEDIQ_NVM_VAL_SIZE + 18u)
 static char s_will_topic[MQTT_TOPIC_MAX];
 static char s_telemetry_topic[MQTT_TOPIC_MAX];
 
