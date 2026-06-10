@@ -2,7 +2,7 @@
 #
 # Builds embediq_hal_posix from:
 #   peripherals/ — HAL peripheral implementations (timer, flash, wdg, obs_stream)
-#   ops/         — Ops table implementations (TLS stub — mbedTLS impl in Item 5.5 PR-C)
+#   ops/         — Ops table implementations (TLS: mbedTLS; MQTT: Paho MQTT C)
 #
 # Peripheral files: zero embediq_*.h includes (layer boundary enforced by boundary_checker).
 # Ops files: include ops table headers from core/include/ops/ — this is correct.
@@ -34,4 +34,5 @@ target_compile_options(embediq_hal_posix PRIVATE
 target_link_libraries(embediq_hal_posix
     PUBLIC  embediq_fb_engine
     PRIVATE embediq_mbedtls
+    PRIVATE embediq_paho_mqtt
 )
