@@ -281,6 +281,37 @@ extern "C" {
 #  define EMBEDIQ_TLS_MAX_CONNECTIONS   2u
 #endif
 
+/* ---------------------------------------------------------------------------
+ * fb_cloud_mqtt configuration
+ *
+ * All constants use #ifndef guards — override per-product at build time.
+ *
+ * Memory guidance:
+ *   EMBEDIQ_MQTT_RING_BUFFER_SIZE: ring buffer uses
+ *     EMBEDIQ_MQTT_RING_BUFFER_SIZE × sizeof(EmbedIQ_Msg_t) bytes.
+ *     Default 64 × 84 B ≈ 5.4 KB. For 256 KB MCU targets: set to 16.
+ * ------------------------------------------------------------------------- */
+
+/** Cloud outage ring buffer depth (entries). Drop-oldest when full. */
+#ifndef EMBEDIQ_MQTT_RING_BUFFER_SIZE
+#  define EMBEDIQ_MQTT_RING_BUFFER_SIZE          64u
+#endif
+
+/** Maximum ms to wait for MQTT CONNACK. Increase for cellular (60 000u). */
+#ifndef EMBEDIQ_MQTT_CONNECT_TIMEOUT_MS
+#  define EMBEDIQ_MQTT_CONNECT_TIMEOUT_MS     30000u
+#endif
+
+/** Initial reconnect backoff interval in milliseconds. */
+#ifndef EMBEDIQ_MQTT_RECONNECT_BASE_MS
+#  define EMBEDIQ_MQTT_RECONNECT_BASE_MS       2000u
+#endif
+
+/** Ceiling for exponential reconnect backoff (default 5 minutes). */
+#ifndef EMBEDIQ_MQTT_MAX_RECONNECT_INTERVAL_MS
+#  define EMBEDIQ_MQTT_MAX_RECONNECT_INTERVAL_MS  300000u
+#endif
+
 #ifdef __cplusplus
 }
 #endif

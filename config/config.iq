@@ -19,6 +19,10 @@ namespace "com.embediq.demo"
 #  key                    type      mutability  default       range           sensitive
 config mqtt.host           str[63]   fleet       ""
 config mqtt.port           u32       fleet       1883          1..65535
+config mqtt.client_id      str[63]   factory     ""
+config mqtt.username       str[63]   fleet       ""
+config mqtt.password       str[63]   fleet       ""                            sensitive
+config mqtt.keepalive_sec  u32       fleet       60            0..65535
 config report_interval_ms  u32       fleet       30000         100..86400000
 config device_id           str[63]   factory     ""
 config log_level           u32       fleet       1             0..3

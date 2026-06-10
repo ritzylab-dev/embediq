@@ -44,6 +44,45 @@ static inline embediq_err_t embediq_cfg_set_mqtt_port(uint32_t value) {
     return embediq_cfg_set_u32("mqtt.port", value) ? EMBEDIQ_OK : EMBEDIQ_ERR;
 }
 
+/** mqtt.client_id — str[63], factory-locked */
+static inline embediq_err_t embediq_cfg_get_mqtt_client_id(char *out, size_t len) {
+    if (!out || len == 0u) return EMBEDIQ_ERR;
+    embediq_cfg_get_str("mqtt.client_id", out, len, "");
+    return EMBEDIQ_OK;
+}
+/* No setter — factory-locked keys are immutable at runtime */
+
+/** mqtt.username — str[63], fleet-pushable, default "" */
+static inline embediq_err_t embediq_cfg_get_mqtt_username(char *out, size_t len) {
+    if (!out || len == 0u) return EMBEDIQ_ERR;
+    embediq_cfg_get_str("mqtt.username", out, len, "");
+    return EMBEDIQ_OK;
+}
+static inline embediq_err_t embediq_cfg_set_mqtt_username(const char *value) {
+    return embediq_cfg_set_str("mqtt.username", value) ? EMBEDIQ_OK : EMBEDIQ_ERR;
+}
+
+/** mqtt.password — str[63], fleet-pushable, default ""
+ *  SENSITIVE: value is never included in Observatory event payloads or logs. */
+static inline embediq_err_t embediq_cfg_get_mqtt_password(char *out, size_t len) {
+    if (!out || len == 0u) return EMBEDIQ_ERR;
+    embediq_cfg_get_str("mqtt.password", out, len, "");
+    return EMBEDIQ_OK;
+}
+static inline embediq_err_t embediq_cfg_set_mqtt_password(const char *value) {
+    return embediq_cfg_set_str("mqtt.password", value) ? EMBEDIQ_OK : EMBEDIQ_ERR;
+}
+
+/** mqtt.keepalive_sec — u32, fleet-pushable, range 0..65535, default 60 */
+static inline embediq_err_t embediq_cfg_get_mqtt_keepalive_sec(uint32_t *out) {
+    if (!out) return EMBEDIQ_ERR;
+    *out = embediq_cfg_get_u32("mqtt.keepalive_sec", 60u);
+    return EMBEDIQ_OK;
+}
+static inline embediq_err_t embediq_cfg_set_mqtt_keepalive_sec(uint32_t value) {
+    return embediq_cfg_set_u32("mqtt.keepalive_sec", value) ? EMBEDIQ_OK : EMBEDIQ_ERR;
+}
+
 /** report_interval_ms — u32, fleet-pushable, range 100..86400000, default 30000 */
 static inline embediq_err_t embediq_cfg_get_report_interval_ms(uint32_t *out) {
     if (!out) return EMBEDIQ_ERR;

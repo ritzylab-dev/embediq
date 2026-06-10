@@ -60,10 +60,21 @@ extern "C" {
  * IDs assigned at implementation (P2-T4). Reserve range.
  * ------------------------------------------------------------------------- */
 
-/* 0x0578 — MSG_MQTT_CONNECTED      (reserved — P2 implementation) */
-/* 0x0579 — MSG_MQTT_DISCONNECTED   (reserved — P2 implementation) */
-/* 0x057A — MSG_MQTT_MESSAGE_RX     (reserved — P2 implementation) */
-/* 0x057B–0x05DB — reserved for additional MQTT events             */
+/** fb_cloud_mqtt entered CONNECTED state. */
+#define MSG_MQTT_CONNECTED       0x0578u
+
+/** fb_cloud_mqtt entered DISCONNECTED or RECONNECTING state. */
+#define MSG_MQTT_DISCONNECTED    0x0579u
+
+/**
+ * Inbound cloud command received on embediq/{client_id}/cmd.
+ * Payload: raw JSON bytes from cloud. Application FBs subscribe and parse.
+ * Also used for ota_check and rotate_cert commands — fb_ota and
+ * fb_provisioning subscribe to this message ID.
+ */
+#define MSG_MQTT_CMD_RX          0x057Au
+
+/* 0x057B–0x05DB — reserved for additional MQTT events */
 
 /* ---------------------------------------------------------------------------
  * fb_ota — firmware update lifecycle (0x05DC–0x063F, reserved)
