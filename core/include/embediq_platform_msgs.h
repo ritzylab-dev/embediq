@@ -74,7 +74,15 @@ extern "C" {
  */
 #define MSG_MQTT_CMD_RX          0x057Au
 
-/* 0x057B–0x05DB — reserved for additional MQTT events */
+/**
+ * Configuration reload request.
+ * Published by fb_cloud_mqtt when the cloud pushes new config (desired state).
+ * Also published internally on config change to trigger reconnect.
+ * No payload. Subscribers re-read their config from embediq_cfg.
+ */
+#define MSG_CFG_RELOAD           0x057Bu
+
+/* 0x057C–0x05DB — reserved for additional MQTT events */
 
 /* ---------------------------------------------------------------------------
  * fb_ota — firmware update lifecycle (0x05DC–0x063F, reserved)

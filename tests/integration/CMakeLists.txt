@@ -148,3 +148,18 @@ if(NOT APPLE)
     add_test(NAME integration_bridge_socket COMMAND test_bridge_socket)
     set_tests_properties(integration_bridge_socket PROPERTIES TIMEOUT 30)
 endif()
+
+# ---------------------------------------------------------------------------
+# fb_cloud_mqtt unit tests (Item 6 PR-C) — no broker required
+# ---------------------------------------------------------------------------
+add_executable(test_fb_cloud_mqtt_unit
+    test_fb_cloud_mqtt_unit.c)
+target_include_directories(test_fb_cloud_mqtt_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/generated)
+target_link_libraries(test_fb_cloud_mqtt_unit PRIVATE
+    embediq_service_fbs embediq_hal_posix)
+target_compile_options(test_fb_cloud_mqtt_unit PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME integration_fb_cloud_mqtt_unit
+    COMMAND test_fb_cloud_mqtt_unit)

@@ -122,6 +122,9 @@ jobs:
       - name: Binary blob detection — warning
         run: python3 tools/ci/binary_blob_check.py
 
+      - name: Install Mosquitto for MQTT tests
+        run: sudo apt-get install -y mosquitto
+
       - name: Install cppcheck for MISRA scan
         run: |
           CPPCHECK_VERSION=$(apt-cache policy cppcheck | grep Candidate | awk '{print $2}')

@@ -12,6 +12,7 @@
 
 add_library(embediq_service_fbs STATIC
     fb_telemetry.c
+    fb_cloud_mqtt.c
 )
 
 target_include_directories(embediq_service_fbs PUBLIC
