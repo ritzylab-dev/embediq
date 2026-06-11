@@ -136,6 +136,22 @@ static void attempt_connect(void)
         ev.msg_id = MSG_MQTT_CONNECTED;
         embediq_publish(s_fb, &ev);
 
+        /* Publish online status to MQTT broker.
+         * Cloud OSS bridge reads embediq/{client_id}/status and marks
+         * the device online in its database. Will payload ({"online":false})
+         * is published automatically by the broker on ungraceful disconnect.
+         *
+         * Payload buffer size derivation:
+         *   "{\"online\":true}" = 15 chars + NUL = 16 bytes
+         *   Well within EMBEDIQ_MSG_MAX_PAYLOAD (64). */
+        if (s_will_topic[0] != '\0') {
+            static const uint8_t k_online_payload[] = "{\"online\":true}";
+            (void)ops->publish(s_will_topic,
+                               k_online_payload,
+                               (uint32_t)(sizeof(k_online_payload) - 1u),
+                               1u);  /* QoS 1 — retain = false (bridge handles) */
+        }
+
         /* Flush ring buffer */
         EmbedIQ_Msg_t buffered;
         while (ring_pop(&buffered)) {
