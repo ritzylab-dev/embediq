@@ -9,36 +9,13 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-# Synchronous MQTTClient source files only (no Async, no samples)
-set(PAHO_SYNC_SOURCES
-    src/MQTTClient.c
-    src/MQTTTime.c
-    src/MQTTProtocolClient.c
-    src/MQTTProtocolOut.c
-    src/Clients.c
-    src/Heap.c
-    src/LinkedList.c
-    src/Log.c
-    src/Messages.c
-    src/MutexType.c
-    src/Net.c
-    src/OsWrapper.c
-    src/SHA1.c
-    src/Socket.c
-    src/SocketBuffer.c
-    src/Thread.c
-    src/utf-8.c
-)
+# Build all Paho src/*.c — explicit enumeration silently misses deps
+# (MQTTPacket, Base64, Persistence, etc.) that only surface when the
+# full hal_mqtt_posix link chain is exercised. Glob is more robust
+# against version bumps; unused .o files stay in the .a, zero cost.
+file(GLOB PAHO_SYNC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
 
-# Filter to only existing files (some versions may not have all files)
-set(PAHO_EXISTING_SOURCES "")
-foreach(SRC ${PAHO_SYNC_SOURCES})
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}")
-        list(APPEND PAHO_EXISTING_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}")
-    endif()
-endforeach()
-
-add_library(embediq_paho_mqtt STATIC ${PAHO_EXISTING_SOURCES})
+add_library(embediq_paho_mqtt STATIC ${PAHO_SYNC_SOURCES})
 
 # Generate VersionInfo.h — Paho's sources include it; upstream generates it
 # via configure_file. Reproduce that here with known version values.
