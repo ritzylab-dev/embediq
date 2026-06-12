@@ -121,7 +121,11 @@ static void attempt_connect(void)
     p.will_qos         = 1u;
     p.will_retain      = true;
 
+    printf("[MQTT] Connecting to %s:%u as '%s'...\n",
+           s_host, (unsigned)p.port, s_client_id);
     embediq_err_t rc = ops->connect(&p);
+    printf("[MQTT] Connect result: %s\n",
+           (rc == EMBEDIQ_OK) ? "CONNECTED" : "FAILED — will retry");
     if (rc == EMBEDIQ_OK) {
         s_state         = EMBEDIQ_MQTT_STATE_CONNECTED;
         s_backoff_sec   = 0u;

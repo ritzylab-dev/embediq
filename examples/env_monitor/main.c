@@ -83,6 +83,14 @@ static void handle_sigint(int sig)
 
 int main(void)
 {
+    /* Make stdout unbuffered so all output is flushed to device.log
+     * immediately, even when stdout is redirected to a file.
+     * Without this, glibc/macOS libc enables 4 KiB block-buffering for
+     * non-tty output. env_monitor's total output is < 4 KiB, so the
+     * buffer is never flushed before SIGTERM kills the process.
+     * setvbuf() is C89 — no additional include needed. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     printf("\n");
     printf("╔══════════════════════════════════════════════════╗\n");
     printf("║   EmbedIQ Environmental Monitor — Cloud Demo    ║\n");
