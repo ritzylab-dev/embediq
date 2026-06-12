@@ -169,7 +169,7 @@ log "=== Step 3: Start Mosquitto broker ==="
 # This avoids pgrep-based PID capture, which is fragile if mosquitto is
 # already running (e.g. from dev-with-broker.sh).
 MOSQUITTO_CONF="/tmp/embediq-e2e-mosquitto.conf"
-printf 'listener %s 0.0.0.0\nallow_anonymous true\nlog_type error\nlog_type warning\n' \
+printf 'listener %s 127.0.0.1\nallow_anonymous true\nlog_type error\nlog_type warning\n' \
     "$MQTT_PORT" > "$MOSQUITTO_CONF"
 mosquitto -c "$MOSQUITTO_CONF" &
 PID_MOSQUITTO=$!
@@ -261,6 +261,14 @@ fi
 
 log ""
 log "=== Step 6: Start env_monitor device ==="
+
+# Verify broker is still alive after Cloud API startup before launching firmware.
+# If this fails, rc=-1 in firmware is a broker-death issue, not a Paho issue.
+if ! nc -z 127.0.0.1 "$MQTT_PORT" 2>/dev/null; then
+    fail "MQTT broker unreachable on 127.0.0.1:$MQTT_PORT — died during Cloud API startup"
+    exit 1
+fi
+log "  MQTT broker alive on 127.0.0.1:$MQTT_PORT"
 
 EMBEDIQ_NVM_PATH="$NVM_BLOB" \
 "$BUILD_DIR/examples/env_monitor/env_monitor" \
