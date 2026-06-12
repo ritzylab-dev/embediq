@@ -13,9 +13,13 @@
 
 #include "embediq_platform.h"
 #include "embediq_config.h"
+#include "embediq_fb.h"   /* embediq_engine_boot() */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+/* test-only — defined in core/src/registry/fb_engine.c under EMBEDIQ_PLATFORM_HOST */
+extern void fb_engine__reset(void);
 
 static int s_run = 0, s_pass = 0;
 #define TEST(name, expr) \
@@ -95,6 +99,29 @@ static void test_null_deinit(void)
     TEST("null_deinit_safe", 1);
 }
 
+static void test_engine_boot_calls_platform_lib_init(void)
+{
+    /* Clean slate — reset both the engine and the platform lib registry.
+     * fb_engine__reset() calls embediq_engine_dispatch_shutdown() if running. */
+    fb_engine__reset();
+    embediq_platform_lib_reset();
+    reset_log();
+
+    /* Register a platform lib before engine boot — simulates what main()
+     * does with hal_mqtt_posix_declare(). */
+    embediq_platform_lib_declare(init_a, deinit_a);
+
+    /* Boot the engine — must call embediq_platform_lib_init_all() internally. */
+    embediq_engine_boot();
+
+    TEST("engine_boot_called_platform_lib_init",  s_call_count == 1);
+    TEST("engine_boot_called_correct_init_fn",    s_call_log[0] == 1);
+
+    /* Clean up — leave a clean slate for subsequent test cases. */
+    fb_engine__reset();
+    embediq_platform_lib_reset();
+}
+
 int main(void)
 {
     printf("=== test_platform_lib ===\n");
@@ -102,6 +129,7 @@ int main(void)
     test_deinit_reverse();
     test_dedup();
     test_null_deinit();
+    test_engine_boot_calls_platform_lib_init();   /* NEW */
     printf("\n%d/%d passed\n", s_pass, s_run);
     return (s_pass == s_run) ? 0 : 1;
 }

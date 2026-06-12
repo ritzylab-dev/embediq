@@ -37,6 +37,7 @@
 #include "embediq_bus.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
+#include "embediq_platform.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -266,6 +267,15 @@ int embediq_engine_boot(void)
     if (g_booted) return 0;   /* idempotent */
 
     g_boot_count = 0;
+
+    /* Initialise all declared platform libraries (e.g. HAL ops tables) before
+     * any Phase-1 FB runs. Platform libs are registered via
+     * embediq_platform_lib_declare() in main() before embediq_engine_boot().
+     * This call invokes every registered init_fn in declaration order so that
+     * ops tables are populated when any FB's init_fn queries them.
+     * I-PL: platform libs are the seam between HAL implementations and
+     * framework services — they must be ready before Phase 1. */
+    embediq_platform_lib_init_all();
 
     /* Boot the message bus first: builds subscription table and creates
      * per-FB priority queues before any Phase-1 FB tasks start running.
