@@ -222,7 +222,7 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
 fi
 pass "Authenticated with Cloud OSS"
 
-HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "$API/devices" \
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/devices" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"id\":\"$DEVICE_ID\",\"password\":\"$DEVICE_PASS\"}" || echo "000")
