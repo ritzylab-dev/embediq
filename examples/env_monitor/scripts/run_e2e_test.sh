@@ -57,7 +57,7 @@ cleanup() {
     [ -n "$PID_DEVICE"    ] && kill "$PID_DEVICE"    2>/dev/null || true
     [ -n "$PID_CLOUD"     ] && kill "$PID_CLOUD"     2>/dev/null || true
     [ -n "$PID_MOSQUITTO" ] && kill "$PID_MOSQUITTO" 2>/dev/null || true
-    rm -f "$NVM_BLOB" /tmp/e2e_fleet.json /tmp/e2e_factory.json
+    rm -f "$NVM_BLOB" /tmp/e2e_fleet.json /tmp/e2e_factory.json /tmp/mosquitto.log
     log "Cleanup done."
 }
 trap cleanup EXIT
@@ -169,9 +169,9 @@ log "=== Step 3: Start Mosquitto broker ==="
 # This avoids pgrep-based PID capture, which is fragile if mosquitto is
 # already running (e.g. from dev-with-broker.sh).
 MOSQUITTO_CONF="/tmp/embediq-e2e-mosquitto.conf"
-printf 'listener %s 127.0.0.1\nallow_anonymous true\nlog_type error\nlog_type warning\n' \
+printf 'listener %s 127.0.0.1\nallow_anonymous true\nlog_type all\n' \
     "$MQTT_PORT" > "$MOSQUITTO_CONF"
-mosquitto -c "$MOSQUITTO_CONF" &
+mosquitto -c "$MOSQUITTO_CONF" > /tmp/mosquitto.log 2>&1 &
 PID_MOSQUITTO=$!
 
 wait_for_port "127.0.0.1" "$MQTT_PORT" "Mosquitto"
@@ -301,6 +301,25 @@ if [ -n "$TELEMETRY_MSG" ]; then
     log "  Payload: $TELEMETRY_MSG"
 else
     fail "No telemetry received on $TELEMETRY_TOPIC within 60s"
+
+    # Diagnostic: is the broker still alive after 60s of firmware connect attempts?
+    if nc -z 127.0.0.1 "$MQTT_PORT" 2>/dev/null; then
+        log "  [DIAG] Mosquitto ALIVE on 127.0.0.1:$MQTT_PORT after 60s test"
+    else
+        log "  [DIAG] Mosquitto DEAD on 127.0.0.1:$MQTT_PORT after 60s test"
+    fi
+
+    # Diagnostic: show beginning of device log (initial connect attempt)
+    log "  [DIAG] Device log HEAD (initial connect attempt):"
+    head -30 /tmp/device.log | sed 's/^/    /'
+
+    # Diagnostic: show Mosquitto log
+    log "  [DIAG] Mosquitto log:"
+    cat /tmp/mosquitto.log 2>/dev/null | sed 's/^/    /' || log "    (no mosquitto log found)"
+
+    # Diagnostic: show Cloud bridge log tail
+    log "  [DIAG] Cloud bridge log tail:"
+    tail -20 /tmp/cloud_api.log 2>/dev/null | sed 's/^/    /' || log "    (no cloud log found)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -358,8 +377,9 @@ echo "  PASSED: $PASS_COUNT"
 echo "  FAILED: $FAIL_COUNT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  Device logs: /tmp/device.log"
-echo "  Cloud logs:  /tmp/cloud_api.log"
+echo "  Device logs:   /tmp/device.log"
+echo "  Cloud logs:    /tmp/cloud_api.log"
+echo "  Mosquitto log: /tmp/mosquitto.log"
 echo ""
 
 if [ "$FAIL_COUNT" -gt 0 ]; then
