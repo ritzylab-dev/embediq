@@ -82,6 +82,7 @@ static embediq_err_t mqtt_connect(const embediq_mqtt_connect_params_t *params)
                                 MQTTCLIENT_PERSISTENCE_NONE, NULL);
     if (rc != MQTTCLIENT_SUCCESS) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_MQTT, HAL_ERR_IO);
+        printf("[MQTT HAL] MQTTClient_create failed: rc=%d uri='%s'\n", rc, uri);
         s_client = NULL;
         return EMBEDIQ_ERR;
     }
@@ -113,6 +114,7 @@ static embediq_err_t mqtt_connect(const embediq_mqtt_connect_params_t *params)
     rc = MQTTClient_connect(s_client, &opts);
     if (rc != MQTTCLIENT_SUCCESS) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_MQTT, HAL_ERR_IO);
+        printf("[MQTT HAL] MQTTClient_connect failed: rc=%d\n", rc);
         MQTTClient_destroy(&s_client);
         s_client = NULL;
         return EMBEDIQ_ERR;

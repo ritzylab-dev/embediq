@@ -126,7 +126,7 @@ log "=== Step 2: Generate NVM config ==="
 
 cat > /tmp/e2e_fleet.json << EOF
 {
-  "mqtt.host": "localhost",
+  "mqtt.host": "127.0.0.1",
   "mqtt.port": $MQTT_PORT,
   "mqtt.keepalive_sec": 60
 }
