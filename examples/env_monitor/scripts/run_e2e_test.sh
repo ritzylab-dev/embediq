@@ -15,8 +15,8 @@
 #   - python3 + pip installed
 #   - cmake + make installed
 #   - curl + jq installed
-#   - embediq-cloud-pro repo cloned alongside embediq repo
-#     (default path: ../embediq-cloud-pro — override with CLOUD_REPO env var)
+#   - embediq-cloud repo cloned alongside embediq repo
+#     (default path: ../embediq-cloud — override with CLOUD_REPO env var)
 #
 # Usage:
 #   bash examples/env_monitor/scripts/run_e2e_test.sh
@@ -34,7 +34,7 @@ DEVICE_ID="${DEVICE_ID:-env-monitor-001}"
 DEVICE_PASS="${DEVICE_PASS:-embediq-test-pass}"
 MQTT_PORT="${MQTT_PORT:-1883}"
 CLOUD_PORT="${CLOUD_PORT:-8080}"
-CLOUD_REPO="${CLOUD_REPO:-../embediq-cloud-pro}"
+CLOUD_REPO="${CLOUD_REPO:-../embediq-cloud}"
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build"
 NVM_BLOB="/tmp/embediq_env_monitor_test.bin"
@@ -93,7 +93,7 @@ pass "All prerequisites found"
 
 if [ ! -d "$CLOUD_REPO" ]; then
     fail "Cloud OSS repo not found at: $CLOUD_REPO"
-    echo "  Set CLOUD_REPO env var to the path of embediq-cloud-pro"
+    echo "  Set CLOUD_REPO env var to the path of embediq-cloud"
     exit 1
 fi
 pass "Cloud OSS repo found: $CLOUD_REPO"
@@ -154,9 +154,14 @@ pass "NVM config blob generated: $NVM_BLOB"
 log ""
 log "=== Step 3: Start Mosquitto broker ==="
 
-mosquitto -d -p "$MQTT_PORT" \
-    --log-type error --log-type warning
-PID_MOSQUITTO=$(pgrep -n mosquitto)
+# Write a minimal conf so we can start on a specific port without -d.
+# This avoids pgrep-based PID capture, which is fragile if mosquitto is
+# already running (e.g. from dev-with-broker.sh).
+MOSQUITTO_CONF="/tmp/embediq-e2e-mosquitto.conf"
+printf 'listener %s\nallow_anonymous true\nlog_type error\nlog_type warning\n' \
+    "$MQTT_PORT" > "$MOSQUITTO_CONF"
+mosquitto -c "$MOSQUITTO_CONF" &
+PID_MOSQUITTO=$!
 
 wait_for_port "localhost" "$MQTT_PORT" "Mosquitto"
 
