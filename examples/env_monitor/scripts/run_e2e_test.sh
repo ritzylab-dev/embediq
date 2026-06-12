@@ -151,6 +151,17 @@ pass "NVM config blob generated: $NVM_BLOB"
 # Step 3: Start Mosquitto broker
 # ---------------------------------------------------------------------------
 
+# Kill any process currently listening on $MQTT_PORT so the test gets a
+# clean, isolated broker. Without this, a stale Mosquitto from a previous
+# run leaves its port occupied; mosquitto fails to bind but the test
+# continues silently using the foreign broker.
+# lsof -ti tcp:PORT returns PIDs of all sockets on that port; kill them all.
+if lsof -ti tcp:"$MQTT_PORT" >/dev/null 2>&1; then
+    log "  Killing stale listener(s) on port $MQTT_PORT..."
+    lsof -ti tcp:"$MQTT_PORT" | xargs kill 2>/dev/null || true
+    sleep 1
+fi
+
 log ""
 log "=== Step 3: Start Mosquitto broker ==="
 
@@ -168,6 +179,16 @@ wait_for_port "localhost" "$MQTT_PORT" "Mosquitto"
 # ---------------------------------------------------------------------------
 # Step 4: Start Cloud OSS API (with MQTT bridge enabled)
 # ---------------------------------------------------------------------------
+
+# Kill any process currently listening on $CLOUD_PORT so the test gets a
+# fresh Cloud API with a clean database. Without this, a stale uvicorn
+# from a previous run keeps its port; the test's new uvicorn may fail to
+# bind, leaving the test talking to stale data.
+if lsof -ti tcp:"$CLOUD_PORT" >/dev/null 2>&1; then
+    log "  Killing stale listener(s) on port $CLOUD_PORT..."
+    lsof -ti tcp:"$CLOUD_PORT" | xargs kill 2>/dev/null || true
+    sleep 1
+fi
 
 log ""
 log "=== Step 4: Start Cloud OSS API ==="
