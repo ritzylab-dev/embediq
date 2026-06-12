@@ -169,12 +169,12 @@ log "=== Step 3: Start Mosquitto broker ==="
 # This avoids pgrep-based PID capture, which is fragile if mosquitto is
 # already running (e.g. from dev-with-broker.sh).
 MOSQUITTO_CONF="/tmp/embediq-e2e-mosquitto.conf"
-printf 'listener %s\nallow_anonymous true\nlog_type error\nlog_type warning\n' \
+printf 'listener %s 0.0.0.0\nallow_anonymous true\nlog_type error\nlog_type warning\n' \
     "$MQTT_PORT" > "$MOSQUITTO_CONF"
 mosquitto -c "$MOSQUITTO_CONF" &
 PID_MOSQUITTO=$!
 
-wait_for_port "localhost" "$MQTT_PORT" "Mosquitto"
+wait_for_port "127.0.0.1" "$MQTT_PORT" "Mosquitto"
 
 # ---------------------------------------------------------------------------
 # Step 4: Start Cloud OSS API (with MQTT bridge enabled)
@@ -209,7 +209,7 @@ JWT_SECRET="$(openssl rand -hex 32)"
 export JWT_SECRET
 export DB_PATH="/tmp/e2e_cloud_test.db"
 export BRIDGE_ENABLED="true"
-export MQTT_HOST="localhost"
+export MQTT_HOST="127.0.0.1"
 export MQTT_PORT="$MQTT_PORT"
 export INFLUXDB_ENABLED="false"  # no InfluxDB in dev mode — bridge continues gracefully
 
@@ -285,7 +285,7 @@ log ""
 log "=== Step 7: Verify telemetry at MQTT broker (60s timeout) ==="
 
 TELEMETRY_TOPIC="embediq/$DEVICE_ID/telemetry"
-TELEMETRY_MSG=$(mosquitto_sub -h localhost -p "$MQTT_PORT" \
+TELEMETRY_MSG=$(mosquitto_sub -h 127.0.0.1 -p "$MQTT_PORT" \
     -t "$TELEMETRY_TOPIC" -C 1 -W 60 2>/dev/null || true)
 
 if [ -n "$TELEMETRY_MSG" ]; then
@@ -323,7 +323,7 @@ log ""
 log "=== Step 9: Send cloud command ==="
 
 CMD_TOPIC="embediq/$DEVICE_ID/cmd"
-mosquitto_pub -h localhost -p "$MQTT_PORT" \
+mosquitto_pub -h 127.0.0.1 -p "$MQTT_PORT" \
     -t "$CMD_TOPIC" \
     -m "alert:25.0"
 
