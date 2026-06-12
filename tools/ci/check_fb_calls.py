@@ -49,6 +49,10 @@ ALLOWLIST_PATHS = [
     'fbs/drivers/fb_timer.c',
     'fbs/drivers/fb_watchdog.c',
     'fbs/drivers/fb_nvm.c',
+    'core/src/observatory/',    # Framework STDOUT transport — printf at lines 328/349 IS
+                                # the EMBEDIQ_OBS_TRANSPORT_STDOUT implementation (host-only
+                                # debug transport; MCU targets use RING or FILE exclusively).
+                                # Framework infrastructure, not a Service FB or Driver FB.
 ]
 
 # ── Directories to scan (relative to repo root) ─────────────────────────
@@ -108,6 +112,15 @@ FORBIDDEN_CALLS = [
      'R-sub-03', 'FB code must not call OSAL signal directly — use message bus'),
     (r'\bembediq_sem_(create|post|wait|destroy|post_from_isr)\s*\(',
      'R-sub-03', 'FB code must not call OSAL semaphore directly — use message bus'),
+    # stdio output functions — R-stdio
+    # Service FBs and Driver FBs are platform-agnostic: they run on Linux, FreeRTOS,
+    # and ESP32. None of those targets have a universal stdout. printf/fprintf/puts/etc.
+    # write to stdout, which does not exist on MCU targets.
+    # Use embediq_obs_emit() for diagnostics instead.
+    # NOTE: snprintf() writes to a char buffer and is NOT forbidden — only output functions.
+    (r'\b(printf|fprintf|puts|fputs|fputc|putc|putchar)\s*\(',
+     'R-stdio', 'stdio output in fbs/ — Service/Driver FBs are platform-agnostic; '
+                'no stdout on MCU targets — use embediq_obs_emit() instead'),
 ]
 
 # ── Forbidden system headers in FB layers ───────────────────────────────
