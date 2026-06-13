@@ -351,6 +351,32 @@ target_compile_options(test_fb_telemetry PRIVATE
 add_test(NAME unit_fb_telemetry COMMAND test_fb_telemetry)
 
 # ---------------------------------------------------------------------------
+# fb_cloud_mqtt unit tests (PR #163 — telemetry JSON serialisation)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_cloud_mqtt test_fb_cloud_mqtt.c)
+
+target_include_directories(test_fb_cloud_mqtt PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/generated
+    ${CMAKE_SOURCE_DIR}/fbs/services
+)
+
+target_link_libraries(test_fb_cloud_mqtt PRIVATE
+    embediq_service_fbs
+    embediq_cfg
+    embediq_driver_fbs
+)
+
+target_compile_options(test_fb_cloud_mqtt PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_cloud_mqtt COMMAND test_fb_cloud_mqtt)
+
+# ---------------------------------------------------------------------------
 # Test harness support library (P2-T5)
 # ---------------------------------------------------------------------------
 
