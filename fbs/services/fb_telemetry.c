@@ -252,9 +252,10 @@ static void on_gauge(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
     if (msg == NULL) return;
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
+    /* The dispatcher passes a pointer to the payload bytes (NOT the Msg envelope).
+     * See core/src/registry/fb_engine.c:459 and the thermostat handler pattern. */
     MSG_TELEMETRY_GAUGE_Payload_t p;
-    memcpy(&p, m->payload, sizeof(p));
+    memcpy(&p, msg, sizeof(p));
     fb_telemetry__agg_gauge(p.metric_id, p.value, p.unit_id);
 }
 
@@ -263,9 +264,8 @@ static void on_counter(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
     if (msg == NULL) return;
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
     MSG_TELEMETRY_COUNTER_Payload_t p;
-    memcpy(&p, m->payload, sizeof(p));
+    memcpy(&p, msg, sizeof(p));
     fb_telemetry__agg_counter(p.metric_id, p.delta, p.unit_id);
 }
 
@@ -274,9 +274,8 @@ static void on_histogram(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
     if (msg == NULL) return;
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
     MSG_TELEMETRY_HISTOGRAM_Payload_t p;
-    memcpy(&p, m->payload, sizeof(p));
+    memcpy(&p, msg, sizeof(p));
     fb_telemetry__agg_histogram(p.metric_id, p.observation, p.unit_id);
 }
 

@@ -34,7 +34,7 @@
  * under EMBEDIQ_PLATFORM_HOST).
  * ------------------------------------------------------------------------- */
 
-extern void fb_cloud_mqtt__publish_telemetry_json_test(const EmbedIQ_Msg_t *m);
+extern void fb_cloud_mqtt__publish_telemetry_json_test(const uint8_t *payload);
 extern void fb_cloud_mqtt__set_topic_test(const char *topic);
 
 /* ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ static void test_telemetry_json_buf_size_sufficient(void)
     EmbedIQ_Msg_t m;
     build_batch(&m, 4294967295u, 65535u, e, 3u);
 
-    fb_cloud_mqtt__publish_telemetry_json_test(&m);
+    fb_cloud_mqtt__publish_telemetry_json_test(m.payload);
 
     ASSERT(g_publish_calls == 1, "worst-case batch must publish");
     ASSERT(g_captured_len > 0u && g_captured_len < CAPTURE_BUF_SIZE,
@@ -190,7 +190,7 @@ static void test_telemetry_json_single_entry_format(void)
     EmbedIQ_Msg_t m;
     build_batch(&m, 100u, 30u, &entry, 1u);
 
-    fb_cloud_mqtt__publish_telemetry_json_test(&m);
+    fb_cloud_mqtt__publish_telemetry_json_test(m.payload);
 
     ASSERT(g_publish_calls == 1, "single-entry batch must publish exactly once");
     ASSERT(g_captured_payload[0] == '{', "JSON must start with '{'");
@@ -223,7 +223,7 @@ static void test_telemetry_json_malformed_payload_rejected(void)
     m.msg_id      = MSG_TELEMETRY_BATCH;
     m.payload_len = 3u;  /* shorter than sizeof(MSG_TELEMETRY_BATCH_Payload_t) = 8 */
 
-    fb_cloud_mqtt__publish_telemetry_json_test(&m);
+    fb_cloud_mqtt__publish_telemetry_json_test(m.payload);
 
     ASSERT(g_publish_calls == 0, "malformed (too-short) batch must NOT publish");
 }
@@ -238,7 +238,7 @@ static void test_telemetry_json_zero_entry_count_rejected(void)
     EmbedIQ_Msg_t m;
     build_batch(&m, 0u, 0u, NULL, 0u);
 
-    fb_cloud_mqtt__publish_telemetry_json_test(&m);
+    fb_cloud_mqtt__publish_telemetry_json_test(m.payload);
 
     ASSERT(g_publish_calls == 0, "zero-entry batch must NOT publish");
 }
