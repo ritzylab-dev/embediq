@@ -1,17 +1,24 @@
-# D-LIB-3 EXCEPTION — 2026-06-12
+# D-LIB-3 EXCEPTION — 2026-06-12 (updated 2026-06-13)
 # This CMakeLists.txt vendors Paho MQTT C v1.3.13 (Eclipse Distribution License v1.0).
 # D-LIB-3 (CODING_RULES.md) states: "third_party/ source is never modified."
 #
-# ONE patch has been applied to the vendored source as an approved D-LIB-3 exception:
-#   File:   src/MQTTProtocolOut.c (lines ~344-351)
-#   Reason: macOS-specific bug — connect() returns 0 synchronously for non-blocking
-#           loopback socket, but first writev() returns EAGAIN. Paho treats
-#           TCPSOCKET_INTERRUPTED (-22) as a fatal send error and discards the pending
-#           write, preventing MQTT CONNECT from reaching the broker.
-#   Fix:    TCPSOCKET_INTERRUPTED in the sync-connect path sets WAIT_FOR_CONNACK
-#           (not NOT_IN_PROGRESS). Dispatch thread flushes pending write normally.
-#   Doc:    See PAHO_PATCHES.md in this directory for full change description.
-#   Upstream: Not yet reported. Fix is applicable to Paho 1.3.13.
+# TWO patches have been applied to the vendored Paho source as approved D-LIB-3 exceptions.
+# See PAHO_PATCHES.md in this directory for full details.
+#   Patch 1 (PR #160): src/MQTTProtocolOut.c — TCPSOCKET_INTERRUPTED → WAIT_FOR_CONNACK
+#            on macOS loopback synchronous connect (EAGAIN on first writev).
+#   Patch 2 (PR #161): src/Socket.c — EPROTOTYPE → TCPSOCKET_INTERRUPTED under __APPLE__
+#            (macOS kernel quirk: EPROTOTYPE=41 on first writev after loopback connect).
+#
+# macOS SEMAPHORE BUILD FIX (PR #162) — not a D-LIB-3 source patch:
+# Paho Thread.c/.h uses '#if defined(OSX)' to select macOS GCD dispatch semaphores
+# (dispatch_semaphore_create). Without -DOSX, macOS compiles the Linux sem_init() path.
+# On macOS, sem_init() returns ENOSYS — all four Paho semaphores (connect_sem,
+# connack_sem, suback_sem, unsuback_sem) silently report rc=-1 at creation. The
+# uninitialised sem_t causes sem_trywait() to return EINVAL, which the trywait loop
+# treats as immediate success (rc=0). All semaphore waits become no-ops. Result:
+# MQTTClient_connect() exits immediately with a NULL CONNACK pack → SOCKET_ERROR.
+# Fix: $<$<PLATFORM_ID:Darwin>:OSX> added to target_compile_definitions (below).
+# libdispatch is in libSystem.dylib — no explicit framework link is required.
 
 # third_party/paho.mqtt.c/CMakeLists.txt — EmbedIQ vendored Paho MQTT C v1.3.13
 #
@@ -61,6 +68,7 @@ target_compile_definitions(embediq_paho_mqtt PUBLIC
 # Paho's upstream CMakeLists sets this — reproduce it here.
 target_compile_definitions(embediq_paho_mqtt PRIVATE
     $<$<PLATFORM_ID:Linux>:_GNU_SOURCE>
+    $<$<PLATFORM_ID:Darwin>:OSX>
 )
 
 # Suppress vendored source warnings (D-LIB-3: we do not own or modify this source)
