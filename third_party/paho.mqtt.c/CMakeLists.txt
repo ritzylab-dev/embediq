@@ -1,3 +1,18 @@
+# D-LIB-3 EXCEPTION — 2026-06-12
+# This CMakeLists.txt vendors Paho MQTT C v1.3.13 (Eclipse Distribution License v1.0).
+# D-LIB-3 (CODING_RULES.md) states: "third_party/ source is never modified."
+#
+# ONE patch has been applied to the vendored source as an approved D-LIB-3 exception:
+#   File:   src/MQTTProtocolOut.c (lines ~344-351)
+#   Reason: macOS-specific bug — connect() returns 0 synchronously for non-blocking
+#           loopback socket, but first writev() returns EAGAIN. Paho treats
+#           TCPSOCKET_INTERRUPTED (-22) as a fatal send error and discards the pending
+#           write, preventing MQTT CONNECT from reaching the broker.
+#   Fix:    TCPSOCKET_INTERRUPTED in the sync-connect path sets WAIT_FOR_CONNACK
+#           (not NOT_IN_PROGRESS). Dispatch thread flushes pending write normally.
+#   Doc:    See PAHO_PATCHES.md in this directory for full change description.
+#   Upstream: Not yet reported. Fix is applicable to Paho 1.3.13.
+
 # third_party/paho.mqtt.c/CMakeLists.txt — EmbedIQ vendored Paho MQTT C v1.3.13
 #
 # Builds the synchronous MQTTClient API as a static library: embediq_paho_mqtt.

@@ -24,10 +24,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include <arpa/inet.h>   /* inet_pton */
-#include <errno.h>       /* errno, strerror */
-#include <unistd.h>      /* close */
-
 #ifndef EMBEDIQ_HAL_SRC_MQTT
 #  define EMBEDIQ_HAL_SRC_MQTT  0xD9u
 #endif
@@ -95,6 +91,9 @@ static embediq_err_t mqtt_connect(const embediq_mqtt_connect_params_t *params)
                                    paho_conn_lost, paho_msg_arrived, NULL);
 
     MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
+    opts.MQTTVersion       = MQTTVERSION_3_1_1;  /* = 4; explicit v3.1.1 avoids double-attempt
+                                                   * overhead from MQTTVERSION_DEFAULT = 0.
+                                                   * Mosquitto 2.x requires MQTT 3.1.1 minimum. */
     opts.username          = (params->username && params->username[0]) ?
                              params->username : NULL;
     opts.password          = (params->password && params->password[0]) ?
@@ -121,34 +120,6 @@ static embediq_err_t mqtt_connect(const embediq_mqtt_connect_params_t *params)
     if (rc != MQTTCLIENT_SUCCESS) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_MQTT, HAL_ERR_IO);
         printf("[MQTT HAL] MQTTClient_connect failed: rc=%d\n", rc);
-        /* Diagnostic: raw blocking TCP probe to determine actual errno.
-         * If probe returns 0  → Mosquitto is alive at TCP level (issue is MQTT layer).
-         * If probe returns -1 → get errno to know why TCP itself failed.
-         * Using a blocking socket on 127.0.0.1 returns immediately (loopback). */
-        {
-            int diag_fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (diag_fd >= 0) {
-                struct sockaddr_in diag_sa;
-                (void)memset(&diag_sa, 0, sizeof(diag_sa));
-                diag_sa.sin_family      = AF_INET;
-                diag_sa.sin_port        = htons((uint16_t)params->port);
-                (void)inet_pton(AF_INET, params->host, &diag_sa.sin_addr);
-                int diag_rc = connect(diag_fd, (struct sockaddr *)&diag_sa,
-                                      (socklen_t)sizeof(diag_sa));
-                int diag_err = (diag_rc != 0) ? errno : 0;
-                if (diag_rc == 0) {
-                    printf("[MQTT HAL]   TCP probe: connect('%s:%u') = 0 (SUCCESS)"
-                           " — broker alive at TCP level; issue is MQTT layer\n",
-                           params->host, (unsigned)params->port);
-                } else {
-                    printf("[MQTT HAL]   TCP probe: connect('%s:%u') = -1"
-                           " errno=%d (%s)\n",
-                           params->host, (unsigned)params->port,
-                           diag_err, strerror(diag_err));
-                }
-                (void)close(diag_fd);
-            }
-        }
         MQTTClient_destroy(&s_client);
         s_client    = NULL;
         return EMBEDIQ_ERR;

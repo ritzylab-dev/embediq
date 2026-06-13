@@ -346,6 +346,20 @@ int MQTTProtocol_connect(const char* ip_address, Clients* aClient, int websocket
 			/* Now send the MQTT connect packet */
 			if ((rc = MQTTPacket_send_connect(aClient, MQTTVersion, connectProperties, willProperties)) == 0)
 				aClient->connect_state = WAIT_FOR_CONNACK; /* MQTT Connect sent - wait for CONNACK */
+			else if (rc == TCPSOCKET_INTERRUPTED)
+			{
+				/* macOS-specific: connect() returns 0 (synchronous loopback) but the first
+				 * writev() returns EAGAIN — socket not yet write-ready. Socket_putdatas()
+				 * stores the CONNECT bytes as a pending write (SocketBuffer) and returns
+				 * TCPSOCKET_INTERRUPTED (-22). The dispatch thread flushes this write via
+				 * Socket_continueWrites() at its next poll cycle. Setting WAIT_FOR_CONNACK
+				 * allows connectURIVersion() to wait for CONNACK normally.
+				 *
+				 * D-LIB-3 exception: macOS platform bug in Paho 1.3.13. No workaround
+				 * outside the library. See third_party/paho.mqtt.c/PAHO_PATCHES.md. */
+				aClient->connect_state = WAIT_FOR_CONNACK;
+				rc = 0; /* not a fatal error — pending write will be flushed by dispatch thread */
+			}
 			else
 				aClient->connect_state = NOT_IN_PROGRESS;
 		}
