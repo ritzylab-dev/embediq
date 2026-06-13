@@ -20,7 +20,7 @@
 #include "embediq_config.h"
 #include "embediq_obs.h"
 #include "embediq_platform_msgs.h"
-#include "telemetry_msg_catalog.h"    /* MSG_TELEMETRY_BATCH */
+#include "embediq_telemetry.h"    /* MSG_TELEMETRY_BATCH, EmbedIQ_Telemetry_Batch_Entry_t */
 #include "ops/embediq_mqtt.h"
 
 #include <stdint.h>
@@ -58,6 +58,28 @@ static char s_telemetry_topic[MQTT_TOPIC_MAX];
 static const uint8_t k_will_payload[] = "{\"online\":false}";
 
 /* ---------------------------------------------------------------------------
+ * JSON serialisation for MSG_TELEMETRY_BATCH payloads.
+ *
+ * The cloud bridge (app/bridge.py) calls json.loads() on all telemetry
+ * messages. Publishing raw binary causes a ValueError → message dropped.
+ * This buffer holds the serialised JSON form before each MQTT publish.
+ *
+ * Buffer size derivation (first-principles):
+ *   Prefix:  {"ts":4294967295,"window_dur_s":65535,"metrics":{ = 49 chars
+ *   Entries: TEL_ENTRIES_PER_BATCH = (EMBEDIQ_MSG_MAX_PAYLOAD - 8) / 18 = 3
+ *   Per-entry max: "65535":-3.40282e+38, = 21 chars (metric_id max 65535,
+ *                  %.6g of -FLT_MAX = -3.40282e+38 = 12 chars, comma = 1)
+ *   Last entry has no comma: 20 chars
+ *   Suffix:  }} = 2 chars
+ *   Total:   49 + 21 + 21 + 20 + 2 = 113 chars max
+ *   Buffer:  256 bytes → 143-byte safety margin. Derived, not guessed.
+ * ------------------------------------------------------------------------- */
+#define MQTT_JSON_BUF_SIZE  256u
+_Static_assert(MQTT_JSON_BUF_SIZE >= 114u,
+               "MQTT_JSON_BUF_SIZE insufficient for worst-case telemetry batch JSON");
+static char s_json_buf[MQTT_JSON_BUF_SIZE];
+
+/* ---------------------------------------------------------------------------
  * Ring buffer helpers
  * ------------------------------------------------------------------------- */
 
@@ -85,6 +107,10 @@ static bool ring_pop(EmbedIQ_Msg_t *out)
 /* ---------------------------------------------------------------------------
  * Build params from NVM config and try connect
  * ------------------------------------------------------------------------- */
+
+/* Forward decl — publish_telemetry_json is defined later but called by
+ * attempt_connect()'s ring-buffer flush path. */
+static void publish_telemetry_json(const EmbedIQ_Msg_t *m);
 
 static void attempt_connect(void)
 {
@@ -152,14 +178,10 @@ static void attempt_connect(void)
                                1u);  /* QoS 1 — retain = false (bridge handles) */
         }
 
-        /* Flush ring buffer */
+        /* Flush ring buffer — serialise each buffered batch to JSON */
         EmbedIQ_Msg_t buffered;
         while (ring_pop(&buffered)) {
-            if (buffered.payload_len > 0u) {
-                (void)ops->publish(s_telemetry_topic,
-                                   buffered.payload,
-                                   buffered.payload_len, 0u);
-            }
+            publish_telemetry_json(&buffered);
         }
     } else {
         s_state = EMBEDIQ_MQTT_STATE_RECONNECTING;
@@ -229,6 +251,91 @@ static void sf_timer(EmbedIQ_FB_Handle_t fb, const void *msg,
     }
 }
 
+/* Decode one MSG_TELEMETRY_BATCH message from the bus, serialise to JSON, and
+ * publish to the telemetry MQTT topic.
+ *
+ * JSON schema: {"ts":N,"window_dur_s":N,"metrics":{"ID":V,...}}
+ *   ts            — window_start_s (seconds; 0 when no wall clock is available)
+ *   window_dur_s  — window duration in seconds
+ *   metrics keys  — decimal string of metric_id (uint16)
+ *   metrics values — value_a (primary value: avg for gauge, total for counter,
+ *                    mean for histogram)
+ *
+ * Returns without publishing if:
+ *   - m is NULL or payload is too short to hold a valid batch header
+ *   - entry_count is 0 or payload is too short to hold the declared entries
+ *   - snprintf truncation is detected at any stage
+ *   - ops or topic not available
+ */
+static void publish_telemetry_json(const EmbedIQ_Msg_t *m)
+{
+    if (m == NULL || m->payload_len < (uint16_t)sizeof(MSG_TELEMETRY_BATCH_Payload_t)) {
+        return;
+    }
+
+    /* Decode header with memcpy — payload[] is uint8_t[], alignment not guaranteed. */
+    MSG_TELEMETRY_BATCH_Payload_t hdr;
+    (void)memcpy(&hdr, &m->payload[0], sizeof(hdr));
+
+    if (hdr.entry_count == 0u) {
+        return;
+    }
+
+    /* Guard: payload must be large enough to hold all declared entries. */
+    uint32_t expected = (uint32_t)sizeof(MSG_TELEMETRY_BATCH_Payload_t) +
+                        (uint32_t)hdr.entry_count *
+                        (uint32_t)sizeof(EmbedIQ_Telemetry_Batch_Entry_t);
+    if ((uint32_t)m->payload_len < expected) {
+        return;  /* malformed batch — drop silently */
+    }
+
+    /* Serialise prefix. */
+    int pos = snprintf(s_json_buf, sizeof(s_json_buf),
+                       "{\"ts\":%lu,\"window_dur_s\":%u,\"metrics\":{",
+                       (unsigned long)hdr.window_start_s,
+                       (unsigned)hdr.window_dur_s);
+    if (pos < 0 || (uint32_t)pos >= (uint32_t)sizeof(s_json_buf)) {
+        return;
+    }
+
+    /* Serialise each entry. */
+    for (uint8_t i = 0u; i < hdr.entry_count; i++) {
+        EmbedIQ_Telemetry_Batch_Entry_t entry;
+        size_t offset = sizeof(MSG_TELEMETRY_BATCH_Payload_t) +
+                        (size_t)i * sizeof(EmbedIQ_Telemetry_Batch_Entry_t);
+        (void)memcpy(&entry, &m->payload[offset], sizeof(entry));
+
+        const char *sep = (i < (hdr.entry_count - 1u)) ? "," : "";
+        int w = snprintf(s_json_buf + pos,
+                         sizeof(s_json_buf) - (size_t)pos,
+                         "\"%u\":%.6g%s",
+                         (unsigned)entry.metric_id,
+                         (double)entry.value_a,
+                         sep);
+        if (w < 0 || ((uint32_t)pos + (uint32_t)w) >= (uint32_t)sizeof(s_json_buf)) {
+            return;
+        }
+        pos += w;
+    }
+
+    /* Close JSON object. */
+    int wc = snprintf(s_json_buf + pos,
+                      sizeof(s_json_buf) - (size_t)pos,
+                      "}}");
+    if (wc < 0 || ((uint32_t)pos + (uint32_t)wc) >= (uint32_t)sizeof(s_json_buf)) {
+        return;
+    }
+    pos += wc;
+
+    /* Publish JSON. */
+    const embediq_mqtt_ops_t *ops = embediq_mqtt_ops_get();
+    if (ops != NULL && s_telemetry_topic[0] != '\0') {
+        (void)ops->publish(s_telemetry_topic,
+                           (const uint8_t *)s_json_buf,
+                           (uint32_t)pos, 0u);
+    }
+}
+
 static void sf_telemetry(EmbedIQ_FB_Handle_t fb, const void *msg,
                           void *fb_data, void *subfn_data)
 {
@@ -237,10 +344,9 @@ static void sf_telemetry(EmbedIQ_FB_Handle_t fb, const void *msg,
     const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
     if (m->payload_len == 0u) { return; }
 
-    const embediq_mqtt_ops_t *ops = embediq_mqtt_ops_get();
-    if (s_state == EMBEDIQ_MQTT_STATE_CONNECTED && ops &&
+    if (s_state == EMBEDIQ_MQTT_STATE_CONNECTED &&
         s_telemetry_topic[0] != '\0') {
-        (void)ops->publish(s_telemetry_topic, m->payload, m->payload_len, 0u);
+        publish_telemetry_json(m);
     } else {
         ring_push(m);
     }
@@ -325,3 +431,22 @@ EmbedIQ_FB_Handle_t fb_cloud_mqtt_register(void)
     };
     return embediq_fb_register(&k_cfg);
 }
+
+#ifdef EMBEDIQ_PLATFORM_HOST
+/* ---------------------------------------------------------------------------
+ * Test-only accessors (host/test builds only — never linked into production)
+ * Exposes publish_telemetry_json() and a setter for the topic so the unit
+ * test (tests/unit/test_fb_cloud_mqtt.c) can drive the JSON code path without
+ * boot/connect machinery.
+ * ------------------------------------------------------------------------- */
+void fb_cloud_mqtt__publish_telemetry_json_test(const EmbedIQ_Msg_t *m)
+{
+    publish_telemetry_json(m);
+}
+
+void fb_cloud_mqtt__set_topic_test(const char *topic)
+{
+    if (topic == NULL) { s_telemetry_topic[0] = '\0'; return; }
+    (void)snprintf(s_telemetry_topic, sizeof(s_telemetry_topic), "%s", topic);
+}
+#endif /* EMBEDIQ_PLATFORM_HOST */
