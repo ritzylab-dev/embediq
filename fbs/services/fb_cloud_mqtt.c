@@ -109,8 +109,11 @@ static bool ring_pop(EmbedIQ_Msg_t *out)
  * ------------------------------------------------------------------------- */
 
 /* Forward decl — publish_telemetry_json is defined later but called by
- * attempt_connect()'s ring-buffer flush path. */
-static void publish_telemetry_json(const EmbedIQ_Msg_t *m);
+ * attempt_connect()'s ring-buffer flush path.
+ * Takes a pointer to the MSG_TELEMETRY_BATCH payload bytes (header + entries).
+ * The dispatcher passes payload bytes (not the Msg envelope) to sub-fn handlers —
+ * see core/src/registry/fb_engine.c:459 and examples/thermostat/fb_temp_controller.c. */
+static void publish_telemetry_json(const uint8_t *payload);
 
 static void attempt_connect(void)
 {
@@ -181,7 +184,7 @@ static void attempt_connect(void)
         /* Flush ring buffer — serialise each buffered batch to JSON */
         EmbedIQ_Msg_t buffered;
         while (ring_pop(&buffered)) {
-            publish_telemetry_json(&buffered);
+            publish_telemetry_json(buffered.payload);
         }
     } else {
         s_state = EMBEDIQ_MQTT_STATE_RECONNECTING;
@@ -267,26 +270,18 @@ static void sf_timer(EmbedIQ_FB_Handle_t fb, const void *msg,
  *   - snprintf truncation is detected at any stage
  *   - ops or topic not available
  */
-static void publish_telemetry_json(const EmbedIQ_Msg_t *m)
+static void publish_telemetry_json(const uint8_t *payload)
 {
-    if (m == NULL || m->payload_len < (uint16_t)sizeof(MSG_TELEMETRY_BATCH_Payload_t)) {
+    if (payload == NULL) {
         return;
     }
 
-    /* Decode header with memcpy — payload[] is uint8_t[], alignment not guaranteed. */
+    /* Decode header with memcpy — payload bytes are uint8_t, alignment not guaranteed. */
     MSG_TELEMETRY_BATCH_Payload_t hdr;
-    (void)memcpy(&hdr, &m->payload[0], sizeof(hdr));
+    (void)memcpy(&hdr, payload, sizeof(hdr));
 
     if (hdr.entry_count == 0u) {
         return;
-    }
-
-    /* Guard: payload must be large enough to hold all declared entries. */
-    uint32_t expected = (uint32_t)sizeof(MSG_TELEMETRY_BATCH_Payload_t) +
-                        (uint32_t)hdr.entry_count *
-                        (uint32_t)sizeof(EmbedIQ_Telemetry_Batch_Entry_t);
-    if ((uint32_t)m->payload_len < expected) {
-        return;  /* malformed batch — drop silently */
     }
 
     /* Serialise prefix. */
@@ -303,7 +298,7 @@ static void publish_telemetry_json(const EmbedIQ_Msg_t *m)
         EmbedIQ_Telemetry_Batch_Entry_t entry;
         size_t offset = sizeof(MSG_TELEMETRY_BATCH_Payload_t) +
                         (size_t)i * sizeof(EmbedIQ_Telemetry_Batch_Entry_t);
-        (void)memcpy(&entry, &m->payload[offset], sizeof(entry));
+        (void)memcpy(&entry, payload + offset, sizeof(entry));
 
         const char *sep = (i < (hdr.entry_count - 1u)) ? "," : "";
         int w = snprintf(s_json_buf + pos,
@@ -341,14 +336,35 @@ static void sf_telemetry(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
     if (!msg) { return; }
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
-    if (m->payload_len == 0u) { return; }
+
+    /* The dispatcher passes a pointer to the payload bytes (NOT the Msg envelope).
+     * See core/src/registry/fb_engine.c:459 (`dispatch_msg_to_fb(fb, msg.msg_id,
+     * msg.payload)`) and the convention used in examples/thermostat/fb_temp_controller.c
+     * and tests/integration/test_thermostat_observable.c which passes &TempReading_t. */
+    const uint8_t *payload = (const uint8_t *)msg;
 
     if (s_state == EMBEDIQ_MQTT_STATE_CONNECTED &&
         s_telemetry_topic[0] != '\0') {
-        publish_telemetry_json(m);
+        publish_telemetry_json(payload);
     } else {
-        ring_push(m);
+        /* Offline: stash the batch in the ring so we can flush on reconnect.
+         * Compute payload_len from the batch header's entry_count and synthesise
+         * a Msg envelope for ring_push. */
+        MSG_TELEMETRY_BATCH_Payload_t hdr;
+        (void)memcpy(&hdr, payload, sizeof(hdr));
+        if (hdr.entry_count == 0u) { return; }
+
+        uint32_t plen = (uint32_t)sizeof(hdr) +
+                        (uint32_t)hdr.entry_count *
+                        (uint32_t)sizeof(EmbedIQ_Telemetry_Batch_Entry_t);
+        if (plen > (uint32_t)EMBEDIQ_MSG_MAX_PAYLOAD) { return; }
+
+        EmbedIQ_Msg_t buffered;
+        (void)memset(&buffered, 0, sizeof(buffered));
+        buffered.msg_id      = MSG_TELEMETRY_BATCH;
+        buffered.payload_len = (uint16_t)plen;
+        (void)memcpy(buffered.payload, payload, plen);
+        ring_push(&buffered);
     }
 }
 
@@ -439,9 +455,9 @@ EmbedIQ_FB_Handle_t fb_cloud_mqtt_register(void)
  * test (tests/unit/test_fb_cloud_mqtt.c) can drive the JSON code path without
  * boot/connect machinery.
  * ------------------------------------------------------------------------- */
-void fb_cloud_mqtt__publish_telemetry_json_test(const EmbedIQ_Msg_t *m)
+void fb_cloud_mqtt__publish_telemetry_json_test(const uint8_t *payload)
 {
-    publish_telemetry_json(m);
+    publish_telemetry_json(payload);
 }
 
 void fb_cloud_mqtt__set_topic_test(const char *topic)
