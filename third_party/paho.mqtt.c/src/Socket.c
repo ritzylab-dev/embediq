@@ -763,6 +763,13 @@ for testing purposes only!
 		int err = Socket_error("writev - putdatas", socket);
 		if (err == EWOULDBLOCK || err == EAGAIN)
 			rc = TCPSOCKET_INTERRUPTED;
+#if defined(__APPLE__)
+		else if (err == EPROTOTYPE)
+			rc = TCPSOCKET_INTERRUPTED;  /* macOS EPROTOTYPE (errno=41): transient on
+			                              * first writev() after synchronous loopback
+			                              * connect(). Treat as retry-later, same
+			                              * semantics as EAGAIN. PAHO_PATCHES.md Patch 2. */
+#endif
 	}
 	else
 		*bytes = rc;

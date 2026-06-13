@@ -59,3 +59,65 @@ send buffer or intercept the write failure without modifying the library.
 Not yet reported. The fix is correct for Paho 1.3.13 and is likely applicable to later
 versions. If the embedded project upgrades Paho, verify this patch is no longer needed
 or re-apply it.
+
+---
+
+## Patch 2 — EPROTOTYPE mapping in Socket_writev (macOS)
+
+**File:** `src/Socket.c`
+**Paho version:** 1.3.13
+**Date applied:** 2026-06-12
+**PR:** fix/pr161-mqtt-eprototype
+
+### Problem
+
+PR #160 (Patch 1 in MQTTProtocolOut.c) fixed the TCPSOCKET_INTERRUPTED path so that
+a pending-write result from `MQTTPacket_send_connect()` sets WAIT_FOR_CONNACK instead
+of NOT_IN_PROGRESS. That patch handles errno EAGAIN (= 35 on macOS).
+
+However, on macOS the first `writev()` after a synchronous non-blocking loopback
+`connect()` can return errno EPROTOTYPE (= 41, "Protocol wrong type for socket")
+instead of EAGAIN. This is a documented macOS kernel quirk — the kernel has not
+fully transitioned the socket from SYN_SENT to ESTABLISHED state at the time of
+the first write attempt.
+
+`Socket_writev()` (lines 760–766) mapped only `EWOULDBLOCK` (= 35) and `EAGAIN`
+(= 35 on macOS, same value) to `TCPSOCKET_INTERRUPTED`. EPROTOTYPE = 41 was not
+in the list, so `writev()` failure with errno 41 propagated as `SOCKET_ERROR`.
+This caused `MQTTPacket_send_connect()` to return `SOCKET_ERROR`, bypassing the
+`else if (rc == TCPSOCKET_INTERRUPTED)` branch added by Patch 1, and landing on
+the `else` branch → `connect_state = NOT_IN_PROGRESS` → immediate fatal exit.
+Mosquitto saw TCP connect + FIN with no MQTT CONNECT packet.
+
+### Fix
+
+Added `else if (err == EPROTOTYPE)` under `#if defined(__APPLE__)` guard in
+`Socket_writev()`. Maps EPROTOTYPE → TCPSOCKET_INTERRUPTED on macOS. Linux and
+Windows compilation are unaffected (EPROTOTYPE is not defined on Linux; the Windows
+path is in a separate `#if defined(_WIN32) || defined(_WIN64)` block).
+
+After this fix, the EPROTOTYPE path flows through:
+1. `Socket_writev()` → TCPSOCKET_INTERRUPTED
+2. `Socket_putdatas()` → stores pending write in SocketBuffer → returns TCPSOCKET_INTERRUPTED
+3. `MQTTPacket_send_connect()` → returns TCPSOCKET_INTERRUPTED
+4. `MQTTProtocolOut.c` (Patch 1) → `else if (rc == TCPSOCKET_INTERRUPTED)` →
+   `connect_state = WAIT_FOR_CONNACK`, `rc = 0`
+5. Dispatch thread flushes pending write via `Socket_continueWrites()`
+6. Mosquitto receives CONNECT, sends CONNACK → `MQTTClient_connect()` succeeds
+
+### Note on Socket_error() logging
+
+`Socket_error()` (Socket.c line 120) logs EPROTOTYPE at `TRACE_MINIMUM` level:
+`"Socket error Protocol wrong type for socket(41) in writev - putdatas for socket N"`.
+This log message will appear in Debug builds (if Paho trace callback is active) but
+does NOT indicate a fatal error — the error is now handled by the EPROTOTYPE branch.
+
+### Why no external workaround
+
+The `SOCKET` fd is not accessible from outside `MQTTClient_connect()`. There is no
+way to intercept or suppress the EPROTOTYPE failure without modifying the library.
+
+### Upstream status
+
+Not yet reported. Fix is correct for Paho 1.3.13. If the project upgrades Paho,
+verify this patch is still needed or re-apply.

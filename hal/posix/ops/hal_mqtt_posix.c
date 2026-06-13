@@ -56,6 +56,20 @@ static void paho_conn_lost(void *context, char *cause)
 }
 
 /* ---------------------------------------------------------------------------
+ * Paho trace callback — Debug builds only.
+ * Routes Paho's internal Log(TRACE_MINIMUM, ...) and Log(LOG_SEVERE, ...)
+ * calls to stdout so Socket_error() messages are visible (e.g., EPROTOTYPE).
+ * NDEBUG is set by CMake in Release/RelWithDebInfo builds.
+ * ------------------------------------------------------------------------- */
+#ifndef NDEBUG
+static void paho_trace_cb(enum MQTTCLIENT_TRACE_LEVELS level, char *message)
+{
+    (void)level;
+    printf("[PAHO TRACE] %s\n", message);
+}
+#endif /* !NDEBUG */
+
+/* ---------------------------------------------------------------------------
  * Ops implementations
  * EMBEDIQ_HAL_OBS_EMIT_ERROR required before every non-OK return.
  * ------------------------------------------------------------------------- */
@@ -212,6 +226,11 @@ static void hal_mqtt_posix_init(void)
 {
     s_client    = NULL;
     s_connected = false;
+#ifndef NDEBUG
+    /* Route Paho internal trace to stdout for Debug builds. */
+    MQTTClient_setTraceLevel(MQTTCLIENT_TRACE_MINIMUM);
+    MQTTClient_setTraceCallback(paho_trace_cb);
+#endif
     (void)embediq_mqtt_register_ops(&g_posix_ops);
 }
 
