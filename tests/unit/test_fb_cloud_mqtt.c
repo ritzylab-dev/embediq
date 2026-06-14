@@ -38,6 +38,13 @@ extern void fb_cloud_mqtt__publish_telemetry_json_test(const uint8_t *payload);
 extern void fb_cloud_mqtt__set_topic_test(const char *topic);
 
 /* ---------------------------------------------------------------------------
+ * Package-internal Observatory API (host test builds only)
+ * Same pattern as test_observatory.c
+ * ------------------------------------------------------------------------- */
+extern void     obs__reset(void);
+extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
+
+/* ---------------------------------------------------------------------------
  * Mock MQTT ops table — captures the most recent publish call.
  * ------------------------------------------------------------------------- */
 
@@ -87,6 +94,31 @@ static embediq_mqtt_ops_t g_mock_ops = {
     .connect     = mock_connect,
     .disconnect  = mock_disconnect,
     .publish     = mock_publish,
+    .subscribe   = mock_subscribe,
+    .unsubscribe = mock_unsubscribe,
+    .on_receive  = mock_on_receive,
+};
+
+/* Failing mock — returns EMBEDIQ_ERR to exercise publish-failure path */
+static embediq_err_t mock_publish_failing(const char *topic,
+                                           const uint8_t *payload,
+                                           uint32_t len, uint8_t qos)
+{
+    (void)qos;
+    g_publish_calls++;   /* count that publish was attempted */
+    if (topic) {
+        (void)snprintf(g_captured_topic, sizeof(g_captured_topic), "%s", topic);
+    }
+    (void)payload;
+    (void)len;
+    return EMBEDIQ_ERR;  /* simulate a HAL-level publish failure */
+}
+
+static embediq_mqtt_ops_t g_mock_ops_failing = {
+    .version     = EMBEDIQ_MQTT_OPS_VERSION,
+    .connect     = mock_connect,
+    .disconnect  = mock_disconnect,
+    .publish     = mock_publish_failing,
     .subscribe   = mock_subscribe,
     .unsubscribe = mock_unsubscribe,
     .on_receive  = mock_on_receive,
@@ -243,6 +275,95 @@ static void test_telemetry_json_zero_entry_count_rejected(void)
     ASSERT(g_publish_calls == 0, "zero-entry batch must NOT publish");
 }
 
+/* Test 5 — NULL payload triggers OBS fault (path 0) and does NOT publish */
+static void test_publish_json_null_payload_emits_fault(void)
+{
+    (void)embediq_mqtt_register_ops(&g_mock_ops);
+    fb_cloud_mqtt__set_topic_test("embediq/dev/telemetry");
+    reset_capture();
+    obs__reset();   /* clear ring so index 0 is the first event from this test */
+
+    fb_cloud_mqtt__publish_telemetry_json_test(NULL);
+
+    /* Publish must NOT have been called */
+    ASSERT(g_publish_calls == 0, "NULL payload must not reach publish");
+
+    /* OBS fault must have fired at path 0 */
+    EmbedIQ_Event_t fault_evt;
+    (void)memset(&fault_evt, 0, sizeof(fault_evt));
+    bool got_event = obs__ring_read(0u, &fault_evt);
+    ASSERT(got_event, "OBS ring must have an event after NULL payload path");
+    ASSERT(fault_evt.event_type == EMBEDIQ_OBS_EVT_FAULT,
+           "event_type must be EMBEDIQ_OBS_EVT_FAULT (0x60)");
+    ASSERT(fault_evt.state_or_flag == 0u,
+           "state must be 0 for NULL payload path (path 0)");
+}
+
+/* Test 6 — entry_count==0 triggers OBS fault (path 1) and does NOT publish */
+static void test_publish_json_zero_entries_emits_fault(void)
+{
+    (void)embediq_mqtt_register_ops(&g_mock_ops);
+    fb_cloud_mqtt__set_topic_test("embediq/dev/telemetry");
+    reset_capture();
+    obs__reset();
+
+    EmbedIQ_Msg_t m;
+    build_batch(&m, 0u, 0u, NULL, 0u);  /* entry_count = 0 */
+
+    fb_cloud_mqtt__publish_telemetry_json_test(m.payload);
+
+    /* Publish must NOT have been called */
+    ASSERT(g_publish_calls == 0, "zero-entry batch must not reach publish");
+
+    /* OBS fault must have fired at path 1 */
+    EmbedIQ_Event_t fault_evt;
+    (void)memset(&fault_evt, 0, sizeof(fault_evt));
+    bool got_event = obs__ring_read(0u, &fault_evt);
+    ASSERT(got_event, "OBS ring must have an event after zero-entry path");
+    ASSERT(fault_evt.event_type == EMBEDIQ_OBS_EVT_FAULT,
+           "event_type must be EMBEDIQ_OBS_EVT_FAULT (0x60)");
+    ASSERT(fault_evt.state_or_flag == 1u,
+           "state must be 1 for entry_count==0 path (path 1)");
+}
+
+/* Test 7 — ops->publish() returning EMBEDIQ_ERR triggers OBS fault (path 5)
+ * AFTER the publish attempt is made */
+static void test_publish_json_publish_failure_emits_fault(void)
+{
+    /* Register failing ops — publish returns EMBEDIQ_ERR */
+    (void)embediq_mqtt_register_ops(&g_mock_ops_failing);
+    fb_cloud_mqtt__set_topic_test("embediq/dev/telemetry");
+    reset_capture();
+    obs__reset();
+
+    EmbedIQ_Telemetry_Batch_Entry_t entry;
+    (void)memset(&entry, 0, sizeof(entry));
+    entry.metric_id = 42u;
+    entry.value_a   = 1.0f;
+    entry.count     = 1u;
+
+    EmbedIQ_Msg_t m;
+    build_batch(&m, 100u, 30u, &entry, 1u);
+
+    fb_cloud_mqtt__publish_telemetry_json_test(m.payload);
+
+    /* Publish MUST have been attempted (path 5 fires AFTER the call) */
+    ASSERT(g_publish_calls == 1, "publish must be attempted before failure OBS fires");
+
+    /* OBS fault must have fired at path 5 */
+    EmbedIQ_Event_t fault_evt;
+    (void)memset(&fault_evt, 0, sizeof(fault_evt));
+    bool got_event = obs__ring_read(0u, &fault_evt);
+    ASSERT(got_event, "OBS ring must have an event after publish failure");
+    ASSERT(fault_evt.event_type == EMBEDIQ_OBS_EVT_FAULT,
+           "event_type must be EMBEDIQ_OBS_EVT_FAULT (0x60)");
+    ASSERT(fault_evt.state_or_flag == 5u,
+           "state must be 5 for publish-failure path (path 5)");
+
+    /* Restore good ops so subsequent tests in the suite work correctly */
+    (void)embediq_mqtt_register_ops(&g_mock_ops);
+}
+
 int main(void)
 {
     printf("=== test_fb_cloud_mqtt ===\n");
@@ -250,6 +371,9 @@ int main(void)
     test_telemetry_json_single_entry_format();
     test_telemetry_json_malformed_payload_rejected();
     test_telemetry_json_zero_entry_count_rejected();
+    test_publish_json_null_payload_emits_fault();
+    test_publish_json_zero_entries_emits_fault();
+    test_publish_json_publish_failure_emits_fault();
     printf("\n%d/%d tests passed. (%d failed)\n", g_run - g_fail, g_run, g_fail);
     return (g_fail == 0) ? 0 : 1;
 }
