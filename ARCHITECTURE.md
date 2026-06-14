@@ -672,9 +672,9 @@ with normal batch sizes; they are covered by code inspection.
 
 **Architectural obligations for all Service FBs (binding — see CODING_RULES.md):**
 
-- **R-sub-13:** `ops->*()` return values must never be discarded with `(void)`.
+- **R-sub-17:** `ops->*()` return values must never be discarded with `(void)`.
   Check the return. Emit `EMBEDIQ_OBS_EMIT_FAULT` on failure.
-- **R-sub-14:** Every early return in a publish or dispatch path must emit
+- **R-sub-18:** Every early return in a publish or dispatch path must emit
   `EMBEDIQ_OBS_EMIT_FAULT` with a distinct `state` value identifying the path.
 - Unit tests must exercise at least: null-input, zero-entry, and ops-failure paths.
 

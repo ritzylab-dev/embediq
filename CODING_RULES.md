@@ -251,7 +251,7 @@ See AGENTS.md Section 6 for the full list.
 
 ---
 
-### R-sub-13 · Never silence an ops table return value
+### R-sub-17 · Never silence an ops table return value
 
 Service FBs call platform capability through ops tables. Wrapping the call
 in `(void)` means a HAL-level failure is invisible at the service layer —
@@ -277,7 +277,7 @@ Root cause of PR #163 regression: `(void)ops->publish(...)` in
 
 ---
 
-### R-sub-14 · Emit OBS fault before every early return in a publish path
+### R-sub-18 · Emit OBS fault before every early return in a publish path
 
 Every `return;` in a publish or dispatch function that exits before data
 reaches the transport is a fault path. Silent early returns mean a broker
@@ -309,7 +309,7 @@ Using it for fault paths is always correct — never use a gated macro
 
 ---
 
-### R-sub-15 · Verify every constant from the source file — never from memory
+### R-sub-19 · Verify every constant from the source file — never from memory
 
 Any buffer size, struct offset, state value, or numeric constant in a
 coding-agent prompt or production implementation must be derived by reading
