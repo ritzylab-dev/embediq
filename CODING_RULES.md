@@ -251,6 +251,103 @@ See AGENTS.md Section 6 for the full list.
 
 ---
 
+### R-sub-13 · Never silence an ops table return value
+
+Service FBs call platform capability through ops tables. Wrapping the call
+in `(void)` means a HAL-level failure is invisible at the service layer —
+the HAL may emit an OBS error, but the service FB discards the signal and
+continues as if the operation succeeded.
+
+```c
+// ✓ CORRECT — capture and check the return value
+embediq_err_t pub_rc = ops->publish(topic, payload, len, qos);
+if (pub_rc != EMBEDIQ_OK) {
+    /* Service layer is now aware. Emit OBS fault at service granularity. */
+    EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, src_id, 0u, state, 0u);
+}
+
+// ✗ WRONG — (void) discards a failure the HAL already reported internally
+(void)ops->publish(topic, payload, len, qos);
+// If ops->publish returns EMBEDIQ_ERR, fb_cloud_mqtt has no knowledge.
+// Broker receives nothing. Zero diagnostic signal at service layer.
+```
+
+Root cause of PR #163 regression: `(void)ops->publish(...)` in
+`publish_telemetry_json()` silently discarded a connection-not-ready failure.
+
+---
+
+### R-sub-14 · Emit OBS fault before every early return in a publish path
+
+Every `return;` in a publish or dispatch function that exits before data
+reaches the transport is a fault path. Silent early returns mean a broker
+receives nothing with no observable signal in any build configuration.
+
+```c
+// ✓ CORRECT — OBS fault before every early return
+if (hdr.entry_count == 0u) {
+    /* Fault path 1: empty batch — should never arrive here. */
+    EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, src_id, 0u, 1u, 0u);
+    return;
+}
+
+// ✗ WRONG — silent early return
+if (hdr.entry_count == 0u) {
+    return;   /* Broker receives nothing. Zero signal. 40-second debug build
+                 required to identify which path fired. */
+}
+```
+
+Use the `state` parameter (0, 1, 2, ...) to distinguish paths. Unit tests
+must verify OBS fault emission on at least the null-input, zero-entry, and
+ops-failure paths. See PR #166 (PROMPT_OBS_HARDENING.txt) for the reference
+implementation in `publish_telemetry_json()`.
+
+EMBEDIQ_OBS_EMIT_FAULT is unconditional in all build configurations.
+Using it for fault paths is always correct — never use a gated macro
+(EMBEDIQ_OBS_EMIT_MESSAGE etc.) for a code path that represents a failure.
+
+---
+
+### R-sub-15 · Verify every constant from the source file — never from memory
+
+Any buffer size, struct offset, state value, or numeric constant in a
+coding-agent prompt or production implementation must be derived by reading
+the actual header or source file at the time of writing — not from memory,
+not from prior documentation, not from a prior conversation context.
+
+```
+// ✓ CORRECT derivation — from first principles
+// Goal: max entries per batch.
+// Step 1: read EMBEDIQ_MSG_MAX_PAYLOAD from embediq_config.h → 64
+// Step 2: read sizeof(MSG_TELEMETRY_BATCH_Payload_t) from
+//          generated/telemetry_msg_catalog.h →
+//          uint32 + uint16 + uint8 + uint8 = 4 + 2 + 1 + 1 = 8 bytes
+// Step 3: read sizeof(EmbedIQ_Telemetry_Batch_Entry_t) from
+//          core/include/embediq_telemetry.h → 18 bytes (packed)
+// Result: (64 − 8) / 18 = 3 entries max   ← derivation shown, no guessing
+
+// ✗ WRONG — "the payload header is 8 bytes" from memory or a prior prompt
+//   This is how buffer sizes drift: the struct changes, the prompt does not.
+//   -Werror=format-truncation on Linux CI catches the downstream symptom,
+//   but the root cause is writing constants without reading the source.
+```
+
+This rule applies to:
+  - Any numeric constant passed to a coding agent in a prompt
+  - Any buffer size computed in a prompt
+  - Any OBS state value asserted in a unit test
+
+Checking procedure: before writing any prompt, open the relevant header
+and read the definition. State the derivation in your prompt or comment.
+If you cannot show the derivation, you have guessed.
+
+Learned from: PR B coding agent correctly stopped when the function had 5 early
+returns, not 6 as described in the prompt (the prompt was written before the
+refactor). The permanent fix is this rule — verify from source at write time.
+
+---
+
 ## 4. C11 Style Guide
 
 ### Naming
