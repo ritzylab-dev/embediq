@@ -645,6 +645,47 @@ Phase 2 (POSIX): Eclipse Paho MQTT C — Apache 2.0, vendored in `third_party/pa
 Phase 3 (FreeRTOS): CoreMQTT — MIT, zero dynamic allocation, same ops table contract.
 `fbs/services/fb_cloud_mqtt.c` never includes Paho or CoreMQTT headers (D-LIB-4).
 
+### Observable fault visibility (PR #165–#167 hardening)
+
+After the PR #163/#164 regression — a silent early return in
+`publish_telemetry_json()` caused Mosquitto to receive zero bytes with zero
+diagnostic signal — three hardening PRs established the following invariants.
+
+**Six observable paths in publish_telemetry_json():**
+
+| State | Path | Trigger condition |
+|-------|------|-------------------|
+| 0 | NULL payload guard | `payload == NULL` |
+| 1 | Empty batch guard | `hdr.entry_count == 0` |
+| 2 | JSON prefix overflow | prefix `snprintf` return ≥ buffer size |
+| 3 | Per-entry overflow | entry `snprintf` return ≥ remaining buffer |
+| 4 | Closing brace overflow | closing `snprintf` return ≥ remaining buffer |
+| 5 | Transport failure | `ops->publish()` returns `EMBEDIQ_ERR` |
+
+Every path emits `EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, src_id, 0u, state, 0u)`
+before returning. Paths 0–4 exit before calling the transport. Path 5 fires
+after `ops->publish()` returns `EMBEDIQ_ERR`.
+
+Unit tests in `tests/unit/test_fb_cloud_mqtt.c` verify paths 0, 1, and 5
+using `obs__ring_read()`. Paths 2–4 are overflow-only paths not achievable
+with normal batch sizes; they are covered by code inspection.
+
+**Architectural obligations for all Service FBs (binding — see CODING_RULES.md):**
+
+- **R-sub-17:** `ops->*()` return values must never be discarded with `(void)`.
+  Check the return. Emit `EMBEDIQ_OBS_EMIT_FAULT` on failure.
+- **R-sub-18:** Every early return in a publish or dispatch path must emit
+  `EMBEDIQ_OBS_EMIT_FAULT` with a distinct `state` value identifying the path.
+- Unit tests must exercise at least: null-input, zero-entry, and ops-failure paths.
+
+**Historical note:**
+Before PR #166, `publish_telemetry_json()` had six `return;` statements with
+no OBS calls and its `ops->publish()` call was wrapped in `(void)`. One of
+those paths triggered in production during PR #163 integration testing.
+Diagnostic required a 40-second debug rebuild to identify the failure path.
+The OBS design makes this class of failure self-diagnosing in all build
+configurations with zero debug-build overhead.
+
 ---
 
 ## The Functional Block
