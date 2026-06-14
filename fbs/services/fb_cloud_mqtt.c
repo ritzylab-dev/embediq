@@ -273,6 +273,8 @@ static void sf_timer(EmbedIQ_FB_Handle_t fb, const void *msg,
 static void publish_telemetry_json(const uint8_t *payload)
 {
     if (payload == NULL) {
+        /* Fault path 0: NULL payload — nothing to serialise or publish. */
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 0u, 0u);
         return;
     }
 
@@ -281,6 +283,8 @@ static void publish_telemetry_json(const uint8_t *payload)
     (void)memcpy(&hdr, payload, sizeof(hdr));
 
     if (hdr.entry_count == 0u) {
+        /* Fault path 1: entry_count == 0 — empty batch, nothing to publish. */
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 1u, 0u);
         return;
     }
 
@@ -290,6 +294,8 @@ static void publish_telemetry_json(const uint8_t *payload)
                        (unsigned long)hdr.window_start_s,
                        (unsigned)hdr.window_dur_s);
     if (pos < 0 || (uint32_t)pos >= (uint32_t)sizeof(s_json_buf)) {
+        /* Fault path 2: JSON prefix snprintf failed or overflowed s_json_buf. */
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 2u, 0u);
         return;
     }
 
@@ -308,6 +314,8 @@ static void publish_telemetry_json(const uint8_t *payload)
                          (double)entry.value_a,
                          sep);
         if (w < 0 || ((uint32_t)pos + (uint32_t)w) >= (uint32_t)sizeof(s_json_buf)) {
+            /* Fault path 3: per-entry snprintf failed or overflowed s_json_buf. */
+            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 3u, 0u);
             return;
         }
         pos += w;
@@ -318,6 +326,8 @@ static void publish_telemetry_json(const uint8_t *payload)
                       sizeof(s_json_buf) - (size_t)pos,
                       "}}");
     if (wc < 0 || ((uint32_t)pos + (uint32_t)wc) >= (uint32_t)sizeof(s_json_buf)) {
+        /* Fault path 4: closing "}}" snprintf failed or overflowed s_json_buf. */
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 4u, 0u);
         return;
     }
     pos += wc;
@@ -325,9 +335,15 @@ static void publish_telemetry_json(const uint8_t *payload)
     /* Publish JSON. */
     const embediq_mqtt_ops_t *ops = embediq_mqtt_ops_get();
     if (ops != NULL && s_telemetry_topic[0] != '\0') {
-        (void)ops->publish(s_telemetry_topic,
-                           (const uint8_t *)s_json_buf,
-                           (uint32_t)pos, 0u);
+        embediq_err_t pub_rc = ops->publish(s_telemetry_topic,
+                                            (const uint8_t *)s_json_buf,
+                                            (uint32_t)pos, 0u);
+        if (pub_rc != EMBEDIQ_OK) {
+            /* Fault path 5: HAL-level publish failed. The HAL already emits
+             * EMBEDIQ_HAL_OBS_EMIT_ERROR; emit at the service layer too so the
+             * fault is visible in the FB-level OBS stream. */
+            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 5u, 0u);
+        }
     }
 }
 
