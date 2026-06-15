@@ -462,6 +462,53 @@ Committing hand-edited generated files fails the CI drift-check.
 
 ---
 
+## 8C. fb_provisioning Coding Agent Rules
+
+`fb_provisioning` is the device identity gatekeeper. These rules apply to any task that
+creates or modifies `fbs/services/fb_provisioning.c`, `core/include/ops/embediq_provisioning.h`,
+or `hal/posix/ops/hal_provisioning_posix.c`.
+
+1. **boot_phase = EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE** — same as fb_cloud_mqtt, fb_nvm, fb_watchdog.
+
+2. **Ops table pattern** — uses `embediq_provisioning_ops_t` (same pattern as MQTT and TLS ops tables).
+   Access via `embediq_provisioning_ops_get()`. Register via `hal_provisioning_posix_declare()`.
+
+3. **Layer boundary (enforced by boundary_checker.py):**
+   - `fbs/services/fb_provisioning.c` MUST NOT include mbedTLS headers (`mbedtls/*.h`).
+   - `fbs/services/fb_provisioning.c` MUST NOT include POSIX filesystem headers (`<stdio.h>`, `<dirent.h>`).
+   - These belong in `hal/posix/ops/hal_provisioning_posix.c` ONLY.
+   - The FB calls ops table function pointers. The HAL implementation uses mbedTLS.
+
+4. **Two-place model is an invariant:**
+   - Cert store (`EMBEDIQ_CERT_DIR`) is CA-controlled. NEVER modify it from fb_provisioning.c.
+   - NVM (`embediq_cfg`) holds derived fleet config. Written by fb_provisioning via
+     `embediq_cfg_set_str("mqtt.client_id", cn)` + `embediq_nvm_flush()`.
+
+5. **MSG_CFG_RELOAD coordination (no changes to fb_cloud_mqtt):**
+   - After writing mqtt.client_id, publish MSG_CFG_RELOAD to trigger fb_cloud_mqtt reconnect.
+   - Do NOT add `depends_on = {"fb_provisioning"}` to fb_cloud_mqtt. The reload message
+     already handles coordination.
+
+6. **Options B and C extension point:**
+   - To implement a custom provisioning mode (fleet provisioning, EST, etc.): implement a
+     custom `embediq_provisioning_ops_t` only. Do NOT modify `fb_provisioning.c`.
+   - Register the custom ops before calling `fb_provisioning_register()`.
+
+7. **gen_dev_cert.sh is DEV ONLY:**
+   - Never call `gen_dev_cert.sh` from firmware. It generates self-signed certs for local
+     testing. Production certs are issued by the OEM signing service at the factory.
+   - Self-signed certs are NOT accepted by a production Mosquitto broker with `cafile`.
+
+8. **EMBEDIQ_CERT_DIR is a compile-time constant:**
+   - Default: `/etc/embediq/certs`. Override at build time via CMake flag
+     `-DEMBEDIQ_CERT_DIR="<path>"`. Never at runtime. Never from NVM.
+
+9. **R-sub-17/18 apply to fb_provisioning.c:**
+   - R-sub-17: Never silence ops return values with `(void)` — capture and handle every return.
+   - R-sub-18: EMBEDIQ_OBS_EMIT_FAULT before every early `return;` in a publish/dispatch path.
+
+---
+
 ## 9. What v1 Will NOT Build (Non-Goals)
 
 Agents: **do not generate code for any item on this list for v1.**

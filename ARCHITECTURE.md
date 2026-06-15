@@ -688,6 +688,197 @@ configurations with zero debug-build overhead.
 
 ---
 
+## fb_provisioning — Device Identity Lifecycle Gatekeeper
+
+### What it is
+
+`fb_provisioning` is the device-side identity gatekeeper. It validates that the device has
+a valid certificate signed by the OEM Certificate Authority, derives the device's MQTT client
+ID from the certificate CN (Common Name), writes it to NVM, and manages the four-state
+factory-to-customer provisioning lifecycle.
+
+**What it is NOT:**
+- Not a certificate generator. Certificates are generated at manufacturing time by the OEM
+  signing service. `scripts/gen_dev_cert.sh` exists for development testing only and is
+  never called by firmware at runtime.
+- Not a TLS loader. Calling `hal_tls_posix_ops_slot()->configure()` to wire Paho MQTT to
+  SSL is a separate future item. The current MQTT HAL uses plain TCP (Phase A).
+
+`boot_phase = EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE` (same as `fb_cloud_mqtt`, `fb_nvm`, `fb_watchdog`).
+
+---
+
+### Two-Place Model (Security Invariant)
+
+Device identity is managed in two completely separate, non-overlapping stores.
+These stores NEVER overlap. Mixing them is an architectural violation.
+
+**Cert store** (filesystem at `EMBEDIQ_CERT_DIR`, default `/etc/embediq/certs/`):
+- `device.crt` — Device certificate, signed by OEM CA
+- `device.key` — Device private key
+- `ca.crt` — OEM CA certificate (Mosquitto uses this to verify device certs)
+- **CA-controlled. Set at factory by OEM signing service. Immutable during device lifetime.**
+- Never written by operator. Never stored in NVM.
+  (PEM certs are 800–1800 bytes; EMBEDIQ_NVM_VAL_MAX=64u makes this technically impossible.)
+
+**Fleet config** (NVM via `embediq_cfg`):
+- `mqtt.client_id` — Derived from cert CN. Factory scope. Written once by `fb_provisioning`.
+- `mqtt.host`, `mqtt.port` — Fleet scope. Written by operator.
+- Operator-writable. Clearable by factory_reset.
+
+**Industry alignment:** This matches the AWS IoT / Azure DPS model exactly:
+- OEM CA controls device identity (cert store = CA domain)
+- Operator controls fleet assignment (NVM = operator domain)
+- Cloud broker verifies identity: `require_certificate true` + `cafile ca.crt` (OEM CA cert)
+- Non-genuine device has no valid cert → rejected at TLS handshake. No cloud access.
+
+---
+
+### Lifecycle FSM
+
+Four states stored in NVM key `prov.state` (uint8). Written by `fb_provisioning` only.
+
+```
+UNMANUFACTURED (0)    ← default on first boot (prov.state absent from NVM)
+        |
+        | ops->identity_check() → EMBEDIQ_OK
+        |   cert present, not expired, CN extracted → mqtt.client_id written to NVM
+        v
+MANUFACTURED (1)      ← device has identity, ready for fleet assignment
+        |
+        | ops->fleet_config_check() → EMBEDIQ_OK
+        |   mqtt.host non-empty in NVM
+        v
+CUSTOMER_PROVISIONED (2)  ← MSG_CFG_RELOAD published → fb_cloud_mqtt connects
+        |
+        | MSG_MQTT_CONNECTED received
+        v
+OPERATIONAL (3)       ← active cloud connection (advisory state only)
+```
+
+`factory_reset` (any state → UNMANUFACTURED):
+- Clears NVM keys: `mqtt.client_id`, `prov.state`, `mqtt.host`, `mqtt.port`, `mqtt.username`, `mqtt.password`
+- Calls `embediq_nvm_flush()`
+- Cert store is NEVER touched
+
+---
+
+### Startup Sequence (every boot)
+
+1. Read `prov.state` from NVM (default 0 = UNMANUFACTURED if absent)
+2. Call `ops->identity_check(ctx)`:
+   - `EMBEDIQ_OK`: CN in `ctx.device_id`. If `mqtt.client_id` not yet in NVM or mismatched:
+     call `embediq_cfg_set_str("mqtt.client_id", ctx.device_id)` + `embediq_nvm_flush()`.
+     Write `prov.state=1` to NVM + flush.
+   - `EMBEDIQ_ERR`: Publish `MSG_PROV_IDENTITY_READY` (status≠0). Call
+     `embediq_fb_report_fault()`. Enter faulted state. Device stays offline.
+3. Publish `MSG_PROV_IDENTITY_READY` (status=0 on success)
+4. Call `ops->fleet_config_check(ctx)`:
+   - `EMBEDIQ_OK` (mqtt.host non-empty): Write `prov.state=2` + flush.
+   - `EMBEDIQ_ERR` (mqtt.host empty): Stay at MANUFACTURED. Await operator config.
+5. If CUSTOMER_PROVISIONED: Publish `MSG_PROV_CONFIG_RECEIVED` + `MSG_CFG_RELOAD`
+   (`MSG_CFG_RELOAD` triggers `fb_cloud_mqtt` `sf_cfg_reload` → `attempt_connect()`)
+
+**Why no `depends_on` fb_provisioning in fb_cloud_mqtt:**
+`fb_cloud_mqtt::attempt_connect()` already returns harmlessly if `mqtt.client_id` is empty
+(verified from code). `MSG_CFG_RELOAD` already triggers `attempt_connect()` (verified from code).
+Boot ordering is safe without an explicit dependency.
+
+---
+
+### embediq_provisioning_ops_t Contract
+
+Defined in `core/include/ops/embediq_provisioning.h`. Same ops table pattern as MQTT and TLS.
+
+```c
+#define EMBEDIQ_PROV_OPS_VERSION  1u
+
+typedef struct {
+    char    device_id[EMBEDIQ_NVM_VAL_SIZE];  /* OUT: CN from cert; NUL-terminated */
+    uint8_t identity_valid;                   /* OUT: 1=ok, 0=failed              */
+} embediq_provisioning_ctx_t;
+
+typedef struct {
+    uint32_t version;  /* Must be EMBEDIQ_PROV_OPS_VERSION */
+    /* Validate device identity. Reads cert from platform cert store.
+     * On success: ctx->device_id = cert CN, ctx->identity_valid = 1.
+     * Returns EMBEDIQ_OK on success, EMBEDIQ_ERR on any failure.          */
+    embediq_err_t (*identity_check)(embediq_provisioning_ctx_t *ctx);
+    /* Check fleet config is present.
+     * Returns EMBEDIQ_OK if mqtt.host non-empty in embediq_cfg.           */
+    embediq_err_t (*fleet_config_check)(embediq_provisioning_ctx_t *ctx);
+    /* Factory reset: clear provisioning NVM keys. Publish MSG_PROV_FACTORY_RESET.
+     * Returns EMBEDIQ_OK on success, EMBEDIQ_ERR on NVM error.            */
+    embediq_err_t (*factory_reset)(embediq_provisioning_ctx_t *ctx);
+} embediq_provisioning_ops_t;
+```
+
+POSIX implementation: `hal/posix/ops/hal_provisioning_posix.c`
+- `identity_check()`: Reads `EMBEDIQ_CERT_DIR "/device.crt"` into a static PEM buffer
+  (size `EMBEDIQ_PROV_CERT_BUF_SIZE`). Validates with mbedTLS 3.6.1.
+  Extracts CN via `mbedtls_x509_dn_gets()`. Sets `ctx->device_id`.
+- `fleet_config_check()`: `embediq_cfg_get_str("mqtt.host", ...)`, non-empty check.
+- `factory_reset()`: `embediq_nvm_delete()` for each provisioning key + `embediq_nvm_flush()`.
+
+Access: `embediq_provisioning_ops_get()`. Registration: `hal_provisioning_posix_declare()`.
+
+---
+
+### Provisioning Options (Options A / B / C)
+
+**The FB layer is INVARIANT across all three options.** Only the ops table implementation changes.
+To use a different option: register a custom `embediq_provisioning_ops_t` before calling
+`fb_provisioning_register()`. No changes to `fb_provisioning.c`.
+
+**Option A — Pre-Provisioned Cert (Default, v1)**
+- OEM signing service generates per-device cert+key at factory → installs to cert store
+- Mosquitto: `require_certificate true` + `cafile ca.crt` (OEM CA)
+- `hal_provisioning_posix.c identity_check()` reads cert files, validates with mbedTLS
+- **Development testing only:** `scripts/gen_dev_cert.sh` generates self-signed certs.
+  Self-signed certs are NOT accepted by a production Mosquitto broker with `cafile`.
+  This script is NEVER called by firmware. It is a dev-machine tool only.
+
+**Option B — Fleet Provisioning (Not yet implemented)**
+- Device ships with a shared "claim cert" (fleet-wide, not per-device)
+- Custom `identity_check()` connects with claim cert → cloud issues per-device cert →
+  installs to cert store → re-validates. Follows AWS IoT Fleet Provisioning model.
+- To implement: provide custom `embediq_provisioning_ops_t` only. No changes to FB.
+
+**Option C — EST / RFC 7030 (Phase C, Item 14)**
+- Bootstrap credential → EST server → per-device cert issued and installed
+- To implement: provide custom `embediq_provisioning_ops_t` only. No changes to FB.
+
+---
+
+### Message IDs (fb_provisioning range: 0x0672–0x06A3)
+
+Three messages defined in v1. Payload schemas in `messages/provisioning.iq`.
+Generated structs in `generated/provisioning_msg_catalog.h`.
+
+| ID     | Name                      | Payload                                               |
+|--------|---------------------------|-------------------------------------------------------|
+| 0x0672 | MSG_PROV_IDENTITY_READY   | `status:u8` (0=ok, 1=no_cert, 2=expired, 3=invalid)  |
+| 0x0673 | MSG_PROV_CONFIG_RECEIVED  | `_reserved:u8`                                        |
+| 0x0674 | MSG_PROV_FACTORY_RESET    | `reason:u8` (0=command, 1=boot_error)                 |
+
+---
+
+### Configuration Constants (added to `embediq_config.h` in PR-A)
+
+| Constant                    | Value                    | Purpose                                    |
+|-----------------------------|---------------------------|--------------------------------------------|
+| `EMBEDIQ_CERT_DIR`          | `"/etc/embediq/certs"`   | Filesystem path to cert store. CMake-overridable. |
+| `EMBEDIQ_PROV_CERT_BUF_SIZE`| `2048u`                  | PEM cert read buffer. Standard cert is 800–1800 bytes PEM. |
+
+### NVM Keys Written by fb_provisioning
+
+| Key           | Type      | Scope   | Written by               |
+|---------------|-----------|---------|--------------------------|
+| `prov.state`  | uint8→str | factory | fb_provisioning only     |
+| `mqtt.client_id` | str[63] | factory | fb_provisioning (from cert CN) |
+
+---
+
 ## The Functional Block
 
 The FB is the unit of everything. Every concern in your firmware is one FB.
