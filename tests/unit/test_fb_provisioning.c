@@ -225,7 +225,7 @@ static void test_provisioning_fleet_missing_no_cfg_reload(void)
     ASSERT(idx >= 0 && fb_provisioning__test_pub_status(idx) == 0u,
            "IDENTITY_READY status == 0 (identity still valid)");
 
-    char st[8] = {0};
+    char st[EMBEDIQ_NVM_VAL_SIZE] = {0};
     (void)embediq_cfg_get_str("prov.state", st, sizeof(st), "");
     ASSERT(strcmp(st, "1") == 0, "prov.state stays MANUFACTURED (1)");
 }
@@ -250,7 +250,7 @@ static void test_provisioning_factory_reset_clears_nvm_keys(void)
     (void)embediq_cfg_get_str("mqtt.client_id", id, sizeof(id), "");
     ASSERT(id[0] == '\0', "mqtt.client_id cleared by factory reset");
 
-    char st[8] = {0};
+    char st[EMBEDIQ_NVM_VAL_SIZE] = {0};
     (void)embediq_cfg_get_str("prov.state", st, sizeof(st), "");
     ASSERT(st[0] == '\0', "prov.state cleared by factory reset");
 }
@@ -283,7 +283,7 @@ static void test_provisioning_state_advances_to_customer_provisioned(void)
 
     fb_provisioning__run_startup_test();
 
-    char st[8] = {0};
+    char st[EMBEDIQ_NVM_VAL_SIZE] = {0};
     (void)embediq_cfg_get_str("prov.state", st, sizeof(st), "");
     ASSERT(strcmp(st, "2") == 0,
            "prov.state advanced to CUSTOMER_PROVISIONED (2)");

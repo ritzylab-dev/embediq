@@ -115,7 +115,7 @@ static void prov_report_fault(uint32_t reason)
 /* Read prov.state from NVM. Absent or malformed → UNMANUFACTURED (0). */
 static uint8_t prov_read_state(void)
 {
-    char st[8];
+    char st[EMBEDIQ_NVM_VAL_SIZE];
     st[0] = '\0';
     (void)embediq_cfg_get_str("prov.state", st, sizeof(st), "");
     if (st[0] >= '0' && st[0] <= '3') {
