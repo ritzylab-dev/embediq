@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L   /* setenv() visibility on Linux */
+
 /*
  * tests/unit/test_fb_provisioning.c — Unit tests for fb_provisioning Service FB
  *
