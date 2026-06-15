@@ -1,0 +1,32 @@
+// messages/provisioning.iq — fb_provisioning device-identity messages
+//
+// Schema version 1. Namespace: com.embediq.provisioning
+// Message IDs in the fb_provisioning reserved range: 0x0672-0x06A3
+// (see messages_registry.json — "fb_provisioning": [1650, 1699]).
+//
+// Rules:
+//   - Message IDs are never reused. A retired ID is tombstoned here.
+//   - Fields are append-only. Never remove or reorder an existing field.
+//
+// @author  Ritesh Anand
+// @company embediq.com | ritzylab.com
+//
+// SPDX-License-Identifier: Apache-2.0
+
+version 1
+namespace "com.embediq.provisioning"
+
+// Device identity validated. status: 0=ok 1=no_cert 2=cert_expired 3=cert_invalid
+message MSG_PROV_IDENTITY_READY id=0x0672 {
+    status : u8
+}
+
+// Fleet config (mqtt.host) is present. MSG_CFG_RELOAD will follow immediately.
+message MSG_PROV_CONFIG_RECEIVED id=0x0673 {
+    _reserved : u8
+}
+
+// Factory reset completed. reason: 0=command 1=boot_error
+message MSG_PROV_FACTORY_RESET id=0x0674 {
+    reason : u8
+}

@@ -312,6 +312,23 @@ extern "C" {
 #  define EMBEDIQ_MQTT_MAX_RECONNECT_INTERVAL_MS  300000u
 #endif
 
+/* ---------------------------------------------------------------------------
+ * fb_provisioning configuration (Item 8)
+ *
+ * Cert store is filesystem-resident and CA-controlled — never in NVM.
+ * EMBEDIQ_CERT_DIR is a compile-time constant, overridable per product at
+ * build time (CMake -DEMBEDIQ_CERT_DIR="..."), never at runtime.
+ * ------------------------------------------------------------------------- */
+
+/** Filesystem path to the device cert store (device.crt, device.key, ca.crt). */
+#ifndef EMBEDIQ_CERT_DIR
+#  define EMBEDIQ_CERT_DIR  "/etc/embediq/certs"  /* override at build time via CMake */
+#endif
+
+/** PEM cert read buffer. Typical OEM/CA-signed device cert is 800-1800 bytes
+ *  PEM (RSA-2048 / ECC P-256); 2048u provides a safe margin. */
+#define EMBEDIQ_PROV_CERT_BUF_SIZE  2048u
+
 #ifdef __cplusplus
 }
 #endif
