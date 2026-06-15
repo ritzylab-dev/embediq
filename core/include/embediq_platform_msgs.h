@@ -11,6 +11,7 @@
  *   fb_nvm          0x044C–0x047D  (1100–1149)  store/retrieve notifications
  *   fb_watchdog     0x047E–0x04AF  (1150–1199)  health diagnostics
  *   fb_timer        0x04B0–0x04E1  (1200–1249)  periodic tick publications
+ *   fb_gpio         0x04E2–0x0513  (1250–1299)  GPIO pin events and output requests
  *   fb_cloud_mqtt   0x0578–0x05DB  (1400–1499)  connection + delivery events
  *   fb_ota          0x05DC–0x063F  (1500–1599)  firmware update lifecycle
  *
@@ -22,6 +23,8 @@
 
 #ifndef EMBEDIQ_PLATFORM_MSGS_H
 #define EMBEDIQ_PLATFORM_MSGS_H
+
+#include <stdint.h>   /* uint8_t for packed message payload structs */
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,6 +56,32 @@ extern "C" {
 #define MSG_TIMER_10MS    0x04B1u  /**< Published every 10 ms  */
 #define MSG_TIMER_100MS   0x04B2u  /**< Published every 100 ms */
 #define MSG_TIMER_1SEC    0x04B3u  /**< Published every 1 second */
+
+/* ---------------------------------------------------------------------------
+ * fb_gpio — GPIO platform FB (0x04E2–0x0513)
+ * ------------------------------------------------------------------------- */
+
+/** Published by fb_gpio when a GPIO output pin was set. */
+#define MSG_GPIO_PIN_EVENT     0x04E2u
+
+/** Published by application FBs to request driving a GPIO output pin. */
+#define MSG_GPIO_SET_REQUEST   0x04E3u
+
+/* MSG_GPIO_PIN_EVENT payload — 2 bytes.
+ * Carries the logical gpio_id (board-defined), never a physical pin number. */
+typedef struct __attribute__((packed)) {
+    uint8_t gpio_id;  /**< Logical GPIO ID (board-defined — not a physical pin number) */
+    uint8_t state;    /**< 0 = low, 1 = high */
+} MSG_GPIO_PIN_EVENT_Payload_t;
+
+/* MSG_GPIO_SET_REQUEST payload — 2 bytes.
+ * Application FBs publish a logical gpio_id; only fb_gpio maps it to a pin. */
+typedef struct __attribute__((packed)) {
+    uint8_t gpio_id;  /**< Logical GPIO ID (board-defined — not a physical pin number) */
+    uint8_t state;    /**< 0 = low, 1 = high */
+} MSG_GPIO_SET_REQUEST_Payload_t;
+
+/* 0x04E4–0x0513 — reserved for future GPIO events */
 
 /* ---------------------------------------------------------------------------
  * fb_cloud_mqtt — connectivity and delivery events (0x0578–0x05DB, reserved)

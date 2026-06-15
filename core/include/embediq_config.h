@@ -329,6 +329,21 @@ extern "C" {
  *  PEM (RSA-2048 / ECC P-256); 2048u provides a safe margin. */
 #define EMBEDIQ_PROV_CERT_BUF_SIZE  2048u
 
+/* ---------------------------------------------------------------------------
+ * fb_gpio configuration (Item 11)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * GPIO sysfs path buffer size.
+ * Derivation: base "/sys/class/gpio/gpio" (20) + max pin digits "255" (3)
+ *             + longest suffix "/direction" (10) + NUL (1) = 34.
+ *             Longest real path "/sys/class/gpio/gpio255/direction" = 33 + NUL.
+ *             48u provides a 14-byte margin for future attribute names.
+ */
+#ifndef EMBEDIQ_GPIO_SYSFS_PATH_SIZE
+#  define EMBEDIQ_GPIO_SYSFS_PATH_SIZE  48u
+#endif
+
 #ifdef __cplusplus
 }
 #endif
