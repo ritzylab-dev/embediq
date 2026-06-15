@@ -9,6 +9,7 @@ add_library(embediq_driver_fbs STATIC
     fb_timer.c
     fb_nvm.c
     fb_watchdog.c
+    fb_gpio.c
     ${CMAKE_SOURCE_DIR}/generated/embediq_cfg_validate.c
 )
 

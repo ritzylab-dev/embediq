@@ -403,6 +403,31 @@ target_compile_options(test_fb_provisioning PRIVATE
 add_test(NAME unit_fb_provisioning COMMAND test_fb_provisioning)
 
 # ---------------------------------------------------------------------------
+# fb_gpio unit tests (Item 11 PR-A — GPIO Driver FB + POSIX sysfs HAL)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_gpio test_fb_gpio.c)
+
+target_include_directories(test_fb_gpio PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
+)
+
+target_link_libraries(test_fb_gpio PRIVATE
+    embediq_driver_fbs
+    embediq_hal_posix
+)
+
+target_compile_options(test_fb_gpio PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_gpio COMMAND test_fb_gpio)
+
+# ---------------------------------------------------------------------------
 # Test harness support library (P2-T5)
 # ---------------------------------------------------------------------------
 
