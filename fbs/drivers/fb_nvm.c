@@ -305,6 +305,61 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
     return EMBEDIQ_OK;
 }
 
+/* Write-once provisioning write — the ONLY authorized runtime write path for
+ * CFG_MUT_FACTORY keys. Bypasses the mutability guard in embediq_nvm_set() but
+ * preserves IEC 62443 commissioning immutability: a key may be set only while
+ * absent or empty (commissioning); once provisioned it is idempotent (an
+ * operator in the field cannot overwrite it). factory_reset deletes the key,
+ * so the next boot re-provisions. See ARCHITECTURE.md fb_provisioning section. */
+embediq_err_t embediq_nvm_provision(const char *key, const char *value)
+{
+    if (!key || !value) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 0u, 0u);
+        return EMBEDIQ_ERR;
+    }
+    size_t vlen = strlen(value);
+    if (strlen(key) >= NVM_KEY_SIZE || vlen > NVM_VAL_SIZE) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 1u, 0u);
+        return EMBEDIQ_ERR;
+    }
+    if (!g_mutex) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 2u, 0u);
+        return EMBEDIQ_ERR;
+    }
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 3u, 0u);
+        return EMBEDIQ_ERR;
+    }
+
+    /* Write-once: a non-empty existing value means already provisioned. */
+    uint8_t slot = find_slot(key);
+    if (slot != NVM_MAX_KEYS && g_nvm[slot].val_len > 0u) {
+        embediq_osal_mutex_unlock(g_mutex);
+        return EMBEDIQ_OK;   /* idempotent — keep the commissioned identity */
+    }
+
+    if (slot == NVM_MAX_KEYS) {
+        slot = find_free_slot();
+        if (slot == NVM_MAX_KEYS) {
+            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 4u, 0u);
+            embediq_osal_mutex_unlock(g_mutex);
+            return EMBEDIQ_ERR;   /* store full */
+        }
+        strncpy(g_nvm[slot].key, key, NVM_KEY_SIZE - 1u);
+        g_nvm[slot].key[NVM_KEY_SIZE - 1u] = '\0';
+        g_nvm[slot].active = true;
+    }
+
+    memcpy(g_nvm[slot].val, value, vlen);
+    g_nvm[slot].val_len   = (uint16_t)vlen;
+    g_nvm[slot].schema_id = 0u;
+
+    nvm_persist();
+
+    embediq_osal_mutex_unlock(g_mutex);
+    return EMBEDIQ_OK;
+}
+
 embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len)
 {
     if (!key || !val || !len)  return EMBEDIQ_ERR;

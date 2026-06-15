@@ -78,6 +78,16 @@ embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len);
 embediq_err_t embediq_nvm_delete(const char *key);
 
 /**
+ * embediq_nvm_provision — write-once provisioning write.
+ * Semantics: if key is absent or empty, write value and return EMBEDIQ_OK.
+ *            if key is already set (non-empty), return EMBEDIQ_OK (idempotent).
+ * This is the ONLY authorized write path for CFG_MUT_FACTORY keys at runtime.
+ * IEC 62443 commissioning immutability: operator cannot overwrite after provisioning.
+ * fb_provisioning calls this at UNMANUFACTURED -> MANUFACTURED transition only.
+ */
+embediq_err_t embediq_nvm_provision(const char *key, const char *value);
+
+/**
  * Flush all pending writes to persistent storage.
  * FBs that own NVM state must call this before publishing MSG_SYS_OTA_READY
  * (see docs/architecture/lifecycle.md — OTA shutdown contract).

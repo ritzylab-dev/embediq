@@ -11,6 +11,7 @@ add_library(embediq_fb_engine STATIC
     observatory/obs.c
     embediq_platform.c
     embediq_mqtt.c
+    embediq_provisioning.c
 )
 
 target_include_directories(embediq_fb_engine PUBLIC
