@@ -377,6 +377,32 @@ target_compile_options(test_fb_cloud_mqtt PRIVATE
 add_test(NAME unit_fb_cloud_mqtt COMMAND test_fb_cloud_mqtt)
 
 # ---------------------------------------------------------------------------
+# fb_provisioning unit tests (Item 8 PR-A — device identity gatekeeper)
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_provisioning test_fb_provisioning.c)
+
+target_include_directories(test_fb_provisioning PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/generated
+    ${CMAKE_SOURCE_DIR}/fbs/services
+)
+
+target_link_libraries(test_fb_provisioning PRIVATE
+    embediq_service_fbs
+    embediq_cfg
+    embediq_driver_fbs
+)
+
+target_compile_options(test_fb_provisioning PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_provisioning COMMAND test_fb_provisioning)
+
+# ---------------------------------------------------------------------------
 # Test harness support library (P2-T5)
 # ---------------------------------------------------------------------------
 
