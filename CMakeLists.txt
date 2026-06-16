@@ -101,6 +101,7 @@ endif()
 add_subdirectory(examples/thermostat)
 add_subdirectory(examples/gateway)
 add_subdirectory(examples/env_monitor)
+add_subdirectory(examples/gpio_blink)
 
 if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     add_subdirectory(osal/posix)
