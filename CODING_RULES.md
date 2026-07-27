@@ -348,6 +348,22 @@ refactor). The permanent fix is this rule — verify from source at write time.
 
 ---
 
+### R-sub-20 · No raw OS thread creation for stream consumption
+
+**R-sub-20 — No raw OS thread creation for stream consumption.**
+Streaming consumers (`embediq_stream_chunk_acquire` / `embediq_stream_chunk_release`) must
+be called from a registered FB thread — the thread that called `embediq_stream_consumer_register()`.
+The framework binds the consumer to the calling thread ID at registration and asserts at runtime.
+Creating a raw OS thread (`pthread_create` on POSIX, `xTaskCreate` on FreeRTOS) solely to call
+`chunk_acquire()` is prohibited: the thread has no inbox, no boot phase, no Observatory visibility,
+and no drain-on-close coordination.
+Correct pattern: one FB per consumer role. The FB thread processes `MSG_STREAM_CHUNK_READY`
+and calls `chunk_acquire()`.
+Enforcement: code review + static analysis for `pthread_create`/`xTaskCreate` outside `hal/`
+and framework core.
+
+---
+
 ## 4. C11 Style Guide
 
 ### Naming

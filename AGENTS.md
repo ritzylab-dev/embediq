@@ -139,6 +139,22 @@ Agents: never add an include that skips a layer.
 
 ---
 
+## 3A. Streaming Data Plane — Agent Must Know
+
+EmbedIQ has two data pathways:
+- **Control plane (message bus):** typed 64-byte messages. All FBs use this. PRINCIPLE 1 applies.
+- **Streaming data plane:** raw continuous chunks (camera, audio, sensor). Never on the bus.
+
+The bridge: `MSG_STREAM_CHUNK_READY` (bus, 19 bytes metadata) notifies consumers that a chunk
+is ready. Consumer calls `embediq_stream_chunk_acquire()` to access the data.
+
+**Agent rule:** When writing a streaming Driver FB, the chunk callback (`set_chunk_cb`) fires in
+ISR context on ALL platforms. Two operations only: `ring_buffer_write()` + `osal_signal_from_isr()`.
+All streaming consumer calls (`chunk_acquire`, `chunk_release`) must come from a registered FB thread.
+See `ARCHITECTURE.md` → "Streaming Data Plane" and R-sub-20 through R-sub-29.
+
+---
+
 ## 4. Repository Structure
 
 ```

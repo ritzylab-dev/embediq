@@ -66,7 +66,7 @@ extern "C" {
  * 0xC0–0xCF  OSAL resource type IDs      (16 slots)
  * 0xD0–0xDF  HAL peripheral source IDs   (16 slots)
  * 0xE0–0xEF  Library source IDs          (16 slots — named constraint)
- * 0xF0–0xFF  Reserve
+ * 0xF0–0xFF  Streaming data plane src IDs (16 slots)
  *
  * See: ARCHITECTURE.md — Phase 2 MCU Observatory, source_fb_id section
  * ------------------------------------------------------------------------- */
@@ -96,7 +96,13 @@ extern "C" {
 #define EMBEDIQ_LIB_SRC_MAX       0xEFu  /**< Last library source slot */
 /* Maximum 16 instrumented library sources per firmware build (named constraint).
  * Slot 17 causes embediq_platform_lib_declare() to return EMBEDIQ_ERR. */
-/* 0xF0–0xFF reserved */
+
+/* Streaming data plane source IDs (0xF0–0xFF) */
+/* Per-stream: EMBEDIQ_OBS_SRC_STREAM_BASE + stream_id (stream 0 = 0xF0, stream 1 = 0xF1, ...) */
+/* Framework-level streaming events (not per-stream): EMBEDIQ_OBS_SRC_STREAM_FRAMEWORK */
+#define EMBEDIQ_OBS_SRC_STREAM_BASE      0xF0u  /**< Streaming plane source IDs — add stream_id */
+#define EMBEDIQ_OBS_SRC_STREAM_FRAMEWORK 0xFFu  /**< Framework-level streaming events */
+/* 0xF0–0xFF: 16 stream IDs. Reserved. Do not use for HAL peripherals. */
 
 /* ---------------------------------------------------------------------------
  * Event type constants — organised by family band
