@@ -1244,9 +1244,9 @@ static_assert(offsetof(MSG_TEMP_READING_Payload_t, temperature_c) == 0,
 {
   "core":     { "range": [0, 1023],    "owner": "embediq/embediq" },
   "official": {
-    "fb_cloud_mqtt": { "range": [1024, 1099], "owner": "embediq/embediq" },
+    "fb_cloud_mqtt": { "range": [1400, 1499], "owner": "embediq/embediq" },
     "fb_ota":        { "range": [1500, 1599], "owner": "embediq/embediq" },
-    "fb_nvm":        { "range": [1150, 1199], "owner": "embediq/embediq" }
+    "fb_nvm":        { "range": [1100, 1149], "owner": "embediq/embediq" }
   },
   "community": {
     "fb_modbus_rtu": { "range": [5120, 5179], "owner": "github.com/user/repo" }
@@ -1537,6 +1537,7 @@ bus message.
 | `MSG_STREAM_ERROR`                        | HIGH   | 6 B: `stream_id:u8, error_code:u8, last_sequence:u32`                                                         | DMA_OVERRUN_FATAL / DEVICE_DISCONNECT / DEVICE_IO / DRIVER_FATAL / DRAIN_TIMEOUT. Delivered to every worker's owner FB and to the source Driver FB            |
 | `MSG_STREAM_BACKPRESSURE`                 | NORMAL | 3 B: `stream_id:u8, action:u8, reason:u8`                                                                     | PAUSE=1 / RESUME=2; reason SINK_CONGESTED / POOL_FULL / CONSUMER_REQUEST. Published by an owner FB; the source Driver FB calls `ops->stop()` / `ops->start()` |
 | `MSG_STREAM_ATTACH` / `MSG_STREAM_DETACH` | NORMAL | 4 B: `stream_id:u8, sink_kind:u8, requester_ep:u8, reserved:u8`                                               | A sidecar (through the Bridge) or an FB asks the owner FB to attach or detach a built-in sink worker. One-time handshake                                      |
+| `MSG_STREAM_FETCH_REQUEST`                | NORMAL | 4 B: `stream_id:u8, manifest_stream_id:u8, kind:u8, reserved:u8`                                              | Owner FB asks the platform fetcher Driver FB to open the source named by the manifest stream on `stream_id`; the URL never travels on the bus                 |
 | `MSG_STREAM_CHUNK_READY`                  | LOW    | 20 B: `stream_id:u8, sequence:u32, timestamp_us:u64, chunk_length:u32, gap_count:u8, gap_reason:u8, flags:u8` | OPTIONAL — published only when the source is registered with `cfg.notify_bus = 1`, for low-rate observers. Workers never depend on it                         |
 
 Message IDs allocated in the `0x0400–0x13FF` Official EmbedIQ namespace (verify in messages_registry.json).
@@ -1714,6 +1715,10 @@ typedef enum {
 } embediq_ota_state_t;
 ```
 
+`begin()`, `write()` and `verify()` are called from fb_ota's stream worker; `apply()` and
+`abort()` from fb_ota's dispatch thread after the worker has been unregistered. The ops are
+never called concurrently.
+
 **Locked decisions.** The device side is cloud-agnostic: `fb_ota` consumes `{url, checksum,
 version}` and nothing else. `fb_ota` is a data-plane consumer: it receives the image through a
 Tier-3 stream worker on `ota_img_0` and never opens a socket, a radio, or a file. The manifest is
@@ -1741,6 +1746,12 @@ BUS (control, ≤ 64 B)                                  DATA PLANE (bytes)
 8  first MSG_SYSTEM_READY + ota.pending_version
    → MSG_OTA_COMPLETE ("installed", new version)
 ```
+
+**Who opens the producer.** fb_ota publishes `MSG_STREAM_FETCH_REQUEST {stream_id,
+manifest_stream_id, kind}` (NORMAL, 4 B). The platform's fetcher Driver FB (`fb_stream_fetch` on
+POSIX; `fb_ble_stream_source` on BLE) reads the manifest stream, opens the source on `ota_img_0`
+(`hal_stream_net` with the URL), and closes it on EOS or error. The URL never travels on the bus;
+fb_ota never opens a transport (R-sub-32).
 
 ### Producers by Platform
 
