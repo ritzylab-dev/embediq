@@ -9,26 +9,27 @@ contributors: also read [AGENTS.md](AGENTS.md) and [CODING_RULES.md](CODING_RULE
 
 ## How to Use This Document
 
-| Section | Content | When to Read |
-| ------- | ------- | ------------ |
-| Four Core Principles | Three core sentences + CI-enforced rules | Before any architectural decision |
-| Layer Model | Complete stack diagram + layer definitions | Before writing any code |
-| Library Architecture | Integration pattern for third-party components | Phase 2+ work |
-| The Functional Block | FB model, lifecycle, sub-functions | Before writing any FB |
-| Message System | Envelope, three-queue model, messages.iq | Before defining any message |
-| Streaming Data Plane | Two-plane model, HAL contract, ISR extension, API, 3-tier consumers, observability, R-sub-20–29 | Before writing any streaming Driver FB or consumer FB |
-| Core Headers | All contract header interfaces | During all implementation work |
-| Sub-function Model | Registration flow, FSM pattern | Before writing any sub-function |
-| ISR Boundary | Two-zone model, ring buffer pattern | Before writing any Driver FB |
-| Boot Phase Model | Startup sequencing, boot phase ordering | Before writing multi-FB systems |
-| Observatory | Event system, trace levels, .iqtrace format | Before writing any observable code |
-| Cross-Layer Observability | XOBS Phase 2 OSAL/HAL event design | Phase 2+ implementation |
-| AI-First Architecture | AI event constants, TLV, AI code review gate | AI-related FBs and tooling |
-| Platform FB Specs | fb_uart, fb_watchdog, fb_nvm contracts | Before implementing Platform FBs |
-| Architecture Validation | Three use-case validation records | For system-level understanding |
-| Responsibility Register | What EmbedIQ owns vs. developer owns | Before any boundary decision |
-| Non-Goals | Explicit de-scope list | Before any implementation work |
-| AI Coding Checklist | Rule pairs: correct vs. incorrect | Before every PR |
+| Section                               | Content                                                                                                                              | When to Read                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Four Core Principles                  | Three core sentences + CI-enforced rules                                                                                             | Before any architectural decision                                          |
+| Layer Model                           | Complete stack diagram + layer definitions                                                                                           | Before writing any code                                                    |
+| Library Architecture                  | Integration pattern for third-party components                                                                                       | Phase 2+ work                                                              |
+| The Functional Block                  | FB model, lifecycle, sub-functions                                                                                                   | Before writing any FB                                                      |
+| Message System                        | Envelope, three-queue model, messages.iq                                                                                             | Before defining any message                                                |
+| Streaming Data Plane                  | Two-plane model, HAL contract, ISR extension, stream workers, 3-tier worker model, observability, process-boundary sink, R-sub-20–29 | Before writing any streaming Driver FB or any FB that owns a stream worker |
+| OTA — Transport-Blind Firmware Update | fb_ota layers, update sequence, producers by platform, Linux A/B HAL, failure policy                                                 | Before writing fb_ota, an OTA HAL, or a firmware-image producer            |
+| Core Headers                          | All contract header interfaces                                                                                                       | During all implementation work                                             |
+| Sub-function Model                    | Registration flow, FSM pattern                                                                                                       | Before writing any sub-function                                            |
+| ISR Boundary                          | Two-zone model, ring buffer pattern                                                                                                  | Before writing any Driver FB                                               |
+| Boot Phase Model                      | Startup sequencing, boot phase ordering                                                                                              | Before writing multi-FB systems                                            |
+| Observatory                           | Event system, trace levels, .iqtrace format                                                                                          | Before writing any observable code                                         |
+| Cross-Layer Observability             | XOBS Phase 2 OSAL/HAL event design                                                                                                   | Phase 2+ implementation                                                    |
+| AI-First Architecture                 | AI event constants, TLV, AI code review gate                                                                                         | AI-related FBs and tooling                                                 |
+| Platform FB Specs                     | fb_uart, fb_watchdog, fb_nvm contracts                                                                                               | Before implementing Platform FBs                                           |
+| Architecture Validation               | Three use-case validation records                                                                                                    | For system-level understanding                                             |
+| Responsibility Register               | What EmbedIQ owns vs. developer owns                                                                                                 | Before any boundary decision                                               |
+| Non-Goals                             | Explicit de-scope list                                                                                                               | Before any implementation work                                             |
+| AI Coding Checklist                   | Rule pairs: correct vs. incorrect                                                                                                    | Before every PR                                                            |
 
 ---
 
@@ -1202,7 +1203,8 @@ Payloads larger than `EMBEDIQ_MSG_MAX_PAYLOAD` never travel on the Message Bus. 
 audio, files and firmware images travel on the Streaming Data Plane (see the Streaming
 Data Plane section); the bus carries only the metadata that announces them. This applies
 to every direction, including data arriving from the network or from a phone over
-Bluetooth.
+Bluetooth. The OTA section ("OTA — Transport-Blind Firmware Update") is the worked example: the
+firmware image and its manifest both arrive as streams.
 
 ### messages.iq — Schema Syntax
 
@@ -1242,9 +1244,9 @@ static_assert(offsetof(MSG_TEMP_READING_Payload_t, temperature_c) == 0,
 {
   "core":     { "range": [0, 1023],    "owner": "embediq/embediq" },
   "official": {
-    "fb_cloud_mqtt": { "range": [1024, 1099], "owner": "embediq/embediq" },
-    "fb_ota":        { "range": [1100, 1149], "owner": "embediq/embediq" },
-    "fb_nvm":        { "range": [1150, 1199], "owner": "embediq/embediq" }
+    "fb_cloud_mqtt": { "range": [1400, 1499], "owner": "embediq/embediq" },
+    "fb_ota":        { "range": [1500, 1599], "owner": "embediq/embediq" },
+    "fb_nvm":        { "range": [1100, 1149], "owner": "embediq/embediq" }
   },
   "community": {
     "fb_modbus_rtu": { "range": [5120, 5179], "owner": "github.com/user/repo" }
@@ -1284,8 +1286,8 @@ Rules: every FB published to the community registry MUST include `embediq_manife
 
 EmbedIQ operates on two complementary data pathways. The **control plane** (the message
 bus) carries discrete typed events, commands, and metadata. The **streaming data plane**
-carries raw continuous data — camera frames, audio PCM, sensor chunks. The two planes
-are peers: neither replaces the other.
+carries everything too large for the bus — camera frames, audio PCM, sensor chunks, files,
+firmware images. The two planes are peers: neither replaces the other.
 
 **First principle:** a 640×480 MJPEG frame at 30fps = 90–240 KB/s. The message bus
 handles hundreds to low thousands of 64-byte dispatches per second across all FBs.
@@ -1295,72 +1297,160 @@ For the full design rationale, see `EmbedIQ_Master_Package_Final_2/PM/STREAMING_
 
 ### The Two-Plane Model
 
+**The plane is defined by data class, not by device class.** Any payload larger than
+`EMBEDIQ_MSG_MAX_PAYLOAD` rides the data plane — frames, audio, files, firmware images,
+manifests — whether it comes from a peripheral, the network, a phone over Bluetooth, or
+another process. The bus carries only control.
+
 ```
-┌──────────────────────────────────┐  ┌──────────────────────────────────────┐
-│  CONTROL PLANE (Message Bus)     │  │  STREAMING DATA PLANE                │
-│  Typed events, commands, status  │  │  Raw continuous data                 │
-│  Fixed 64-byte payload           │  │  KB to MB per chunk                  │
-│  Copy-by-value                   │  │  Zero-copy (DMA buffer pool)         │
-│  All FBs use this                │  │  Streaming Driver FBs + consumers    │
-├──────────────────────────────────┤  ├──────────────────────────────────────┤
-│  MSG_STREAM_CHUNK_READY ─────────┼─►│  chunk_acquire()   ← consumer FB    │
-│   19 bytes of metadata only      │  │  chunk_release()   ← consumer FB    │
-│  MSG_STREAM_ERROR                │  │                                      │
-│  MSG_STREAM_BACKPRESSURE ────────┼─►│  producer ops->stop() / start()      │
-└──────────────────────────────────┘  └──────────────────────────────────────┘
-  Control signals + notifications        Raw frame data, PCM audio, sensor chunks
-  PRINCIPLE 1 enforced here              Zero-copy or bounded-copy; never on bus
+┌───────────────────────────────────────────┐  ┌──────────────────────────────────────┐
+│ CONTROL PLANE (Message Bus)               │  │ STREAMING DATA PLANE                 │
+├───────────────────────────────────────────┤  ├──────────────────────────────────────┤
+│ Typed events, commands, status            │  │ Anything larger than the bus payload │
+│ Fixed 64-byte payload, copy-by-value      │  │ KB to MB per chunk                   │
+│ All FBs use this                          │  │ Zero-copy or bounded-copy pool       │
+├───────────────────────────────────────────┤  ├──────────────────────────────────────┤
+│ start / stop       (owner FB → Driver FB) │  │ HAL chunk callback       (ISR zone)  │
+│ MSG_STREAM_ERROR                          │  │   ↓                                  │
+│ MSG_STREAM_BACKPRESSURE                   │  │ engine: ring write + OSAL signal     │
+│ MSG_STREAM_ATTACH / MSG_STREAM_DETACH     │  │   ↓                                  │
+│                                           │  │ stream worker: on_chunk(chunk, ctx)  │
+│ No per-chunk traffic                      │  │   ↓  sink ops->write() / HAL         │
+└───────────────────────────────────────────┘  └──────────────────────────────────────┘
+  Control only — PRINCIPLE 1 enforced here     Data only — never on the bus
 ```
 
-`MSG_STREAM_CHUNK_READY` is the bridge. A consumer FB receives it on its inbox (control
-plane), then calls `embediq_stream_chunk_acquire()` to access the bytes (streaming plane).
-The bus message is 19 bytes. The chunk may be 8 KB. The bus never carries the chunk data.
+Data work happens in a **stream worker**: a framework-owned thread that an FB owns and
+Layer 1 runs. The engine wakes the worker with an OSAL signal for every chunk; the bus is
+not on the per-chunk path. Control for the stream — start, stop, error, backpressure,
+attach — travels on the bus to the owner FB on its dispatch thread.
 
 ### HAL Contract (`core/include/hal/hal_stream.h`)
 
-Two separate ops tables — never mix them:
+`hal_stream.h` follows the `hal/` convention: it includes `<stdint.h>` only — zero
+`embediq_*.h` includes. Every op that can fail returns `int` (0 = OK, negative = error),
+the same as `hal_gpio.h` and `hal_obs_stream.h`; `release_chunk()` cannot fail and returns
+`void`. Two separate ops tables — never mix them:
 
-**`embediq_stream_source_ops_t`** — hardware producing continuous data (camera, mic, ADC):
-- `open(stream_id, cfg, hal_cfg)` / `close(stream_id)` / `start(stream_id)` / `stop(stream_id)`
-- `set_chunk_cb(stream_id, cb, ctx)` — chunk callback **fires in ISR context on ALL platforms**
-- `release_chunk(stream_id, chunk)` — returns DMA buffer to hardware rotation
+```c
+// The chunk descriptor — passed by pointer, never copied on the data path
+// hal/ convention (rev 2): this header includes <stdint.h> only — zero embediq_*.h includes.
+// All ops return int: 0 = OK, negative = error (same as hal_gpio.h, hal_obs_stream.h).
+typedef struct {
+    uint8_t  *data;          // pointer into DMA/kernel buffer — zero-copy
+    uint32_t  length;        // bytes in this chunk
+    uint32_t  sequence;      // monotonic counter; gaps indicate dropped frames
+    uint64_t  timestamp_us;  // microseconds since boot (osal_time_us())
+    uint8_t   stream_id;     // which stream this chunk belongs to
+    uint8_t   flags;         // bit0 = EMBEDIQ_STREAM_FLAG_EOS: last chunk of a finite stream (rev 2)
+} embediq_stream_chunk_t;
 
-**`embediq_stream_sink_ops_t`** — hardware consuming data (BLE, speaker, display):
-- `open(stream_id, cfg, hal_cfg)` / `close(stream_id)`
-- `write(stream_id, data, len)` — one PDU at HAL level; fragmentation is Application FB responsibility
-- `flush(stream_id)`
+typedef void (*embediq_stream_chunk_cb_t)(
+    const embediq_stream_chunk_t *chunk, void *ctx);
+
+// Source ops — implemented by Driver FBs that produce continuous data
+typedef struct {
+    uint32_t version;        // EMBEDIQ_STREAM_SOURCE_OPS_VERSION
+    int (*open)(uint8_t stream_id, const embediq_stream_cfg_t *cfg, const void *hal_cfg);
+    int (*close)(uint8_t stream_id);
+    int (*start)(uint8_t stream_id);
+    int (*stop)(uint8_t stream_id);
+    int (*set_chunk_cb)(uint8_t stream_id, embediq_stream_chunk_cb_t cb, void *ctx);
+    void          (*release_chunk)(uint8_t stream_id,
+                                   const embediq_stream_chunk_t *chunk);
+    // Calling context: arbitrary FB thread — never ISR.
+    // V4L2: calls VIDIOC_QBUF. DMA circular: re-enters buffer in rotation.
+} embediq_stream_source_ops_t;
+
+// Sink ops — implemented by Driver FBs that consume data (BLE, speaker, display)
+typedef struct {
+    uint32_t version;        // EMBEDIQ_STREAM_SINK_OPS_VERSION
+    int (*open)(uint8_t stream_id, const embediq_stream_cfg_t *cfg, const void *hal_cfg);
+    int (*close)(uint8_t stream_id);
+    int (*write)(uint8_t stream_id, const void *data, uint32_t len);
+    // write() = one PDU/packet/frame at the HAL level. Never fragment here.
+    // Fragmentation for BLE MTU belongs in fb_ble_stream_sink (Application FB).
+    int (*flush)(uint8_t stream_id);
+} embediq_stream_sink_ops_t;
+
+// Framework-level stream configuration (hardware-agnostic)
+typedef struct {
+    uint32_t chunk_size;      // bytes per chunk (for OTA: a multiple of the platform flash page size)
+    uint32_t rate_hz;         // chunks per second. 0 = unpaced/bursty (network, file): backpressure governs.
+    uint8_t  buffer_count;    // pool depth. Minimum 3 for video and audio.
+    uint8_t  copy_on_acquire; // 0 = zero-copy. 1 = framework copies before returning the buffer.
+    uint8_t  notify_bus;      // 1 = also publish MSG_STREAM_CHUNK_READY per chunk (low-rate observers only)
+} embediq_stream_cfg_t;
+```
 
 HAL-private config is passed as `const void *hal_cfg` to `open()`. Each driver defines its own
 config struct (`hal_stream_v4l2_cfg_t`, `hal_stream_alsa_cfg_t`, `hal_stream_dcmi_cfg_t`, etc.)
-in the corresponding `hal/<platform>/` header.
+in the corresponding `hal/<platform>/` header. DMA-backed buffers on STM32 are declared with
+`EMBEDIQ_STREAM_DMA_SECTION EMBEDIQ_STREAM_DMA_ALIGN` (R-sub-21).
 
-HAL implementations: `hal/posix/` (V4L2 camera, ALSA audio, simulation), `hal/esp32/` (I2S audio),
-`hal/stm32/` (DCMI+DMA camera).
+HAL implementations: `hal/posix/` (V4L2 camera, ALSA audio, simulation, network source
+`hal_stream_net`, unix-socket sink), `hal/esp32/` (I2S audio), `hal/stm32/` (DCMI+DMA camera).
 
 ### ISR Two-Zone Extension
 
-The existing ISR two-zone discipline is extended to streaming sources. The chunk callback
-registered via `set_chunk_cb()` fires in ISR context on ALL platforms (DMA Transfer Complete on
-STM32, I2S interrupt on ESP32, V4L2 poll thread on Linux — apply uniform discipline regardless):
+The existing ISR two-zone discipline is extended to streaming sources. The chunk callback fires
+in ISR context on ALL platforms (DMA Transfer Complete on STM32, I2S interrupt on ESP32, V4L2
+poll thread on Linux — apply uniform discipline regardless). The **engine** installs the chunk
+callback when the source is registered and wakes the stream's workers with an OSAL signal. The
+Driver FB thread does nothing per chunk.
 
 ```
 INTERRUPT ZONE  (≤ 10 CPU cycles — ring buffer write + osal_signal_from_isr only)
 
-  DMA ISR → write chunk_ptr to ring buffer → osal_signal_from_isr(&fb->data_ready)
+  DMA ISR → engine chunk callback → ring buffer write → osal_signal_from_isr()
   [NOTHING ELSE — no OS calls, no framework calls, no logging, no arithmetic]
 
   ─────────────── OSAL signal crosses the boundary ───────────────────────────
 
-THREAD ZONE  (Driver FB thread — full framework access)
+THREAD ZONE  (stream worker — framework-owned, one per registered worker)
 
-  FB thread wakes → drain ring buffer → for each chunk:
-    compute gap_count = sequence - prev_sequence - 1
-    build MSG_STREAM_CHUNK_READY payload (stream_id, sequence, timestamp_us,
-                                          chunk_length, gap_count, gap_reason)
-    embediq_msg_send(target_fb, MSG_STREAM_CHUNK_READY, &payload)
+  worker wakes → engine acquires the chunk (copies it into the worker pool if max_copies > 0)
+    → on_chunk(chunk, ctx) → engine releases the chunk → worker waits for the next signal
+  if cfg.notify_bus: engine also publishes MSG_STREAM_CHUNK_READY (LOW) — observers only
+
+DRIVER FB THREAD  (unchanged role — control only)
+
+  handles start / stop / MSG_STREAM_BACKPRESSURE / MSG_STREAM_ERROR on the bus
 ```
 
 ### Framework API (`core/include/embediq_stream.h`)
+
+Stream format and gap reasons:
+```c
+typedef enum {
+    EMBEDIQ_STREAM_ENC_UNKNOWN = 0,
+    EMBEDIQ_STREAM_ENC_MJPEG   = 1,
+    EMBEDIQ_STREAM_ENC_H264    = 2,   // v1: I-frame only — see Section 11
+    EMBEDIQ_STREAM_ENC_YUV422  = 3,
+    EMBEDIQ_STREAM_ENC_YUV420  = 4,
+    EMBEDIQ_STREAM_ENC_PCM_S16 = 5,
+    EMBEDIQ_STREAM_ENC_OPUS    = 6,
+    EMBEDIQ_STREAM_ENC_RAW     = 7,   // opaque bytes; consumer must know format out-of-band
+} embediq_stream_encoding_t;
+
+typedef struct {
+    embediq_stream_encoding_t encoding;
+    uint16_t width;         // video: pixels. Audio: 0.
+    uint16_t height;        // video: pixels. Audio: 0.
+    uint32_t sample_rate;   // audio: Hz. Video: 0.
+    uint8_t  channels;      // audio: 1=mono, 2=stereo. Video: 0.
+    uint8_t  reserved[3];   // zero-initialised
+    uint32_t total_length;  // finite streams: total bytes (e.g. HTTP Content-Length). 0 = unknown/infinite.
+} embediq_stream_format_t;
+
+typedef enum {
+    EMBEDIQ_STREAM_GAP_NONE         = 0,
+    EMBEDIQ_STREAM_GAP_DMA_OVERRUN  = 1,  // consumer held buffer past timing window
+    EMBEDIQ_STREAM_GAP_RATE_LIMIT   = 2,  // Tier 2: intentional frame skip
+    EMBEDIQ_STREAM_GAP_POOL_FULL    = 3,  // copy pool exhausted (consumer too slow)
+    EMBEDIQ_STREAM_GAP_HAL_DROP     = 4,  // hardware dropped frame (USB congestion, etc.)
+} embediq_stream_gap_reason_t;
+```
 
 Registration and lifecycle:
 ```c
@@ -1378,67 +1468,159 @@ embediq_err_t embediq_stream_sink_register(uint8_t stream_id,
 embediq_err_t embediq_stream_sink_unregister(uint8_t stream_id);
 ```
 
-Consumer API (must be called from a registered FB thread — see R-sub-28):
+Stream worker — the only way an FB touches stream data:
 ```c
-embediq_err_t embediq_stream_consumer_register(uint8_t stream_id,
-    uint8_t max_buffered_copies, uint32_t copy_buffer_size);
-    /* max_buffered_copies=0 → zero-copy (Tier 1/2).  >0 → pre-allocated copy pool (Tier 3). */
-    /* Pool allocated at registration time. Returns EMBEDIQ_ERR_NO_MEMORY on failure. */
+// The function the owning FB supplies. Runs on the framework-owned worker thread, once per chunk.
+// The chunk pointer is valid only for the duration of the call. Must not call embediq_* except the
+// thread-safe entry points (ARCHITECTURE.md "Threads in EmbedIQ"). May block (e.g. a socket write)
+// ONLY if the worker was registered with max_copies > 0 (Tier 3).
+typedef void (*embediq_stream_on_chunk_t)(const embediq_stream_chunk_t *chunk, void *ctx);
 
-embediq_err_t embediq_stream_chunk_acquire(uint8_t stream_id,
-    embediq_stream_chunk_t *out, uint32_t timeout_ms);
+typedef struct {
+    EmbedIQ_FB_Handle_t owner;        // the FB that receives MSG_STREAM_ERROR / BACKPRESSURE for this worker
+    uint8_t  max_copies;              // 0 = zero-copy (Tier 1/2). N = private copy pool depth (Tier 3).
+    uint32_t copy_size;               // 0 = chunk_size from the stream cfg. Pool pre-allocated at registration.
+    uint8_t  priority;                // OSAL task priority; default = owner FB priority
+    uint16_t stack_bytes;             // 0 = EMBEDIQ_STREAM_WORKER_STACK_DEFAULT
+} embediq_stream_worker_cfg_t;
 
-void embediq_stream_chunk_release(uint8_t stream_id,
-    const embediq_stream_chunk_t *chunk);  /* NOT ISR-safe */
+// Register a worker on a stream. Creates the thread, binds it to the stream, pre-allocates the copy pool.
+// Returns EMBEDIQ_ERR_NO_MEMORY if the pool cannot be allocated — at startup, never later.
+// Calling context: boot thread (owner FB init_fn) or owner FB dispatch thread.
+embediq_err_t embediq_stream_worker_register(uint8_t stream_id,
+                                             embediq_stream_on_chunk_t on_chunk, void *ctx,
+                                             const embediq_stream_worker_cfg_t *cfg,
+                                             embediq_stream_worker_t *out);
 
-embediq_err_t embediq_stream_get_format(uint8_t stream_id,
-    embediq_stream_format_t *out);
+// Stop the worker: waits for the in-flight on_chunk() to return, releases any held chunk, joins the thread.
+// Calling context: owner FB dispatch thread (typically exit_fn).
+embediq_err_t embediq_stream_worker_unregister(embediq_stream_worker_t w, uint32_t timeout_ms);
+
+// Query format (set at source registration; valid until unregister). Any thread.
+embediq_err_t embediq_stream_get_format(uint8_t stream_id, embediq_stream_format_t *out);
+
+// Push API — for software-producing workers (codecs, resamplers, synthetic streams, BLE reassembly).
+// Calling context: a worker thread or an FB dispatch thread. Never ISR.
+embediq_err_t embediq_stream_push(uint8_t stream_id, const embediq_stream_chunk_t *chunk);
 ```
 
-Software-producing FBs (codecs, resamplers, synthetic streams):
-```c
-embediq_err_t embediq_stream_push(uint8_t stream_id,
-    const embediq_stream_chunk_t *chunk);
-```
+Data work never runs in an FB handler and never on a thread the FB created. Layer 1 creates,
+binds, runs and joins the worker; the FB only supplies `on_chunk()` and owns the worker's
+control. The chunk pointer is valid only inside `on_chunk()`. A worker that may block
+(network, flash, BLE) registers with `max_copies > 0`.
 
-### Three Bus Messages (metadata only — chunk data never travels on the bus)
+`chunk_acquire()` / `chunk_release()` are **engine-internal**: the worker loop calls them around
+`on_chunk()`. They are not part of the FB-facing API, so an FB cannot hold a buffer outside a
+worker call. Software producers use `embediq_stream_push()`; `embediq_stream_get_format()`
+returns the format set at source registration.
 
-| Message | Queue | Payload | Purpose |
-|---------|-------|---------|---------|
-| `MSG_STREAM_CHUNK_READY` | LOW | 19 B: stream_id, sequence, timestamp_us, chunk_length, gap_count, gap_reason | Notify consumer FBs |
-| `MSG_STREAM_ERROR` | HIGH | 6 B: stream_id, error_code, last_sequence | Hardware fault, DMA overrun, disconnect |
-| `MSG_STREAM_BACKPRESSURE` | NORMAL | 3 B: stream_id, action (PAUSE/RESUME), reason | Consumer signals source to slow/stop |
+**Built-in sink worker:** `embediq_stream_worker_sink(stream_id, sink_stream_id, owner)` pumps a
+source into a registered sink (file, unix socket, BLE, network) with no application code.
+
+**Executor policy.** The worker API fixes *what* runs per chunk, not *how many threads exist*.
+Default: one OSAL thread per worker. Constrained targets build with
+`EMBEDIQ_STREAM_SHARED_EXECUTOR=1`: all workers run on one framework stream-executor thread,
+served in worker-priority order, with the same `on_chunk()` contract and the same
+observability — the streaming counterpart of "Thread Model — Gateway vs. Constrained
+Targets". No FB code changes between the two policies.
+
+A stream worker is the third thread kind in "Threads in EmbedIQ" (Framework worker): it has no
+inbox, and `on_chunk()` may call only the thread-safe entry points listed there.
+
+### Control Messages (bus — metadata only, chunk data never travels on the bus)
+
+None of these is on the per-chunk path — the engine wakes a worker with an OSAL signal, not a
+bus message.
+
+| Message                                   | Queue  | Payload                                                                                                       | Purpose                                                                                                                                                       |
+| ----------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MSG_STREAM_ERROR`                        | HIGH   | 6 B: `stream_id:u8, error_code:u8, last_sequence:u32`                                                         | DMA_OVERRUN_FATAL / DEVICE_DISCONNECT / DEVICE_IO / DRIVER_FATAL / DRAIN_TIMEOUT. Delivered to every worker's owner FB and to the source Driver FB            |
+| `MSG_STREAM_BACKPRESSURE`                 | NORMAL | 3 B: `stream_id:u8, action:u8, reason:u8`                                                                     | PAUSE=1 / RESUME=2; reason SINK_CONGESTED / POOL_FULL / CONSUMER_REQUEST. Published by an owner FB; the source Driver FB calls `ops->stop()` / `ops->start()` |
+| `MSG_STREAM_ATTACH` / `MSG_STREAM_DETACH` | NORMAL | 4 B: `stream_id:u8, sink_kind:u8, requester_ep:u8, reserved:u8`                                               | A sidecar (through the Bridge) or an FB asks the owner FB to attach or detach a built-in sink worker. One-time handshake                                      |
+| `MSG_STREAM_FETCH_REQUEST`                | NORMAL | 4 B: `stream_id:u8, manifest_stream_id:u8, kind:u8, reserved:u8`                                              | Owner FB asks the platform fetcher Driver FB to open the source named by the manifest stream on `stream_id`; the URL never travels on the bus                 |
+| `MSG_STREAM_CHUNK_READY`                  | LOW    | 20 B: `stream_id:u8, sequence:u32, timestamp_us:u64, chunk_length:u32, gap_count:u8, gap_reason:u8, flags:u8` | OPTIONAL — published only when the source is registered with `cfg.notify_bus = 1`, for low-rate observers. Workers never depend on it                         |
 
 Message IDs allocated in the `0x0400–0x13FF` Official EmbedIQ namespace (verify in messages_registry.json).
 
-### Three-Tier Consumer Model
+### Three-Tier Worker Model
 
-| Tier | `max_buffered_copies` | Behavior | Typical use |
-|------|-----------------------|----------|-------------|
-| 1 — Fast zero-copy | 0 | Direct DMA pointer. Must release within `(buffer_count-1) × frame_period`. | TinyML inference, local display |
-| 2 — Rate-limited zero-copy | 0 | Self-skips frames when slow; publishes MSG_STREAM_BACKPRESSURE. | Network relay at reduced rate |
-| 3 — Copy | N > 0 | Framework copies into pre-allocated pool; DMA buffer returned immediately. | HTTPS upload, BLE relay, encoding |
+The tier is declared at worker registration through `embediq_stream_worker_cfg_t.max_copies`.
 
-**Audio rule (mandatory):** all audio streams use Tier 3 (`max_buffered_copies ≥ 1`) with
-`buffer_count ≥ 3`. The 10 ms DMA timing window is too tight for zero-copy software consumers.
+| Tier                       | `max_copies` | Behavior                                                                                                                                                     | Typical use                                                       |
+| -------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| 1 — Fast zero-copy         | 0            | `on_chunk()` receives a direct pointer into the DMA pool. Must return within `(buffer_count-1) × frame_period`.                                              | TinyML inference, local display                                   |
+| 2 — Rate-limited zero-copy | 0            | `on_chunk()` returns immediately for chunks it chooses to skip; owner publishes MSG_STREAM_BACKPRESSURE on sustained sink failure.                           | Network relay at reduced rate                                     |
+| 3 — Copy                   | N > 0        | Engine copies each chunk into the worker-private pre-allocated pool and returns the DMA buffer at once. Pool full → chunk dropped, `gap_reason = POOL_FULL`. | HTTPS upload, BLE relay, encoding, OTA, any worker that may block |
+
+The Tier 3 pool is worker-private and pre-allocated at registration: if `max_copies × copy_size`
+bytes cannot be allocated, `embediq_stream_worker_register()` fails at startup — never hours
+into field operation.
+
+**Audio rule (mandatory):** all audio streams use Tier 3 (`max_copies ≥ 1`) with
+`buffer_count ≥ 3`. The 10 ms DMA timing window is too tight for zero-copy software workers.
+
+**Codec pattern** — a codec (e.g. PCM → Opus) consumes one stream and produces another:
+```
+init_fn:
+  Pre-allocate codec output pool: POOL_SIZE × MAX_ENCODED_FRAME_SIZE (static array)
+  Register as source: embediq_stream_source_register(encoded_stream_id, &sw_source_ops, ...)
+  Register a worker on the raw stream: embediq_stream_worker_register(raw_stream_id, on_raw, ctx, {max_copies=0})
+
+on_raw(raw, ctx):   ← runs on the worker thread; raw is valid only inside this call
+  Select free output buffer from pool (if none: drop, return)
+  codec_encode(raw->data, raw->length, out_buf, &encoded_len)
+  embediq_stream_push(encoded_stream_id, &encoded_chunk)   ← push happens inside the call; the engine
+                                                              releases raw when on_raw returns
+  Downstream worker's on_chunk() returns → engine → sw_source_ops.release_chunk() frees the slot
+```
 
 ### Observability — Framework-Layer, Not Application-Layer
 
-The framework instruments `chunk_acquire()` / `chunk_release()` internally. No FB code needed.
-Three Observatory event categories (existing Observatory infrastructure, no new pipeline):
+The Observatory record is the 14-byte `EmbedIQ_Event_t` — there is no event payload. Streaming
+observability is therefore split into **events** (Observatory, 14 bytes, per occurrence) and
+**metrics** (`fb_telemetry` gauges, per window). The engine emits both; no FB code is needed.
 
-| Event | Priority | Interval | Key fields |
-|-------|----------|----------|------------|
-| `OBS_STREAM_HEALTH` | LOW | ~10 s aggregate | throughput_kbs, gap_rate_pct, buf_util_pct, pool_util_pct |
-| `OBS_STREAM_FAULT` | HIGH | On threshold | TIMING_WARNING (>80% budget), TIMING_VIOLATION, POOL_EXHAUSTED, DRAIN_TIMEOUT, DEVICE_DISCONNECT |
-| `OBS_STREAM_CONSUMER_TIMING` | LOW | Sampled 1-in-100 | hold_time_us, budget_pct |
+Source IDs: `EMBEDIQ_OBS_SRC_STREAM_BASE` (0xF0) + `stream_id`, and
+`EMBEDIQ_OBS_SRC_STREAM_FRAMEWORK` (0xFF) for engine-level events. Event constants are
+allocated in `embediq_obs.h` at the next free value in each band:
 
-Observatory source IDs: `EMBEDIQ_OBS_SRC_STREAM_BASE + stream_id` (range `0xF0–0xFF`,
-reserved in `embediq_obs.h` — see STEP 5 of this prompt).
+| Constant                               | Band   | source_fb_id     | target_fb_id        | state_or_flag                                                                                       | msg_id (u16)                                  | When                                                                 |
+| -------------------------------------- | ------ | ---------------- | ------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------- |
+| `EMBEDIQ_OBS_EVT_STREAM_FAULT` (0x6A)  | FAULT  | 0xF0 + stream_id | owner FB ep or 0xFF | fault_code: TIMING_VIOLATION=1, POOL_EXHAUSTED=2, DRAIN_TIMEOUT=3, DEVICE_DISCONNECT=4, DEVICE_IO=5 | sequence, low 16 bits                         | Threshold crossed or HAL fault                                       |
+| `EMBEDIQ_OBS_EVT_STREAM_HOLD` (0x51)   | TIMING | 0xF0 + stream_id | owner FB ep         | budget_pct (0–255; > 100 = exceeded)                                                                | hold_us (saturated)                           | 1 in 100 `on_chunk()` returns, and every return with budget_pct > 80 |
+| `EMBEDIQ_OBS_EVT_STREAM_NOTIFY` (0x52) | TIMING | 0xF0 + stream_id | owner FB ep         | 0                                                                                                   | callback-to-`on_chunk` latency µs (saturated) | 1 in 100 chunks — the framework-overhead measurement                 |
+| `EMBEDIQ_OBS_EVT_STREAM_STATE` (0x34)  | STATE  | 0xF0 + stream_id | 0xFF                | OPEN=1, START=2, PAUSE=3, RESUME=4, EOS=5, CLOSE=6                                                  | 0                                             | Stream lifecycle                                                     |
+
+**Metrics:** per stream, once per window (`EMBEDIQ_STREAM_HEALTH_WINDOW_S`, 10 s default), the
+engine publishes `MSG_TELEMETRY_GAUGE` on its own behalf: `stream.<id>.throughput_kbs`,
+`stream.<id>.gap_rate_pct`, `stream.<id>.buf_util_pct`, `stream.<id>.pool_util_pct`,
+`stream.<id>.worker_count`. `fb_telemetry` batches and `fb_cloud_mqtt` uploads them exactly
+like any other gauge — no new transport, no new format.
+
+**Latency budget:** the per-chunk path is HAL callback → OSAL signal → worker wakes → engine
+acquire → `on_chunk()` — one context switch, zero bus traffic. Framework overhead from callback
+to `on_chunk()` entry is ≤ 100 µs on Linux/POSIX and ≤ 20 µs on Cortex-M, measured continuously
+by `EMBEDIQ_OBS_EVT_STREAM_NOTIFY` and printed by the `examples/env_monitor` example at exit. A
+build that exceeds the budget in the example is a regression.
 
 Streaming Driver FBs call `embediq_obs_fault()` for hardware-level fatal errors only —
-identical contract to existing Driver FBs. All streaming-specific telemetry is handled
-by the framework.
+identical contract to existing Driver FBs.
+
+### Process Boundary Is a Sink
+
+The Bridge stays control-only: it serialises 64-byte `EmbedIQ_Msg_t` frames, and an External FB
+in another process can never reach the engine's buffers. A process that needs stream bytes
+gets them through a sink:
+
+- `hal/posix/ops/hal_stream_sink_unixsock_posix.c` — a sink HAL whose `write()` sends one chunk
+  on a Unix domain socket, framed with the same 9-byte header BLE uses (`stream_id:u8,
+  total_len:u32, frag_seq:u16, frag_count:u16`).
+- The built-in sink worker (`embediq_stream_worker_sink`) pumps any source into it.
+- Handshake once: the sidecar's External FB publishes `MSG_STREAM_ATTACH{stream_id, UNIXSOCK}`
+  over the Bridge; the owner FB attaches a sink worker and replies `MSG_STREAM_ATTACHED{socket
+  path}`; `MSG_STREAM_DETACH` tears it down. Bytes never travel on the bus.
+- Python SDK (`embediq-python`): `stream = embediq.stream_open("cam_0")` returns an iterator of
+  `(meta, bytes)`; `stream.close()` detaches.
 
 ### Agent Coding Rules — Streaming (R-sub-20 through R-sub-29)
 
@@ -1448,13 +1630,184 @@ Brief reference:
 - **R-sub-20** chunk_cb is ISR context. Always. Two ops: ring_buffer_write + osal_signal_from_isr.
 - **R-sub-21** DMA buffers on STM32: EMBEDIQ_STREAM_DMA_SECTION + EMBEDIQ_STREAM_DMA_ALIGN. Never stack/malloc.
 - **R-sub-22** source_ops_t and sink_ops_t are separate types. Never mix.
-- **R-sub-23** Every chunk_acquire has exactly one chunk_release. Release before exit_fn returns.
-- **R-sub-24** Release source buffer before calling embediq_stream_push. Never hold cross-stream.
-- **R-sub-25** The bus never carries stream data. MSG_STREAM_CHUNK_READY is 19 bytes metadata only.
-- **R-sub-26** Audio: Tier 3 (max_buffered_copies ≥ 1), buffer_count ≥ 3. Not negotiable.
+- **R-sub-23** A chunk lives only inside on_chunk(); never store the pointer. worker_unregister before exit_fn returns.
+- **R-sub-24** Codec workers push inside on_chunk(); the engine releases the input when on_chunk returns. Never hold a chunk across calls.
+- **R-sub-25** The bus never carries stream data and is never on the per-chunk path. CHUNK_READY (20 B) is optional, for observers only. Anything over EMBEDIQ_MSG_MAX_PAYLOAD is a stream (R-sub-31).
+- **R-sub-26** Audio: Tier 3 (max_copies ≥ 1), buffer_count ≥ 3. Not negotiable.
 - **R-sub-27** H.264 in v1 = I-frame only. No B-frames. No P-frame dependencies.
-- **R-sub-28** Consumers must be registered FB threads. Never call chunk_acquire from pthread/xTaskCreate.
-- **R-sub-29** Streaming Driver FBs do not implement custom telemetry. embediq_obs_fault() for fatal errors only.
+- **R-sub-28** Data work runs in a framework-owned stream worker (worker_register); never in a run_fn handler and never on a thread the FB created (R-sub-20, R-sub-30).
+- **R-sub-29** Driver FBs implement no telemetry; the engine emits STREAM_* events and stream.* gauges. embediq_obs_fault() for fatal errors only.
+
+---
+
+## OTA — Transport-Blind Firmware Update
+
+`fb_ota` updates firmware without knowing which cloud, link or transport delivered the image.
+For the full decision record, see `EmbedIQ_Master_Package_Final_2/PM/OTA_DESIGN_CONTEXT.md`.
+
+### Three Layers
+
+| Layer                    | Owner                                                 | Knows about                               |
+| ------------------------ | ----------------------------------------------------- | ----------------------------------------- |
+| Cloud / fleet            | Any backend (Hawkbit, custom, a CLI)                  | Fleets, campaigns, artefacts              |
+| `fb_ota` common plumbing | Service FB, Layer 2, `fbs/services/fb_ota.c`          | FSM, SHA-256, NVM keys, shutdown protocol |
+| Platform hook            | `embediq_ota_ops_t`, `core/include/ops/embediq_ota.h` | Flash partitions, boot flags, files       |
+
+The platform hook, quoted from the contract (each call must return within 100 ms):
+
+```c
+typedef struct {
+    /**
+     * MUST BE FIRST — ABI versioning (I-17).
+     * Set to EMBEDIQ_OTA_OPS_VERSION at ops table declaration.
+     */
+    uint32_t version;
+
+    /**
+     * Prepare the inactive partition for writing (erase, bounds check).
+     * Called once at the start of each OTA session.
+     * @return EMBEDIQ_OK if partition is ready, EMBEDIQ_ERR otherwise.
+     */
+    embediq_err_t (*begin)(void);
+
+    /**
+     * Write one chunk of image data to the inactive partition.
+     * May be called many times. Chunks are contiguous; offset is tracked
+     * internally by the platform.
+     *
+     * @param chunk  Pointer to image bytes.
+     * @param len    Number of bytes in this chunk.
+     * @return EMBEDIQ_OK on success, EMBEDIQ_ERR on flash write error.
+     */
+    embediq_err_t (*write)(const uint8_t *chunk, uint32_t len);
+
+    /**
+     * Verify integrity of the written image (hash, signature, or CRC).
+     * Called once after all chunks have been written.
+     * @return EMBEDIQ_OK if image is valid, EMBEDIQ_ERR if corrupted or rejected.
+     */
+    embediq_err_t (*verify)(void);
+
+    /**
+     * Mark the inactive partition as the next boot target.
+     * Does NOT reboot — the caller (fb_ota) triggers reboot by calling
+     * embediq_engine_dispatch_shutdown() after the OTA lifecycle completes.
+     * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if the partition cannot be marked.
+     */
+    embediq_err_t (*apply)(void);
+
+    /**
+     * Abort the OTA session and restore the partition to its pre-OTA state.
+     * Safe to call at any point after begin().
+     * @return EMBEDIQ_OK on success.
+     */
+    embediq_err_t (*abort)(void);
+} embediq_ota_ops_t;
+
+typedef enum {
+    EMBEDIQ_OTA_STATE_IDLE           = 0,  /**< No OTA in progress.                    */
+    EMBEDIQ_OTA_STATE_DOWNLOADING,         /**< Receiving image chunks.                */
+    EMBEDIQ_OTA_STATE_VERIFYING,           /**< Running integrity check.               */
+    EMBEDIQ_OTA_STATE_READY_TO_APPLY,      /**< Verified; waiting for safe shutdown.   */
+    EMBEDIQ_OTA_STATE_APPLYING,            /**< Marking boot partition; near reboot.   */
+    EMBEDIQ_OTA_STATE_DONE,                /**< apply() succeeded; reboot imminent.    */
+    EMBEDIQ_OTA_STATE_ABORTED              /**< OTA cancelled or failed.               */
+} embediq_ota_state_t;
+```
+
+`begin()`, `write()` and `verify()` are called from fb_ota's stream worker; `apply()` and
+`abort()` from fb_ota's dispatch thread after the worker has been unregistered. The ops are
+never called concurrently.
+
+**Locked decisions.** The device side is cloud-agnostic: `fb_ota` consumes `{url, checksum,
+version}` and nothing else. `fb_ota` is a data-plane consumer: it receives the image through a
+Tier-3 stream worker on `ota_img_0` and never opens a socket, a radio, or a file. The manifest is
+bulk too: the ~200 B `ota_check` JSON travels as a one-chunk stream on `cloud_cmd_0`, announced by
+`MSG_OTA_UPDATE_AVAILABLE {manifest_stream_id, flags}` (4 B). The bus carries the reference,
+never the manifest (R-sub-31, R-sub-32).
+
+### Update Sequence
+
+```
+BUS (control, ≤ 64 B)                                  DATA PLANE (bytes)
+────────────────────────────────────────────────────── ────────────────────────────────────────────────
+1  trigger producer pushes the manifest, then          manifest JSON → one chunk + EOS on cloud_cmd_0
+   MSG_OTA_UPDATE_AVAILABLE{cloud_cmd_0} → fb_ota      → fb_ota Tier-3 worker: url, checksum, version
+2  fb_ota starts the fetch; MSG_OTA_STARTED            producer → ota_img_0 → fb_ota worker on_chunk():
+                                                            SHA-256 update + ops->write(chunk, len)
+3  MSG_OTA_PROGRESS on state change only               EOS: hash == manifest checksum → ops->verify()
+                                                            → READY_TO_APPLY
+4  MSG_SYS_OTA_REQUEST → FBs with state flush
+   MSG_SYS_OTA_READY collected (500 ms deadline)
+5  NVM ota.pending_version written → ops->apply()
+6  clean shutdown: embediq_engine_dispatch_shutdown()
+   process exits EMBEDIQ_EXIT_OTA_APPLY
+7  supervisor restarts `current` (new image)
+8  first MSG_SYSTEM_READY + ota.pending_version
+   → MSG_OTA_COMPLETE ("installed", new version)
+```
+
+**Who opens the producer.** fb_ota publishes `MSG_STREAM_FETCH_REQUEST {stream_id,
+manifest_stream_id, kind}` (NORMAL, 4 B). The platform's fetcher Driver FB (`fb_stream_fetch` on
+POSIX; `fb_ble_stream_source` on BLE) reads the manifest stream, opens the source on `ota_img_0`
+(`hal_stream_net` with the URL), and closes it on EOS or error. The URL never travels on the bus;
+fb_ota never opens a transport (R-sub-32).
+
+### Producers by Platform
+
+| Platform                                | Producer on `ota_img_0`                                   | `fb_ota.c` | OTA ops implementation                      |
+| --------------------------------------- | --------------------------------------------------------- | ---------- | ------------------------------------------- |
+| Raspberry Pi / Linux, WiFi              | `hal_stream_net` (HTTPS; Content-Length → `total_length`) | identical  | `hal_ota_posix` — A/B image files + symlink |
+| STM32 + WiFi module, or cable / factory | `hal_stream_serial` (UART/SPI DMA)                        | identical  | dual-bank flash + boot flag                 |
+| Wearable, BLE only                      | `fb_ble_stream_source` → `embediq_stream_push()`          | identical  | platform flash                              |
+
+Backpressure throttles the producer when flash writes are slow: if `ops->write()` takes more than
+80 % of its 100 ms limit, fb_ota publishes `MSG_STREAM_BACKPRESSURE` PAUSE, then RESUME.
+
+### Integrity vs. Authenticity
+
+Integrity is platform-independent arithmetic: fb_ota computes SHA-256 over the stream as chunks
+arrive and compares it with the manifest checksum at EOS. Authenticity is platform policy:
+`ops->verify()` is the hook for signature checks and secure-boot headers. The POSIX v1
+`verify()` checks that the staged size equals `total_length` (when known) and that the image is
+readable — never a bare `return EMBEDIQ_OK`.
+
+### Linux HAL (`hal_ota_posix`)
+
+Two image files plus a symlink are the Linux A/B scheme. `begin()` opens
+`EMBEDIQ_OTA_DIR/staged.bin` (build-time path, like `EMBEDIQ_CERT_DIR`); `write()` appends;
+`verify()` as above; `apply()` renames `staged.bin` to the inactive slot and atomically flips the
+`current` symlink to it; `abort()` unlinks `staged.bin`. `apply()` does not restart anything —
+fb_ota runs the shutdown protocol and the process exits with `EMBEDIQ_EXIT_OTA_APPLY`, a value
+outside the `sysexits.h` range (64–78) so no supervisor mistakes it for a transient failure. On
+an MCU the same FSM flips the boot flag and resets.
+
+### Failure Policy
+
+Any stream error, hash mismatch, `verify()` or `apply()` failure → `ops->abort()`, state
+ABORTED, `MSG_OTA_FAILED{reason}`, back to IDLE. Reasons: `MANIFEST_INVALID`, `STREAM_ERROR`,
+`HASH_MISMATCH`, `VERIFY_FAILED`, `APPLY_FAILED`, `SHUTDOWN_TIMEOUT`. One automatic retry of the
+fetch on `MSG_STREAM_ERROR` `DEVICE_IO` only — never on a hash mismatch.
+
+### Messages
+
+| ID     | Name                       | Payload                                               | Notes                                                                                  |
+| ------ | -------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 0x0003 | `MSG_SYS_OTA_REQUEST`      | —                                                     | Published by fb_ota; every FB with persistent state flushes and replies                |
+| 0x0004 | `MSG_SYS_OTA_READY`        | —                                                     | Reply to the request; 500 ms deadline                                                  |
+| 0x05DC | `MSG_OTA_STARTED`          | —                                                     | Download started (existing reserved ID)                                                |
+| 0x05DD | `MSG_OTA_PROGRESS`         | `pct:u8, state:u8`                                    | On FSM state change only — never per chunk                                             |
+| 0x05DE | `MSG_OTA_COMPLETE`         | —                                                     | Published by the new image; fb_cloud_mqtt reports `ota_status:"installed"` + `version` |
+| 0x05DF | `MSG_OTA_FAILED`           | `reason:u8`                                           | fb_cloud_mqtt reports `ota_status:"failed"` + `reason`                                 |
+| 0x05E0 | `MSG_OTA_UPDATE_AVAILABLE` | `manifest_stream_id:u8, flags:u8, reserved:u16` (4 B) | New. The trigger carries a reference to the manifest stream, never the manifest        |
+
+### v1 Scope and Responsibilities
+
+v1: Linux/POSIX, SHA-256 integrity, A/B image files + symlink, no signature verification, no
+automatic rollback, no download resume. **DEVELOPER OWNS:** the process supervisor (systemd
+`Restart=always`, runit, a shell loop), the signature scheme behind `ops->verify()`, and the
+rollback policy. The rollback hook is in place: `ota.pending_version` in NVM plus the previous
+image slot left on disk.
 
 ---
 
@@ -1972,7 +2325,7 @@ EmbedIQ_WDG_ResetReason_t embediq_wdg_last_reset_reason(void);
 ### fb_nvm — Non-Volatile Memory Platform FB
 
 `fb_nvm` is the shared foundation. Without it: state does not survive reset. `fb_watchdog`
-cannot persist reset reason. `fb_ota` cannot persist rollback state.
+cannot persist reset reason. `fb_ota` persists `ota.pending_version` and the firmware version in NVM; rollback policy is the product's (see OTA section).
 
 | Aspect | Contract |
 | ------ | -------- |
@@ -2248,34 +2601,34 @@ institutions can use EmbedIQ in closed-source products without source disclosure
 
 Verify every item before emitting any EmbedIQ code.
 
-| Rule | Correct | Incorrect |
-| ---- | ------- | --------- |
-| R-sub-01 | `EMBEDIQ_SUBS(my_subs, MSG_X, MSG_Y)` | `.subscriptions = (uint16_t[]){MSG_X, MSG_Y}` — compound literal, lifetime bug |
-| R-sub-02 | `embediq_publish(fb, &msg)` for cross-FB | `other_fb_do_thing()` — direct call, violates R-01 |
-| R-sub-03 | `embediq_fb_register(&config)` | `xTaskCreate(...)` in application FB — no RTOS calls in app layer |
-| R-sub-04 | `uint32_t delta = b.sequence - a.sequence` | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap |
-| R-sub-05 | `EmbedIQ_Msg_t msg = {.msg_id=X}` (stack) | `malloc(sizeof(EmbedIQ_Msg_t))` — no malloc in Layer 1 |
-| R-sub-06 | Add fields at END only, increment `schema_id` | Remove/rename/reorder existing fields — breaks Observatory |
-| R-sub-07 | `report_fault()` when FB cannot continue | `report_fault()` for a timeout that should be retried |
-| R-sub-08 | Call all `subfn_register()` first, then return | Call `init_fn()` manually before registration completes |
-| R-sub-09 | `"fb.subfn"` dotted syntax in test files only | `embediq_bus_send(fb, "fb.subfn", &msg)` in production code |
-| R-sub-10 | Opaque types in Core: `typedef struct EmbedIQ_Task_s EmbedIQ_Task_t` | `#include "freertos/FreeRTOS.h"` in Core header |
-| R-sub-11 | `osal_signal` only in Driver FB sub-functions | `osal_signal` in application FB sub-function |
-| R-sub-12 | See Non-Goals list | Worker pool, message pool, bridge auth, runtime subscriptions |
-| R-sub-13 | Message ID in correct namespace range | Community FB ID outside 5120–65535 without registry reservation |
-| R-sub-14 | `boot_phase` declared in every FB config | Missing `boot_phase` — will default to APPLICATION silently |
-| R-sub-15 | `sequence` for ordering, not `timestamp_us` | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap |
-| R-sub-16 | Driver FB calls `hal/*.h` only for hardware access | Driver FB calls `esp_uart_write()` or `HAL_UART_Transmit()` directly — bypasses HAL contract |
-| R-sub-20 | `chunk_cb`: `ring_buffer_write()` + `osal_signal_from_isr()` only | Any OS call, framework call, or logging inside the chunk callback — hard fault on bare-metal |
-| R-sub-21 | STM32 DMA buffers: `EMBEDIQ_STREAM_DMA_SECTION EMBEDIQ_STREAM_DMA_ALIGN static uint8_t buf[...]` | DMA buffer on stack or via `malloc()` — DTCM on STM32H7 is not DMA-accessible; silent corruption |
-| R-sub-22 | Source uses `embediq_stream_source_ops_t`; sink uses `embediq_stream_sink_ops_t` | One combined ops table with stubs for unused functions — type pollution, silent failure at runtime |
-| R-sub-23 | Every `chunk_acquire()` followed by exactly one `chunk_release()` before `exit_fn` returns | Unreleased chunk at stream close — triggers drain timeout fault path |
-| R-sub-24 | `chunk_release(raw_stream, &raw)` BEFORE `embediq_stream_push(encoded_stream, &out)` | Holding raw + encoded chunk simultaneously — can deadlock the drain-on-close path |
-| R-sub-25 | `MSG_STREAM_CHUNK_READY` carries 19 bytes of metadata; consumer calls `chunk_acquire()` | Frame bytes inside a bus message payload — misuses both planes; throughput and memory failure |
-| R-sub-26 | Audio streams: `max_buffered_copies ≥ 1`, `buffer_count ≥ 3` (Tier 3 always) | Zero-copy audio consumer on a loaded system — 10 ms DMA window is too tight; overrun inevitable |
-| R-sub-27 | `EMBEDIQ_STREAM_ENC_H264` = I-frame-only, independently-decodable | B-frames or P-frame dependencies in v1 — requires multi-frame buffer manager outside streaming plane |
-| R-sub-28 | Consumer FB thread calls `chunk_acquire()` after receiving `MSG_STREAM_CHUNK_READY` | `pthread_create` or `xTaskCreate` solely to call `chunk_acquire()` — violates actor model; R-sub-20 |
-| R-sub-29 | Streaming Driver FB calls `embediq_obs_fault()` for fatal hardware errors only | Custom byte counters, timing loops, or telemetry emission in Driver FB — framework already instruments this |
+| Rule     | Correct                                                                                                                                                                                         | Incorrect                                                                                                                                                           |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R-sub-01 | `EMBEDIQ_SUBS(my_subs, MSG_X, MSG_Y)`                                                                                                                                                           | `.subscriptions = (uint16_t[]){MSG_X, MSG_Y}` — compound literal, lifetime bug                                                                                      |
+| R-sub-02 | `embediq_publish(fb, &msg)` for cross-FB                                                                                                                                                        | `other_fb_do_thing()` — direct call, violates R-01                                                                                                                  |
+| R-sub-03 | `embediq_fb_register(&config)`                                                                                                                                                                  | `xTaskCreate(...)` in application FB — no RTOS calls in app layer                                                                                                   |
+| R-sub-04 | `uint32_t delta = b.sequence - a.sequence`                                                                                                                                                      | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap                                                                                                          |
+| R-sub-05 | `EmbedIQ_Msg_t msg = {.msg_id=X}` (stack)                                                                                                                                                       | `malloc(sizeof(EmbedIQ_Msg_t))` — no malloc in Layer 1                                                                                                              |
+| R-sub-06 | Add fields at END only, increment `schema_id`                                                                                                                                                   | Remove/rename/reorder existing fields — breaks Observatory                                                                                                          |
+| R-sub-07 | `report_fault()` when FB cannot continue                                                                                                                                                        | `report_fault()` for a timeout that should be retried                                                                                                               |
+| R-sub-08 | Call all `subfn_register()` first, then return                                                                                                                                                  | Call `init_fn()` manually before registration completes                                                                                                             |
+| R-sub-09 | `"fb.subfn"` dotted syntax in test files only                                                                                                                                                   | `embediq_bus_send(fb, "fb.subfn", &msg)` in production code                                                                                                         |
+| R-sub-10 | Opaque types in Core: `typedef struct EmbedIQ_Task_s EmbedIQ_Task_t`                                                                                                                            | `#include "freertos/FreeRTOS.h"` in Core header                                                                                                                     |
+| R-sub-11 | `osal_signal` only in Driver FB sub-functions                                                                                                                                                   | `osal_signal` in application FB sub-function                                                                                                                        |
+| R-sub-12 | See Non-Goals list                                                                                                                                                                              | Worker pool, message pool, bridge auth, runtime subscriptions                                                                                                       |
+| R-sub-13 | Message ID in correct namespace range                                                                                                                                                           | Community FB ID outside 5120–65535 without registry reservation                                                                                                     |
+| R-sub-14 | `boot_phase` declared in every FB config                                                                                                                                                        | Missing `boot_phase` — will default to APPLICATION silently                                                                                                         |
+| R-sub-15 | `sequence` for ordering, not `timestamp_us`                                                                                                                                                     | `if (b.timestamp > a.timestamp)` — wrong after 71-min wrap                                                                                                          |
+| R-sub-16 | Driver FB calls `hal/*.h` only for hardware access                                                                                                                                              | Driver FB calls `esp_uart_write()` or `HAL_UART_Transmit()` directly — bypasses HAL contract                                                                        |
+| R-sub-20 | `chunk_cb`: `ring_buffer_write()` + `osal_signal_from_isr()` only                                                                                                                               | Any OS call, framework call, or logging inside the chunk callback — hard fault on bare-metal                                                                        |
+| R-sub-21 | STM32 DMA buffers: `EMBEDIQ_STREAM_DMA_SECTION EMBEDIQ_STREAM_DMA_ALIGN static uint8_t buf[...]`                                                                                                | DMA buffer on stack or via `malloc()` — DTCM on STM32H7 is not DMA-accessible; silent corruption                                                                    |
+| R-sub-22 | Source uses `embediq_stream_source_ops_t`; sink uses `embediq_stream_sink_ops_t`                                                                                                                | One combined ops table with stubs for unused functions — type pollution, silent failure at runtime                                                                  |
+| R-sub-23 | Use the chunk only inside `on_chunk()`; owner calls `embediq_stream_worker_unregister()` before `exit_fn` returns                                                                               | Storing `chunk->data` for use after `on_chunk()` returns — the buffer is already back in hardware rotation or the copy pool                                         |
+| R-sub-24 | Codec worker calls `embediq_stream_push(encoded_stream, &out)` inside `on_chunk()`; the engine releases the input when `on_chunk()` returns                                                     | Holding a chunk across `on_chunk()` calls — can deadlock the drain-on-close path                                                                                    |
+| R-sub-25 | Workers are driven by the engine; the bus carries control only; `MSG_STREAM_CHUNK_READY` (20 B) is optional, for observers only; anything over `EMBEDIQ_MSG_MAX_PAYLOAD` is a stream (R-sub-31) | Frame bytes inside a bus payload, or a worker that waits for `MSG_STREAM_CHUNK_READY` — puts the bus on the per-chunk path                                          |
+| R-sub-26 | Audio streams: Tier 3 (`max_copies ≥ 1`), `buffer_count ≥ 3`                                                                                                                                    | Zero-copy audio worker on a loaded system — 10 ms DMA window is too tight; overrun inevitable                                                                       |
+| R-sub-27 | `EMBEDIQ_STREAM_ENC_H264` = I-frame-only, independently-decodable                                                                                                                               | B-frames or P-frame dependencies in v1 — requires multi-frame buffer manager outside streaming plane                                                                |
+| R-sub-28 | Data work runs in a framework-owned stream worker: `embediq_stream_worker_register(stream_id, on_chunk, ctx, &cfg, &w)`                                                                         | Stream work inside a `run_fn` handler, or on a thread the FB created (`pthread_create`, `xTaskCreate`, `embediq_osal_task_create`) — violates R-sub-20 and R-sub-30 |
+| R-sub-29 | Driver FB implements no telemetry; the engine emits `STREAM_*` events and `stream.*` gauges; Driver FB calls `embediq_obs_fault()` for fatal hardware errors only                               | Custom byte counters, timing loops, or telemetry emission in a Driver FB — the framework already instruments this                                                   |
 
 ---
 
