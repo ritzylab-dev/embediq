@@ -24,6 +24,16 @@ if(NOT EMBEDIQ_PLATFORM STREQUAL "host" AND NOT EMBEDIQ_PLATFORM STREQUAL "test"
     message(FATAL_ERROR "Set -DEMBEDIQ_PLATFORM=host or test")
 endif()
 
+option(EMBEDIQ_TSAN "Build everything with ThreadSanitizer (host/test platforms only)" OFF)
+if(EMBEDIQ_TSAN)
+    if(NOT (EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test"))
+        message(FATAL_ERROR "EMBEDIQ_TSAN requires EMBEDIQ_PLATFORM=host or test")
+    endif()
+    add_compile_options(-fsanitize=thread -g -O1 -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+    message(STATUS "EmbedIQ: ThreadSanitizer enabled")
+endif()
+
 # ---------------------------------------------------------------------------
 # Compile-time platform definitions
 # ---------------------------------------------------------------------------

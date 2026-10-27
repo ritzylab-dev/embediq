@@ -141,6 +141,17 @@ EmbedIQ has a clear public/private boundary. Contributions must respect it.
 5. Changes requested → address them → re-review
 6. Approved + CI green → merged
 
+### ThreadSanitizer build
+
+```bash
+cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON
+cmake --build build_tsan
+TSAN_OPTIONS="halt_on_error=0 second_deadlock_stack=1 history_size=4 suppressions=$PWD/tools/ci/tsan.supp log_path=$PWD/build_tsan/tsan" \
+  ctest --test-dir build_tsan --output-on-failure --timeout 300
+```
+
+The tsan CI job is advisory until Set 2 fixes land; after F7 it is a required check.
+
 ---
 
 ## Getting help
