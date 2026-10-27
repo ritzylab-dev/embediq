@@ -209,16 +209,36 @@ It does NOT abstract hardware peripherals (that is HAL).
 Contract: `core/include/embediq_osal.h`.
 
 ```c
-EmbedIQ_Task_t*  embediq_osal_task_create(const char* name, void(*fn)(void*), void* arg,
-                                          uint8_t priority, uint16_t stack_bytes);
-EmbedIQ_Queue_t* embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
-void             embediq_osal_queue_destroy(EmbedIQ_Queue_t* q);
-bool             embediq_osal_queue_send(EmbedIQ_Queue_t* q, const void* item, uint32_t timeout_ms);
-bool             embediq_osal_queue_recv(EmbedIQ_Queue_t* q, void* item, uint32_t timeout_ms);
-EmbedIQ_Signal_t* embediq_osal_signal_create(void);
-void              embediq_osal_signal_wait(EmbedIQ_Signal_t* sig);
-void              embediq_osal_signal_from_isr(EmbedIQ_Signal_t* sig); // ISR-safe
+EmbedIQ_Task_t *embediq_osal_task_create(const char *name,
+                                          void (*fn)(void *), void *arg,
+                                          uint8_t priority,
+                                          uint16_t stack_bytes);
+
+EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
+void embediq_osal_queue_destroy(EmbedIQ_Queue_t *q);
+embediq_err_t embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
+                                       uint32_t timeout_ms);
+embediq_err_t embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
+                                       uint32_t timeout_ms);
+
+EmbedIQ_Mutex_t *embediq_osal_mutex_create(void);
+embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
+void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
+
+embediq_sem_t  embediq_sem_create(uint32_t initial_count, uint32_t max_count);
+embediq_err_t  embediq_sem_wait(embediq_sem_t sem);
+embediq_err_t  embediq_sem_post(embediq_sem_t sem);
+embediq_err_t  embediq_sem_post_from_isr(embediq_sem_t sem);
+
+EmbedIQ_Signal_t *embediq_osal_signal_create(void);
+void embediq_osal_signal_wait(EmbedIQ_Signal_t *sig);
+void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig);
+
+uint32_t embediq_osal_time_us(void);
+uint32_t embediq_osal_time_ms(void);
 ```
+
+Contract: core/include/embediq_osal.h is authoritative; this excerpt is illustrative.
 
 ### Native FB vs. External FB
 
@@ -887,16 +907,16 @@ Generated structs in `generated/provisioning_msg_catalog.h`.
 
 The FB is the unit of everything. Every concern in your firmware is one FB.
 
-| Property | What it means |
-| -------- | ------------- |
-| Owns state exclusively | Private `fb_data` struct. No globals. No shared memory across FB boundaries. |
-| Communicates by message only | Never calls another FB directly. Intra-FB helpers are normal C. |
-| Single execution context | Executes sequentially. Actor model. No concurrent execution within one FB. No locks needed. |
-| Executor policy v1 | Dedicated OS thread per FB. |
-| Explicit lifecycle | `IDLE → INITIALISING → RUNNING → FAULT → STOPPING → STOPPED`. Every transition observable. |
-| Observable by default | All lifecycle, bus messages, FSM transitions auto-captured. Zero developer code. |
-| Testable by design | Message-only cross-FB interface: inject messages, assert on output. No hardware required. |
-| Composed of sub-functions | Internal structure from sub-functions, each with subscriptions and optional FSM. |
+| Property                     | What it means                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owns state exclusively       | Private `fb_data` struct. No globals. No shared memory across FB boundaries.                                                                                                                                                                                                                                                                                                             |
+| Communicates by message only | Never calls another FB directly. Intra-FB helpers are normal C.                                                                                                                                                                                                                                                                                                                          |
+| Single execution context     | Executes sequentially. Actor model. An Application FB runs only on its framework-owned dispatch thread: no concurrent execution within the FB, no locks, no threads, ever. A Platform FB (Driver or Service FB that wraps hardware or a library) may own additional threads; those threads enter the framework only through the thread-safe entry points listed in "Threads in EmbedIQ". |
+| Executor policy v1           | One framework-owned dispatch thread per FB that subscribes to at least one message. An FB with no subscriptions has no dispatch thread. See "Threads in EmbedIQ".                                                                                                                                                                                                                        |
+| Explicit lifecycle           | `IDLE → INITIALISING → RUNNING → FAULT → STOPPING → STOPPED`. Every transition observable.                                                                                                                                                                                                                                                                                               |
+| Observable by default        | All lifecycle, bus messages, FSM transitions auto-captured. Zero developer code.                                                                                                                                                                                                                                                                                                         |
+| Testable by design           | Message-only cross-FB interface: inject messages, assert on output. No hardware required.                                                                                                                                                                                                                                                                                                |
+| Composed of sub-functions    | Internal structure from sub-functions, each with subscriptions and optional FSM.                                                                                                                                                                                                                                                                                                         |
 
 ### FB Registration
 
@@ -1012,6 +1032,43 @@ Enforced by `tools/boundary_checker.py` in CI. Violations = CI failure.
 
 ---
 
+## Threads in EmbedIQ
+
+EmbedIQ has exactly three kinds of threads. An FB author only ever writes code for the
+first kind.
+
+| Thread kind                    | Who creates it                                                                                                               | What runs on it                                                             | Rules                                                                                                                                        |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Application FB dispatch thread | Framework (Layer 1), one per subscribing FB                                                                                  | `init_fn` runs on the boot thread; `run_fn` handlers and `exit_fn` run here | No OSAL primitives, no locks, no threads. All state is the FB's private `fb_data`.                                                           |
+| Platform thread                | A Platform FB or a HAL implementation (timer tick, watchdog monitor, bridge listener/mux, TLS connect, MQTT client callback) | Hardware or library callbacks                                               | May use OSAL primitives internally. Enters the framework ONLY through the thread-safe entry points below. Must not touch any FB's `fb_data`. |
+| Framework worker               | Layer 1 on request (streaming data plane)                                                                                    | A function the owning FB supplies, one call per chunk                       | No inbox. Control reaches the owner FB on its dispatch thread. Observability and lifecycle are framework-managed.                            |
+
+Thread-safe entry points (callable from any thread; everything else in `core/include/` is
+callable only from the thread that owns the object):
+
+| Entry point                                                                                          | Calling context                                                                                                  |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `embediq_publish()` / `embediq_bus_bridge_route()`                                                   | any thread                                                                                                       |
+| `embediq_bus_post_async()`                                                                           | any thread or ISR; the only call permitted inside an async ops-table callback                                    |
+| `embediq_obs_emit()`                                                                                 | any thread                                                                                                       |
+| `embediq_obs_emit_from_isr()`                                                                        | ISR or any thread; fire-and-forget                                                                               |
+| `embediq_engine_notify_fb()`                                                                         | any thread (used by the bus)                                                                                     |
+| `embediq_fb_report_fault()`                                                                          | any thread; delivered to the target FB as a message, state change and `fault_fn` run on the FB's dispatch thread |
+| `embediq_nvm_*` / `embediq_cfg_*` reads                                                              | any thread, non-blocking                                                                                         |
+| `embediq_nvm_*` / `embediq_cfg_*` writes                                                             | any thread; serialised inside `fb_nvm`                                                                           |
+| ops-table callback relays declared in `core/include/ops/*.h` (e.g. `embediq_mqtt_on_receive_call()`) | any thread; the relay forwards to `embediq_publish()` — a HAL thread calls the relay, never the FB               |
+
+Every public function in `core/include/` carries a "Calling context:" line in its header
+comment stating one of: "FB dispatch thread only", "boot thread only", "any thread",
+"any thread or ISR".
+
+Observability guarantees, stated precisely: HASH_CHAIN proves the `.iqtrace` file was not
+altered after it was written. The monotonic `sequence` field proves ordering and
+completeness. The two are independent; both hold because every emit path serialises on
+the Observatory ring.
+
+---
+
 ## Message System
 
 ### Envelope — `EmbedIQ_Msg_t`
@@ -1042,7 +1099,7 @@ passing is copy-by-value at every queue send. Zero-copy pool is a Phase 2+ non-g
 ### Three-Queue Priority Model
 
 Each FB has three independent queues: `HIGH`, `NORMAL`, `LOW`. Drain order each
-cycle: HIGH fully → NORMAL fully → one from LOW (fairness).
+cycle: one message at a time from the first non-empty queue — HIGH, then NORMAL, then LOW — re-checking HIGH after each dispatch.
 
 Message priority and FB thread priority are **independent axes**. A high-priority
 message to a low-priority FB enters the HIGH queue and is processed at that FB's
@@ -1057,10 +1114,13 @@ Queue depth defaults in `embediq_config.h`:
 ```
 
 FB thread drain order (Layer 1 engine — never change this):
-1. Drain HIGH queue completely
-2. Drain NORMAL queue completely
-3. Drain one message from LOW queue (fairness)
-4. If all queues empty: block on OSAL event (any queue)
+1. Take ONE message from the first non-empty queue, checking HIGH, then NORMAL, then LOW.
+2. Dispatch it to the FB's sub-functions.
+3. Go back to step 1 (always re-checking HIGH first).
+4. When all three queues are empty, block on the FB's semaphore until a publisher signals it.
+
+HIGH is always served first, but a message in NORMAL or LOW is delivered as soon as the
+higher queues are momentarily empty — a HIGH burst delays, never starves, the lower queues.
 
 ### Queue Overflow Policy
 
@@ -1085,7 +1145,8 @@ embediq_publish(fb, msg)
      embediq_osal_queue_send(fb->queue[priority], &msg)
 
 [Later — in target FB thread]
-  Drain HIGH queue fully → drain NORMAL fully → drain LOW (one per cycle)
+  Take one message at a time from the first non-empty queue — HIGH, then NORMAL, then LOW —
+  re-checking HIGH after each dispatch
   bus_tap(EVENT_MSG_RX, msg) ← RX tap fires HERE (about to dispatch to sub-fns)
   Look up msg_id in routing table → dispatch to sub-fn list
 ```
@@ -1135,26 +1196,13 @@ every protocol change visible in PR diffs.
 - Any change increments `schema_id`.
 - AI agents: always add new fields at the END. Always increment `schema_id`.
 
-### Large Payload — Chunked Message Pattern
+### Large Payload — Streaming Data Plane
 
-For payloads larger than `EMBEDIQ_MSG_MAX_PAYLOAD` (e.g. OTA firmware chunks,
-data logs): use the chunked message pattern. No new API — uses existing
-`EmbedIQ_Msg_t` with structured payload.
-
-```c
-typedef struct {
-    uint32_t transfer_id;     // unique transfer; same as correlation_id in header
-    uint32_t chunk_offset;    // byte offset of this chunk in the full payload
-    uint32_t total_length;    // total transfer size in bytes
-    uint16_t chunk_length;    // bytes in data[] for this chunk
-    uint8_t  chunk_index;
-    uint8_t  total_chunks;
-    uint8_t  data[EMBEDIQ_CHUNK_DATA_SIZE]; // EMBEDIQ_MSG_MAX_PAYLOAD - 14
-} Payload_Chunk_t;
-
-// MSG_CHUNK_BEGIN, MSG_CHUNK_DATA, MSG_CHUNK_END defined in msg_catalog.h.
-// Receiver assembles chunks using chunk_offset + chunk_length.
-```
+Payloads larger than `EMBEDIQ_MSG_MAX_PAYLOAD` never travel on the Message Bus. Frames,
+audio, files and firmware images travel on the Streaming Data Plane (see the Streaming
+Data Plane section); the bus carries only the metadata that announces them. This applies
+to every direction, including data arriving from the network or from a phone over
+Bluetooth.
 
 ### messages.iq — Schema Syntax
 
@@ -1431,15 +1479,33 @@ typedef struct {
 Opaque handle types only. No RTOS headers in Core.
 
 ```c
-EmbedIQ_Task_t*  embediq_osal_task_create(const char* name, void(*fn)(void*), void* arg,
-                                          uint8_t priority, uint16_t stack_bytes);
-EmbedIQ_Queue_t* embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
-void             embediq_osal_queue_destroy(EmbedIQ_Queue_t* q);
-bool             embediq_osal_queue_send(EmbedIQ_Queue_t* q, const void* item, uint32_t timeout_ms);
-bool             embediq_osal_queue_recv(EmbedIQ_Queue_t* q, void* item, uint32_t timeout_ms);
-EmbedIQ_Signal_t* embediq_osal_signal_create(void);
-void              embediq_osal_signal_wait(EmbedIQ_Signal_t* sig);
-void              embediq_osal_signal_from_isr(EmbedIQ_Signal_t* sig); // ISR-safe
+EmbedIQ_Task_t *embediq_osal_task_create(const char *name,
+                                          void (*fn)(void *), void *arg,
+                                          uint8_t priority,
+                                          uint16_t stack_bytes);
+
+EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size);
+void embediq_osal_queue_destroy(EmbedIQ_Queue_t *q);
+embediq_err_t embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
+                                       uint32_t timeout_ms);
+embediq_err_t embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
+                                       uint32_t timeout_ms);
+
+EmbedIQ_Mutex_t *embediq_osal_mutex_create(void);
+embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
+void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
+
+embediq_sem_t  embediq_sem_create(uint32_t initial_count, uint32_t max_count);
+embediq_err_t  embediq_sem_wait(embediq_sem_t sem);
+embediq_err_t  embediq_sem_post(embediq_sem_t sem);
+embediq_err_t  embediq_sem_post_from_isr(embediq_sem_t sem);
+
+EmbedIQ_Signal_t *embediq_osal_signal_create(void);
+void embediq_osal_signal_wait(EmbedIQ_Signal_t *sig);
+void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig);
+
+uint32_t embediq_osal_time_us(void);
+uint32_t embediq_osal_time_ms(void);
 ```
 
 ---
@@ -1526,7 +1592,7 @@ is the correct pattern.
 
 ## Thread Model — Gateway vs. Constrained Targets
 
-EmbedIQ v1 executor policy: one dedicated OS thread per FB.
+EmbedIQ v1 executor policy: one dedicated OS thread per subscribing Application FB; Platform FBs and HALs may own additional threads under "Threads in EmbedIQ".
 
 ### Gateway-class devices (Linux hosts, Raspberry Pi, resource-rich MCUs)
 
@@ -2078,7 +2144,7 @@ state management, not for byte-timing guarantees.
 Do not generate code for any of these. Named future work, not omissions.
 
 ```
-EXECUTOR:    Worker pool. v1 = dedicated thread per FB.
+EXECUTOR:    Worker pool. v1 = dedicated thread per subscribing Application FB.
 MESSAGING:   Zero-copy message pool. v1 = copy-by-value.
 MESSAGING:   Variable-length payload. v1 = fixed EMBEDIQ_MSG_MAX_PAYLOAD (64 bytes default).
 BRIDGE:      Authenticated connections. v1 = no auth.

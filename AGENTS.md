@@ -49,6 +49,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
   in application code, and untyped data passing cannot be hidden — they fail
   compilation, fail CI, or are obvious in code review.
   Structural discipline is enforced by the architecture, not hoped for.
+  An Application FB never creates a thread. Platform FBs and HALs may, under "Threads in EmbedIQ".
 ```
 
 ---
@@ -136,6 +137,17 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 **Layer dependency rule:** Each layer may only depend on the layer directly below it.
 Layer 2 may call Layer 1 APIs. Layer 2 must NOT call Core internals or skip Layer 1.
 Agents: never add an include that skips a layer.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Who runs on which thread                                                                                                                        │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Application FB dispatch thread — framework-created, one per subscribing FB; runs run_fn/exit_fn. No OSAL, no locks, no threads.                 │
+│ Platform thread — created by a Platform FB or HAL (timer, watchdog, bridge, TLS, MQTT); enters the framework only via thread-safe entry points. │
+│ Framework worker — Layer 1 on request (streaming data plane); runs an owner-supplied function per chunk; no inbox.                              │
+│ Entry points callable from any thread are listed in ARCHITECTURE.md 'Threads in EmbedIQ'; call nothing else from a thread you created.          │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -532,7 +544,7 @@ These are named future work, not omissions. If you think something is missing,
 check this list before adding it.
 
 ```
-EXECUTOR:    Worker pool executor. v1 = dedicated OS thread per FB only.
+EXECUTOR:    Worker pool executor. v1 = dedicated OS thread per subscribing Application FB only.
 MESSAGING:   Zero-copy message pool. v1 = copy-by-value at every queue send.
 MESSAGING:   Variable-length or dynamic payload. v1 = fixed EMBEDIQ_MSG_MAX_PAYLOAD.
 BRIDGE:      Authenticated bridge connections. v1 = no auth (dev mode only).
@@ -578,7 +590,7 @@ the Core header is correct. Update MODULE.md to match.
 | Build system        | CMake                                                     | Yes — locked  |
 | Core language       | C11                                                       | Yes — locked  |
 | License             | Apache 2.0                                                | Yes — locked  |
-| v1 executor         | Dedicated OS thread per FB                                | Yes — locked  |
+| v1 executor         | Dedicated OS thread per subscribing Application FB        | Yes — locked  |
 | v1 message passing  | Copy-by-value                                             | Yes — locked  |
 | v1 message priority | 3 queues per FB (HIGH/NORMAL/LOW)                         | Yes — locked  |
 | messages.iq v0      | msg_id + name + payload_size + schema_id                  | Yes — locked  |

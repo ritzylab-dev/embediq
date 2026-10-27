@@ -364,6 +364,44 @@ and framework core.
 
 ---
 
+### R-sub-30 · Platform threads enter the framework only through thread-safe entry points
+
+**R-sub-30 — Platform threads enter the framework only through thread-safe entry points.**
+A thread created by a Platform FB or a HAL implementation may call only the entry points listed in
+ARCHITECTURE.md "Threads in EmbedIQ". Any other `embediq_*` call from such a thread is an
+architectural defect. Application FBs never create threads; the dispatch thread is the only thread
+on which their code runs.
+Rationale: every other `core/include/` function assumes it runs on the thread that owns the object
+(the FB's dispatch thread or the boot thread). Calling it from a timer tick, monitor loop, socket
+listener or library callback thread creates a data race the actor model is designed to exclude.
+Enforcement: code review — every thread created in `fbs/` or `hal/` is checked against the
+entry-point table; `tools/ci/check_fb_calls.py` rejects OSAL calls from application FB code (R-sub-03).
+
+---
+
+### R-sub-31 · No bulk payload on the Message Bus
+
+**R-sub-31 — No bulk payload on the Message Bus.**
+A message payload is at most `EMBEDIQ_MSG_MAX_PAYLOAD` bytes and carries control, status or
+metadata only. Any data larger than that — frames, audio, files, firmware images, documents —
+travels on the Streaming Data Plane. There is no chunked-message pattern on the bus.
+Rationale: the bus is sized for small, copy-by-value control messages. Splitting bulk data into
+bus messages floods every subscriber's queues, triggers NORMAL/LOW drops, and duplicates the
+buffering the Streaming Data Plane already provides.
+Enforcement: code review — any message whose payload carries offsets, chunk indices or raw
+data slices is rejected; the generator's `_Static_assert` rejects payloads larger than
+`EMBEDIQ_MSG_MAX_PAYLOAD`.
+
+---
+
+### Convention · "Calling context:" on every public core function
+
+Every function declared in `core/include/` has a "Calling context:" line in its comment, stating
+one of: "FB dispatch thread only", "boot thread only", "any thread", "any thread or ISR".
+New or edited declarations without it are rejected in review.
+
+---
+
 ## 4. C11 Style Guide
 
 ### Naming
