@@ -11,6 +11,8 @@
  *   pthread_mutex + pthread_cond    → EmbedIQ_Queue_t   (ring buffer, copy-by-value)
  *   pthread_mutex + pthread_cond    → EmbedIQ_Signal_t  (counting semaphore)
  *   pthread_mutex                   → EmbedIQ_Mutex_t
+ *   static pthread_mutex            → embediq_osal_critical_enter/exit (no allocation)
+ *   C11 <stdatomic.h>               → embediq_osal_atomic32_* (lock-free)
  *   CLOCK_MONOTONIC                 → time APIs
  *   nanosleep                       → embediq_osal_delay_ms
  *
@@ -34,6 +36,7 @@
 
 #include "embediq_osal.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -341,12 +344,31 @@ embediq_err_t embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t m
     return EMBEDIQ_OK;
 }
 
-void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig)
+/** Shared body of signal_from_isr and signal_post — a normal post on POSIX. */
+static void _signal_raise(EmbedIQ_Signal_t *sig)
 {
     pthread_mutex_lock(&sig->mutex);
     sig->count++;
     pthread_cond_signal(&sig->cond);
     pthread_mutex_unlock(&sig->mutex);
+}
+
+void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig)
+{
+    _signal_raise(sig);
+}
+
+void embediq_osal_signal_post(EmbedIQ_Signal_t *sig)
+{
+    _signal_raise(sig);
+}
+
+void embediq_osal_signal_destroy(EmbedIQ_Signal_t *sig)
+{
+    if (!sig) return;
+    pthread_mutex_destroy(&sig->mutex);
+    pthread_cond_destroy (&sig->cond);
+    free(sig);
 }
 
 /* ---------------------------------------------------------------------------
@@ -393,6 +415,83 @@ embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)
 {
     pthread_mutex_unlock(&m->mutex);
+}
+
+void embediq_osal_mutex_destroy(EmbedIQ_Mutex_t *m)
+{
+    if (!m) return;
+    pthread_mutex_destroy(&m->mutex);
+    free(m);
+}
+
+/* ---------------------------------------------------------------------------
+ * Critical section — one static, non-recursive pthread mutex
+ *
+ * No allocation, no timeout, no Observatory macro: there is no failure path.
+ * pthread_mutex_lock on a statically initialised non-recursive mutex cannot
+ * fail in practice; if it ever does, the process aborts — a broken critical
+ * section is unrecoverable and must not be observed into the ring it protects.
+ * ------------------------------------------------------------------------- */
+
+static pthread_mutex_t s_crit = PTHREAD_MUTEX_INITIALIZER;
+
+void embediq_osal_critical_enter(void)
+{
+    if (pthread_mutex_lock(&s_crit) != 0) {
+        abort();
+    }
+}
+
+void embediq_osal_critical_exit(void)
+{
+    if (pthread_mutex_unlock(&s_crit) != 0) {
+        abort();
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 32-bit atomics — C11 <stdatomic.h>, sequentially consistent
+ *
+ * The contract type wraps a volatile uint32_t so the header needs no
+ * <stdatomic.h>; here the field is accessed as _Atomic uint32_t.
+ * ------------------------------------------------------------------------- */
+
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2,
+               "POSIX OSAL requires lock-free 32-bit atomics");
+_Static_assert(sizeof(_Atomic uint32_t) == sizeof(uint32_t),
+               "_Atomic uint32_t must have the same size as uint32_t");
+
+uint32_t embediq_osal_atomic32_load(const embediq_osal_atomic32_t *a)
+{
+    _Atomic uint32_t *p = (_Atomic uint32_t *)&a->v;
+    return atomic_load_explicit(p, memory_order_seq_cst);
+}
+
+void embediq_osal_atomic32_store(embediq_osal_atomic32_t *a, uint32_t v)
+{
+    _Atomic uint32_t *p = (_Atomic uint32_t *)&a->v;
+    atomic_store_explicit(p, v, memory_order_seq_cst);
+}
+
+uint32_t embediq_osal_atomic32_add(embediq_osal_atomic32_t *a, uint32_t delta)
+{
+    _Atomic uint32_t *p = (_Atomic uint32_t *)&a->v;
+    return atomic_fetch_add_explicit(p, delta, memory_order_seq_cst) + delta;
+}
+
+uint32_t embediq_osal_atomic32_sub(embediq_osal_atomic32_t *a, uint32_t delta)
+{
+    _Atomic uint32_t *p = (_Atomic uint32_t *)&a->v;
+    return atomic_fetch_sub_explicit(p, delta, memory_order_seq_cst) - delta;
+}
+
+bool embediq_osal_atomic32_cas(embediq_osal_atomic32_t *a, uint32_t expected,
+                               uint32_t desired)
+{
+    _Atomic uint32_t *p = (_Atomic uint32_t *)&a->v;
+    return atomic_compare_exchange_strong_explicit(p, &expected, desired,
+                                                   memory_order_seq_cst,
+                                                   memory_order_seq_cst);
 }
 
 /* ---------------------------------------------------------------------------

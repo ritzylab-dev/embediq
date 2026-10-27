@@ -144,6 +144,14 @@ embediq_err_t embediq_osal_signal_wait_timeout(EmbedIQ_Signal_t *sig, uint32_t m
 /** Raise the signal from an ISR context. Must exit in < 10 cycles. */
 void embediq_osal_signal_from_isr(EmbedIQ_Signal_t *sig);
 
+/** Raise the signal from thread context.
+ *  Calling context: any thread (non-ISR). */
+void embediq_osal_signal_post(EmbedIQ_Signal_t *sig);
+
+/** Destroy a signal created by embediq_osal_signal_create(). Safe with NULL.
+ *  Calling context: any thread; the object must not be in use. */
+void embediq_osal_signal_destroy(EmbedIQ_Signal_t *sig);
+
 /* ---------------------------------------------------------------------------
  * Mutex API
  * ------------------------------------------------------------------------- */
@@ -159,6 +167,44 @@ embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
 
 /** Unlock a mutex held by the calling task. */
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
+
+/** Destroy a mutex created by embediq_osal_mutex_create(). Safe with NULL.
+ *  Calling context: any thread; the object must not be in use. */
+void embediq_osal_mutex_destroy(EmbedIQ_Mutex_t *m);
+
+/* ---------------------------------------------------------------------------
+ * Critical section — framework-internal (Layer 1 and HAL/OSAL implementations only)
+ *
+ * A single global, non-recursive, non-blocking-for-long critical section used to
+ * serialise very short framework operations (Observatory ring write, bus drop-oldest,
+ * stream ref-counts). Rules for code inside a critical section:
+ *   - no OSAL calls, no blocking, no loops over data, no Observatory emit
+ *   - ≤ 1 µs on Linux / ≤ 50 cycles on Cortex-M
+ *   - never nested; never held across a function that may enter one
+ * Mapping: POSIX = static pthread mutex (no allocation). FreeRTOS = taskENTER_CRITICAL /
+ * taskEXIT_CRITICAL. Zephyr = irq_lock / irq_unlock. Bare-metal = PRIMASK save/restore.
+ * Calling context: any thread. NEVER from ISR (ISR paths use the *_from_isr functions).
+ * Application FBs must not call this (R-sub-03; enforced by tools/ci/check_fb_calls.py).
+ * ------------------------------------------------------------------------- */
+void embediq_osal_critical_enter(void);
+void embediq_osal_critical_exit(void);
+
+/* ---------------------------------------------------------------------------
+ * 32-bit atomics — framework-internal
+ *
+ * Lock-free where the target supports it (C11 <stdatomic.h> on POSIX and ARMv7-M+);
+ * implemented with the critical section on targets without native atomics (ARMv6-M).
+ * All operations are sequentially consistent.
+ * Calling context: any thread or ISR (ISR use is valid only on targets where the
+ * implementation is lock-free; the POSIX host implementation is lock-free).
+ * ------------------------------------------------------------------------- */
+typedef struct { volatile uint32_t v; } embediq_osal_atomic32_t;   /* opaque: access via functions only */
+#define EMBEDIQ_OSAL_ATOMIC32_INIT(x)  { (x) }
+uint32_t embediq_osal_atomic32_load (const embediq_osal_atomic32_t *a);
+void     embediq_osal_atomic32_store(embediq_osal_atomic32_t *a, uint32_t v);
+uint32_t embediq_osal_atomic32_add  (embediq_osal_atomic32_t *a, uint32_t delta);  /* returns NEW value */
+uint32_t embediq_osal_atomic32_sub  (embediq_osal_atomic32_t *a, uint32_t delta);  /* returns NEW value */
+bool     embediq_osal_atomic32_cas  (embediq_osal_atomic32_t *a, uint32_t expected, uint32_t desired);
 
 /* ---------------------------------------------------------------------------
  * Semaphore API — used internally by the dispatch engine
