@@ -29,7 +29,9 @@ if(EMBEDIQ_TSAN)
     if(NOT (EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test"))
         message(FATAL_ERROR "EMBEDIQ_TSAN requires EMBEDIQ_PLATFORM=host or test")
     endif()
-    add_compile_options(-fsanitize=thread -g -O1 -fno-omit-frame-pointer)
+    # -U_FORTIFY_SOURCE: Ubuntu GCC enables fortify at -O1+, which makes glibc
+    # mark getenv() etc. warn_unused_result and breaks -Werror targets.
+    add_compile_options(-fsanitize=thread -g -O1 -fno-omit-frame-pointer -U_FORTIFY_SOURCE)
     add_link_options(-fsanitize=thread)
     message(STATUS "EmbedIQ: ThreadSanitizer enabled")
 endif()
