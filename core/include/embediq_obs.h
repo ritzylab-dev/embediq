@@ -19,6 +19,7 @@
 #define EMBEDIQ_OBS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -160,6 +161,10 @@ extern "C" {
 /* MESSAGE family (0x20–0x2F) ---------------------------------------------- */
 
 /* Existing — FROZEN */
+/* MSG_TX/MSG_RX are level-3 (trace) events: the bus and dispatch taps emit
+ * them only when embediq_obs_level_at_least(3). Level 1 and level 2 output is
+ * unchanged — a 10 ms timer alone would otherwise fill the 256-event ring
+ * within seconds at level 2 and evict STATE/FAULT history. */
 #define EMBEDIQ_OBS_EVT_MSG_TX              0x20u /**< Message published to bus */
 #define EMBEDIQ_OBS_EVT_MSG_RX              0x21u /**< Message delivered to subscriber FB */
 #define EMBEDIQ_OBS_EVT_QUEUE_DROP          0x22u /**< Message dropped — queue full */
@@ -324,7 +329,8 @@ typedef enum {
     EMBEDIQ_OBS_FAMILY_UNKNOWN  = 9,
 } embediq_obs_family_t;
 
-/* Derive family from event_type band — zero runtime overhead when inlined */
+/* Derive family from event_type band — zero runtime overhead when inlined.
+ * Calling context: any thread or ISR (pure function). */
 static inline embediq_obs_family_t
 embediq_obs_event_family(uint8_t event_type) {
     if (event_type < EMBEDIQ_OBS_BAND_MESSAGE_START)  return EMBEDIQ_OBS_FAMILY_SYSTEM;
@@ -525,6 +531,7 @@ typedef struct {
  * Register the binary stream transport implementation.
  * Called once at platform init (before any capture_begin call).
  * The Observatory stores the pointer — ops must remain valid for process lifetime.
+ * Calling context: boot thread only.
  */
 void embediq_obs_set_stream_ops(const embediq_obs_stream_ops_t *ops);
 
@@ -532,11 +539,37 @@ void embediq_obs_set_stream_ops(const embediq_obs_stream_ops_t *ops);
  * Public API — implemented in core/src/observatory/
  * ------------------------------------------------------------------------- */
 
-/** Emit an Observatory event. No-op when EMBEDIQ_OBS_LEVEL == 0. */
+/**
+ * Create the Observatory's transport mutex. Idempotent.
+ * Called by embediq_engine_boot() and by every setup call below
+ * (set_transport, set_stream_ops, session_begin, capture_begin).
+ * Events emitted before any setup call or engine boot are recorded in the
+ * ring but not written to a transport.
+ * Calling context: boot thread only.
+ */
+void embediq_obs_init(void);
+
+/**
+ * True when the runtime level is >= lvl. Used to gate level-3 (trace) taps
+ * such as MSG_TX / MSG_RX. Always false on MCU production builds.
+ * Calling context: any thread.
+ */
+bool embediq_obs_level_at_least(uint8_t lvl);
+
+/**
+ * Emit an Observatory event. No-op when EMBEDIQ_OBS_LEVEL == 0.
+ * Thread-safe: sequence is a lock-free atomic shared with the ISR path; the
+ * ring is written inside the OSAL critical section; transport I/O is
+ * serialised by a mutex so file order equals sequence order. Never from ISR.
+ * Calling context: any thread.
+ */
 void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
                       uint8_t state, uint16_t msg_id);
 
-/** Set the active transport for all subsequent events. */
+/**
+ * Set the active transport for all subsequent events.
+ * Calling context: boot thread only.
+ */
 void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport);
 
 /**
@@ -545,6 +578,7 @@ void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport);
  *   1 — Level 0 + MESSAGE family (0x20–0x2F) + STATE family (0x30–0x3F).
  *   2 — All events pass.
  * No-op on MCU production builds (EMBEDIQ_OBS_LEVEL is compile-time only).
+ * Calling context: any thread.
  */
 void embediq_obs_set_level(uint8_t level);
 
@@ -553,6 +587,7 @@ void embediq_obs_set_level(uint8_t level);
  * Must be called once before the first event is emitted for a session.
  * The Observatory copies the struct — caller does not need to retain it.
  * Thread-safe on host builds (single-writer assumption on MCU).
+ * Calling context: boot thread only.
  */
 void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session);
 
@@ -561,6 +596,7 @@ void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session);
  * Returns NULL if embediq_obs_session_begin() has not been called.
  * The pointer is valid until the next call to embediq_obs_session_begin()
  * or obs__reset() (host builds only).
+ * Calling context: any thread.
  */
 const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void);
 
@@ -572,6 +608,7 @@ const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void);
  * Sets transport to EMBEDIQ_OBS_TRANSPORT_FILE on success.
  * Returns 0 on success, -1 if no session set or file open fails.
  * No-op and returns -1 on MCU builds.
+ * Calling context: any thread (serialised with emitters by the transport mutex).
  */
 int embediq_obs_capture_begin(const char *path);
 
@@ -581,6 +618,9 @@ int embediq_obs_capture_begin(const char *path);
  * Resets transport to EMBEDIQ_OBS_TRANSPORT_NULL.
  * Returns 0 on success, -1 on error.
  * No-op and returns -1 on MCU builds.
+ * Takes the transport mutex before closing, so no emitter is mid-write;
+ * pending ISR-path events are written before STREAM_END.
+ * Calling context: any thread.
  */
 int embediq_obs_capture_end(void);
 
@@ -591,10 +631,15 @@ int embediq_obs_capture_end(void);
  * not attempt overflow handling. Overflow detection occurs exclusively in
  * the observer task.
  *
- * On host (EMBEDIQ_PLATFORM_HOST): delegates to embediq_obs_emit().
- * On MCU (Phase 2): uses ISR-reentrant ring write (XOBS-1 gate).
+ * On host (EMBEDIQ_PLATFORM_HOST): lock-free push into a separate ISR ring
+ * (EMBEDIQ_OBS_ISR_RING_DEPTH) — no mutex, no critical section, no transport.
+ * The next thread-path emit (or capture_end) drains it into the main ring and
+ * the transport; a full ISR ring counts the drop, reported in the next
+ * OVERFLOW event. Safe to call from inside a stream-HAL write.
+ * On MCU (Phase 2): the same ISR ring, drained by the observer task.
  *
  * The _from_isr suffix ensures ISR call sites are grep-auditable.
+ * Calling context: any thread or ISR.
  */
 void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
                                 uint8_t target, uint8_t state,

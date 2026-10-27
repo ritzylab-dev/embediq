@@ -96,6 +96,7 @@ __attribute__((weak)) uint32_t obs__isr_dropped_total(void) { return 0u; }
 #define OBS_CAP_THREADS      4u
 #define OBS_CAP_CYCLES       20u
 #define OBS_CAP_HOLD_MS      2u
+#define OBS_CAP_PATH_LEN     80u     /* "/tmp/test_obs_concurrent_NN.iqtrace" + margin */
 
 #define TLV_HDR              4u
 #define TLV_EVENT            0x0002u
@@ -551,20 +552,23 @@ static void run_tap_scenario(uint8_t level, uint32_t *tx, uint32_t *rx)
 }
 
 /* ---------------------------------------------------------------------------
- * test_msg_tx_rx_taps_level2
- * Level 2: exactly one MSG_TX and one MSG_RX. Level 1: none.
+ * test_msg_tx_rx_taps_level3
+ * Level 3: exactly one MSG_TX and one MSG_RX. Levels 2 and 1: none — the taps
+ * must not change the output of the levels the demo and tests run at.
  * ------------------------------------------------------------------------- */
 
-static void test_msg_tx_rx_taps_level2(void)
+static void test_msg_tx_rx_taps_level3(void)
 {
-    uint32_t tx2, rx2, tx1, rx1;
+    uint32_t tx3, rx3, tx2, rx2, tx1, rx1;
+    run_tap_scenario(3u, &tx3, &rx3);
     run_tap_scenario(2u, &tx2, &rx2);
     run_tap_scenario(1u, &tx1, &rx1);
     fb_engine__reset();
-    printf("      level2 tx=%u rx=%u   level1 tx=%u rx=%u\n",
-           (unsigned)tx2, (unsigned)rx2, (unsigned)tx1, (unsigned)rx1);
-    ASSERT(tx2 == 1u && rx2 == 1u && tx1 == 0u && rx1 == 0u,
-           "MSG_TX/MSG_RX taps fire once at level 2 and never at level 1");
+    printf("      level3 tx=%u rx=%u   level2 tx=%u rx=%u   level1 tx=%u rx=%u\n",
+           (unsigned)tx3, (unsigned)rx3, (unsigned)tx2, (unsigned)rx2,
+           (unsigned)tx1, (unsigned)rx1);
+    ASSERT(tx3 == 1u && rx3 == 1u && tx2 == 0u && rx2 == 0u && tx1 == 0u && rx1 == 0u,
+           "MSG_TX/MSG_RX taps fire once at level 3 and never at levels 1-2");
 }
 
 /* ===========================================================================
@@ -635,7 +639,7 @@ static void test_capture_end_while_emitting(void)
     }
 
     bool ok = true;
-    char path[64];
+    char path[OBS_CAP_PATH_LEN];
     for (uint32_t c = 0u; c < OBS_CAP_CYCLES; c++) {
         snprintf(path, sizeof(path), "/tmp/test_obs_concurrent_%u.iqtrace", (unsigned)c);
         ok = ok && embediq_obs_capture_begin(path) == 0;
@@ -671,7 +675,7 @@ int main(void)
     test_file_transport_frames_not_interleaved();
     test_critical_section_hold_time();
     test_stream_hal_write_failure_does_not_reenter();
-    test_msg_tx_rx_taps_level2();
+    test_msg_tx_rx_taps_level3();
     test_capture_end_while_emitting();
 
     obs__reset();

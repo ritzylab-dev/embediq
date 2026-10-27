@@ -266,6 +266,9 @@ int embediq_engine_boot(void)
 {
     if (g_booted) return 0;   /* idempotent */
 
+    /* Observatory transport mutex — before any init_fn can emit. */
+    embediq_obs_init();
+
     g_boot_count = 0;
 
     /* Initialise all declared platform libraries (e.g. HAL ops tables) before
@@ -452,10 +455,17 @@ static void fb_dispatch_loop(void *arg)
         bool got;
         do {
             got = false;
+            uint8_t rx_prio = 0u;
             for (uint8_t p = 0u; p < 3u && !got; p++) {
                 got = message_bus_recv_ep(ep, p, &msg);
+                if (got) rx_prio = p;
             }
             if (got) {
+                /* MSG_RX tap — level-3 (trace) event (T2-6). */
+                if (embediq_obs_level_at_least(3u)) {
+                    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_RX, msg.source_endpoint_id,
+                                     ep, rx_prio, msg.msg_id);
+                }
                 dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
             }
         } while (got);
