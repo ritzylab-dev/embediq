@@ -36,6 +36,8 @@ REPO_DIRS = ("core/", "osal/", "hal/", "fbs/", "examples/", "tests/",
 
 # Sanitizer runtime / libc frames are never "the" frame of a finding.
 RUNTIME_MODULE = re.compile(r"libclang_rt|libtsan|libc\.|libc-|libsystem|libdyld|libpthread")
+# GCC/libtsan (Linux) appends " (BuildId: <hex>)" after the module.
+BUILD_ID = re.compile(r"\s*\(BuildId: [0-9a-f]+\)\s*$")
 
 SEPARATOR = re.compile(r"^={10,}\s*$")
 WARNING = re.compile(r"WARNING: ThreadSanitizer: (.+?)(?: \(pid=\d+\))?\s*$")
@@ -74,7 +76,7 @@ def repo_path(path):
 
 def parse_frame(line):
     """Return (fn, location, module, in_repo) for a stack frame line, else None."""
-    m = FRAME.match(line)
+    m = FRAME.match(BUILD_ID.sub("", line))
     if not m:
         return None
     fn, loc, module = m.group(2), m.group(3), m.group(4) or ""
