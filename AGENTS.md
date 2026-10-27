@@ -49,6 +49,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
   in application code, and untyped data passing cannot be hidden — they fail
   compilation, fail CI, or are obvious in code review.
   Structural discipline is enforced by the architecture, not hoped for.
+  Framework-owned threads are the only threads. An FB never creates one.
 ```
 
 ---
@@ -136,6 +137,17 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 **Layer dependency rule:** Each layer may only depend on the layer directly below it.
 Layer 2 may call Layer 1 APIs. Layer 2 must NOT call Core internals or skip Layer 1.
 Agents: never add an include that skips a layer.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Who runs on which thread                                                                                                                        │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Application FB dispatch thread — framework-created, one per subscribing FB; runs run_fn/exit_fn. No OSAL, no locks, no threads.                 │
+│ Platform thread — created by a Platform FB or HAL (timer, watchdog, bridge, TLS, MQTT); enters the framework only via thread-safe entry points. │
+│ Framework worker — Layer 1 on request (streaming data plane); runs an owner-supplied function per chunk; no inbox.                              │
+│ Entry points callable from any thread are listed in ARCHITECTURE.md 'Threads in EmbedIQ'; call nothing else from a thread you created.          │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
