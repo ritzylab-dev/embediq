@@ -153,17 +153,23 @@ Agents: never add an include that skips a layer.
 
 ## 3A. Streaming Data Plane — Agent Must Know
 
-EmbedIQ has two data pathways:
-- **Control plane (message bus):** typed 64-byte messages. All FBs use this. PRINCIPLE 1 applies.
-- **Streaming data plane:** raw continuous chunks (camera, audio, sensor). Never on the bus.
+EmbedIQ has two planes, split by data class, not device class:
+- **Control plane (message bus):** typed messages up to `EMBEDIQ_MSG_MAX_PAYLOAD`. PRINCIPLE 1 applies.
+- **Streaming data plane:** anything larger — frames, audio, files, firmware images, manifests.
+  Anything over `EMBEDIQ_MSG_MAX_PAYLOAD` is a stream (R-sub-31).
 
-The bridge: `MSG_STREAM_CHUNK_READY` (bus, 19 bytes metadata) notifies consumers that a chunk
-is ready. Consumer calls `embediq_stream_chunk_acquire()` to access the data.
+**Data work = a stream worker.** Call `embediq_stream_worker_register()` and supply `on_chunk()`;
+Layer 1 creates, runs and joins the thread. Never do stream work in a `run_fn`, never on a
+thread you created. The chunk pointer is valid only inside `on_chunk()`.
 
-**Agent rule:** When writing a streaming Driver FB, the chunk callback (`set_chunk_cb`) fires in
-ISR context on ALL platforms. Two operations only: `ring_buffer_write()` + `osal_signal_from_isr()`.
-All streaming consumer calls (`chunk_acquire`, `chunk_release`) must come from a registered FB thread.
-See `ARCHITECTURE.md` → "Streaming Data Plane" and R-sub-20 through R-sub-29.
+**The bus is control-only:** `MSG_STREAM_ERROR`, `MSG_STREAM_BACKPRESSURE`, `MSG_STREAM_ATTACH`
+/ `DETACH` go to the owner FB. `MSG_STREAM_CHUNK_READY` is optional, for observers only.
+
+**HAL authors:** the chunk callback fires in ISR context on ALL platforms. Two operations only:
+`ring_buffer_write()` + `osal_signal_from_isr()`.
+
+See `ARCHITECTURE.md` → "Streaming Data Plane", "OTA — Transport-Blind Firmware Update", and
+R-sub-20 through R-sub-29, R-sub-30, R-sub-31.
 
 ---
 
@@ -369,6 +375,8 @@ OPTIONAL (FBs with no persistent state):
 - No subscription required — engine handles shutdown via timeout
 
 This contract is enforced by fb_ota (Phase 2 P2-T5).
+fb_ota is the initiator of MSG_SYS_OTA_REQUEST.
+The process exit code EMBEDIQ_EXIT_OTA_APPLY means "restart me on the new image".
 See docs/architecture/lifecycle.md for full protocol description.
 
 ---

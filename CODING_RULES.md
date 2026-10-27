@@ -351,14 +351,14 @@ refactor). The permanent fix is this rule — verify from source at write time.
 ### R-sub-20 · No raw OS thread creation for stream consumption
 
 **R-sub-20 — No raw OS thread creation for stream consumption.**
-Streaming consumers (`embediq_stream_chunk_acquire` / `embediq_stream_chunk_release`) must
-be called from a registered FB thread — the thread that called `embediq_stream_consumer_register()`.
-The framework binds the consumer to the calling thread ID at registration and asserts at runtime.
+Stream data is consumed only inside `on_chunk()` on a framework-owned stream worker that the owner
+FB registers with `embediq_stream_worker_register()`; the engine calls `chunk_acquire()` /
+`chunk_release()` around it on that thread.
 Creating a raw OS thread (`pthread_create` on POSIX, `xTaskCreate` on FreeRTOS) solely to call
 `chunk_acquire()` is prohibited: the thread has no inbox, no boot phase, no Observatory visibility,
 and no drain-on-close coordination.
-Correct pattern: one FB per consumer role. The FB thread processes `MSG_STREAM_CHUNK_READY`
-and calls `chunk_acquire()`.
+Correct pattern: the owner FB registers a stream worker in `init_fn` and unregisters it before
+`exit_fn` returns; all data work happens in its `on_chunk()`.
 Enforcement: code review + static analysis for `pthread_create`/`xTaskCreate` outside `hal/`
 and framework core.
 
@@ -399,6 +399,21 @@ data slices is rejected; the generator's `_Static_assert` rejects payloads large
 Every function declared in `core/include/` has a "Calling context:" line in its comment, stating
 one of: "FB dispatch thread only", "boot thread only", "any thread", "any thread or ISR".
 New or edited declarations without it are rejected in review.
+
+---
+
+### R-sub-32 · Firmware images, manifests and any network-received file are streams
+
+**R-sub-32 — Firmware images, manifests and any network-received file are streams.**
+fb_ota, provisioning payloads, model downloads and configuration blobs arrive via the Streaming
+Data Plane (a source HAL or `embediq_stream_push()`), never via MQTT payloads, bus messages, or a
+transport opened inside a Service FB. A Service FB that opens a socket, a radio, or a file to
+receive bulk data is an architectural defect.
+Rationale: a Service FB that fetches its own bulk data is tied to one transport and cannot run
+unchanged on a BLE-only or cable-only product; the data plane makes the consumer transport-blind
+and gives it backpressure, EOS and observability for free.
+Enforcement: code review — any socket, radio or file open in `fbs/services/` for bulk ingress is
+rejected; `boundary_checker.py` already rejects `hal/` includes in `fbs/services/`.
 
 ---
 
