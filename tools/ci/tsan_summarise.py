@@ -14,7 +14,13 @@ repository (core/, osal/, hal/, fbs/, examples/, tests/, components/,
 third_party/); sanitizer and libc interceptor frames are skipped.
 
 Usage:
-  python3 tools/ci/tsan_summarise.py <dir-containing-tsan-files>
+  python3 tools/ci/tsan_summarise.py [--github] <dir-containing-tsan-files>
+
+  --github  also emit ::warning annotations and append the table to
+            $GITHUB_STEP_SUMMARY.
+
+Runtime aborts (TSan "CHECK failed" / FATAL) are listed separately: the test
+binary stopped part-way and its remaining tests did not run.
 
 Exits 0 always — the inventory is informational (the tsan CI job is advisory
 until Set 2 / F7). Python 3 standard library only.
@@ -224,12 +230,36 @@ def read_reports(path):
         yield report
 
 
+def read_aborts(path):
+    """Yield the frames of every TSan runtime CHECK failure / FATAL in a file.
+
+    These are not WARNING reports: the sanitizer runtime itself aborted the
+    process, so the test binary stopped part-way through. With
+    TSAN_OPTIONS=exitcode=0 such a process exits 0 and ctest reports a pass,
+    which is why they must be surfaced here.
+    """
+    with open(path, errors="replace") as fh:
+        lines = fh.read().splitlines()
+    for i, line in enumerate(lines):
+        if "ThreadSanitizer: CHECK failed" in line or "FATAL: ThreadSanitizer" in line:
+            frames = []
+            for nxt in lines[i + 1:]:
+                f = parse_frame(nxt)
+                if not f:
+                    break
+                frames.append(f)
+            yield line.strip(), frames
+
+
 def main(argv):
-    if len(argv) != 2:
-        print("usage: tsan_summarise.py <dir-containing-tsan-files>")
+    args = [a for a in argv[1:] if not a.startswith("--")]
+    github = "--github" in argv
+    if len(args) != 1:
+        print("usage: tsan_summarise.py [--github] <dir-containing-tsan-files>")
         return 0
-    files = sorted(glob.glob(os.path.join(argv[1], "tsan.*")))
+    files = sorted(glob.glob(os.path.join(args[0], "tsan.*")))
     rows = OrderedDict()
+    aborts = []
     total = 0
     for path in files:
         for lines in read_reports(path):
@@ -242,22 +272,51 @@ def main(argv):
             rows[r["key"]]["count"] += 1
             if r["module"]:
                 rows[r["key"]]["modules"].add(r["module"])
+        for msg, frames in read_aborts(path):
+            tf = top_frame(frames)
+            aborts.append((msg, tf))
 
-    print("TSan report files: {}   reports: {}   distinct findings: {}".format(
-        len(files), total, len(rows)))
-    print()
-    print("| # | Kind | Variable or location (file:line) | Writer frame | "
-          "Reader/other frame | Count |")
-    print("| - | ---- | -------------------------------- | ------------ | "
-          "------------------ | ----- |")
+    out = []
+    out.append("TSan report files: {}   reports: {}   distinct findings: {}   "
+               "runtime aborts: {}".format(len(files), total, len(rows), len(aborts)))
+    out.append("")
+    out.append("| # | Kind | Variable or location (file:line) | Writer frame | "
+               "Reader/other frame | Count |")
+    out.append("| - | ---- | -------------------------------- | ------------ | "
+               "------------------ | ----- |")
     ordered = sorted(rows.values(), key=lambda r: (r["kind"], -r["count"]))
     for n, r in enumerate(ordered, 1):
-        print("| {} | {} | {} | {} | {} | {} |".format(
+        out.append("| {} | {} | {} | {} | {} | {} |".format(
             n, r["kind"], r["loc"], r["writer"], r["reader"], r["count"]))
-    print()
-    print("Binaries per row:")
+    out.append("")
+    out.append("Binaries per row:")
     for n, r in enumerate(ordered, 1):
-        print("  {:>3}: {}".format(n, ", ".join(sorted(r["modules"])) or "—"))
+        out.append("  {:>3}: {}".format(n, ", ".join(sorted(r["modules"])) or "—"))
+    if aborts:
+        out.append("")
+        out.append("RUNTIME ABORTS — the test binary stopped part-way; its remaining "
+                   "tests did not run:")
+        for msg, tf in aborts:
+            where = "{} ({}, {})".format(tf[2], tf[0], tf[1]) if tf else "unknown"
+            out.append("  - {} — {}".format(where, msg))
+
+    text = "\n".join(out)
+    print(text)
+
+    if github:
+        for msg, tf in aborts:
+            loc = tf[1] if tf else ""
+            m = re.match(r"^(.*):(\d+)$", loc)
+            pos = "file={},line={}".format(m.group(1), m.group(2)) if m else ""
+            print("::warning {}::TSan runtime abort in {} — remaining tests did not run "
+                  "({})".format(pos, tf[2] if tf else "?", msg))
+        if rows:
+            print("::warning::ThreadSanitizer: {} distinct findings (advisory until F7) — "
+                  "see the job summary and the tsan-reports artifact".format(len(rows)))
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a") as fh:
+                fh.write("## ThreadSanitizer inventory (advisory)\n\n" + text + "\n")
     return 0
 
 
