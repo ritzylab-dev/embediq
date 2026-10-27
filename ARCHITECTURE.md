@@ -1046,16 +1046,17 @@ first kind.
 Thread-safe entry points (callable from any thread; everything else in `core/include/` is
 callable only from the thread that owns the object):
 
-| Entry point                                        | Calling context                                                                                                  |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `embediq_publish()` / `embediq_bus_bridge_route()` | any thread                                                                                                       |
-| `embediq_bus_post_async()`                         | any thread or ISR; the only call permitted inside an async ops-table callback                                    |
-| `embediq_obs_emit()`                               | any thread                                                                                                       |
-| `embediq_obs_emit_from_isr()`                      | ISR or any thread; fire-and-forget                                                                               |
-| `embediq_engine_notify_fb()`                       | any thread (used by the bus)                                                                                     |
-| `embediq_fb_report_fault()`                        | any thread; delivered to the target FB as a message, state change and `fault_fn` run on the FB's dispatch thread |
-| `embediq_nvm_*` / `embediq_cfg_*` reads            | any thread, non-blocking                                                                                         |
-| `embediq_nvm_*` / `embediq_cfg_*` writes           | any thread; serialised inside `fb_nvm`                                                                           |
+| Entry point                                                                                          | Calling context                                                                                                  |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `embediq_publish()` / `embediq_bus_bridge_route()`                                                   | any thread                                                                                                       |
+| `embediq_bus_post_async()`                                                                           | any thread or ISR; the only call permitted inside an async ops-table callback                                    |
+| `embediq_obs_emit()`                                                                                 | any thread                                                                                                       |
+| `embediq_obs_emit_from_isr()`                                                                        | ISR or any thread; fire-and-forget                                                                               |
+| `embediq_engine_notify_fb()`                                                                         | any thread (used by the bus)                                                                                     |
+| `embediq_fb_report_fault()`                                                                          | any thread; delivered to the target FB as a message, state change and `fault_fn` run on the FB's dispatch thread |
+| `embediq_nvm_*` / `embediq_cfg_*` reads                                                              | any thread, non-blocking                                                                                         |
+| `embediq_nvm_*` / `embediq_cfg_*` writes                                                             | any thread; serialised inside `fb_nvm`                                                                           |
+| ops-table callback relays declared in `core/include/ops/*.h` (e.g. `embediq_mqtt_on_receive_call()`) | any thread; the relay forwards to `embediq_publish()` — a HAL thread calls the relay, never the FB               |
 
 Every public function in `core/include/` carries a "Calling context:" line in its header
 comment stating one of: "FB dispatch thread only", "boot thread only", "any thread",
@@ -1098,7 +1099,7 @@ passing is copy-by-value at every queue send. Zero-copy pool is a Phase 2+ non-g
 ### Three-Queue Priority Model
 
 Each FB has three independent queues: `HIGH`, `NORMAL`, `LOW`. Drain order each
-cycle: HIGH fully → NORMAL fully → one from LOW (fairness).
+cycle: one message at a time from the first non-empty queue — HIGH, then NORMAL, then LOW — re-checking HIGH after each dispatch.
 
 Message priority and FB thread priority are **independent axes**. A high-priority
 message to a low-priority FB enters the HIGH queue and is processed at that FB's
@@ -1144,7 +1145,8 @@ embediq_publish(fb, msg)
      embediq_osal_queue_send(fb->queue[priority], &msg)
 
 [Later — in target FB thread]
-  Drain HIGH queue fully → drain NORMAL fully → drain LOW (one per cycle)
+  Take one message at a time from the first non-empty queue — HIGH, then NORMAL, then LOW —
+  re-checking HIGH after each dispatch
   bus_tap(EVENT_MSG_RX, msg) ← RX tap fires HERE (about to dispatch to sub-fns)
   Look up msg_id in routing table → dispatch to sub-fn list
 ```
@@ -1590,7 +1592,7 @@ is the correct pattern.
 
 ## Thread Model — Gateway vs. Constrained Targets
 
-EmbedIQ v1 executor policy: one dedicated OS thread per FB.
+EmbedIQ v1 executor policy: one dedicated OS thread per subscribing Application FB; Platform FBs and HALs may own additional threads under "Threads in EmbedIQ".
 
 ### Gateway-class devices (Linux hosts, Raspberry Pi, resource-rich MCUs)
 
@@ -2142,7 +2144,7 @@ state management, not for byte-timing guarantees.
 Do not generate code for any of these. Named future work, not omissions.
 
 ```
-EXECUTOR:    Worker pool. v1 = dedicated thread per FB.
+EXECUTOR:    Worker pool. v1 = dedicated thread per subscribing Application FB.
 MESSAGING:   Zero-copy message pool. v1 = copy-by-value.
 MESSAGING:   Variable-length payload. v1 = fixed EMBEDIQ_MSG_MAX_PAYLOAD (64 bytes default).
 BRIDGE:      Authenticated connections. v1 = no auth.

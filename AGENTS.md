@@ -49,7 +49,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
   in application code, and untyped data passing cannot be hidden — they fail
   compilation, fail CI, or are obvious in code review.
   Structural discipline is enforced by the architecture, not hoped for.
-  Framework-owned threads are the only threads. An FB never creates one.
+  An Application FB never creates a thread. Platform FBs and HALs may, under "Threads in EmbedIQ".
 ```
 
 ---
@@ -544,7 +544,7 @@ These are named future work, not omissions. If you think something is missing,
 check this list before adding it.
 
 ```
-EXECUTOR:    Worker pool executor. v1 = dedicated OS thread per FB only.
+EXECUTOR:    Worker pool executor. v1 = dedicated OS thread per subscribing Application FB only.
 MESSAGING:   Zero-copy message pool. v1 = copy-by-value at every queue send.
 MESSAGING:   Variable-length or dynamic payload. v1 = fixed EMBEDIQ_MSG_MAX_PAYLOAD.
 BRIDGE:      Authenticated bridge connections. v1 = no auth (dev mode only).
@@ -590,7 +590,7 @@ the Core header is correct. Update MODULE.md to match.
 | Build system        | CMake                                                     | Yes — locked  |
 | Core language       | C11                                                       | Yes — locked  |
 | License             | Apache 2.0                                                | Yes — locked  |
-| v1 executor         | Dedicated OS thread per FB                                | Yes — locked  |
+| v1 executor         | Dedicated OS thread per subscribing Application FB        | Yes — locked  |
 | v1 message passing  | Copy-by-value                                             | Yes — locked  |
 | v1 message priority | 3 queues per FB (HIGH/NORMAL/LOW)                         | Yes — locked  |
 | messages.iq v0      | msg_id + name + payload_size + schema_id                  | Yes — locked  |
