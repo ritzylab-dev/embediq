@@ -7,7 +7,7 @@
  * stdlib only. Each test exercises one behaviour with one assertion.
  *
  * Run:      ./build/tests/test_osal_posix
- * Expected: "All 10 tests passed. (0 failed)"
+ * Expected: "All 18 tests passed. (0 failed)"
  *
  * ASAN:
  *   cmake -B build_asan -DEMBEDIQ_PLATFORM=host \
@@ -15,8 +15,14 @@
  *   cmake --build build_asan
  *   ./build_asan/tests/test_osal_posix
  *
- * Note on memory leaks: v1 OSAL has no destroy API — handles are long-lived
- * in firmware. LSAN may report leaks at process exit; that is expected.
+ * TSan:
+ *   cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON
+ *   cmake --build build_tsan
+ *   ./build_tsan/tests/unit/test_osal_posix   (must produce zero TSan reports)
+ *
+ * Note on memory leaks: most tests keep their handles for the life of the
+ * process (as firmware does). LSAN may report leaks at process exit; that is
+ * expected. mutex/signal destroy are exercised by test_destroy_functions_do_not_crash.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -26,9 +32,23 @@
 
 #include "embediq_osal.h"
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+
+/* F1 concurrency tests — thread count and per-thread iterations. */
+#define F1_THREADS 8u
+#define F1_ITERS   100000u
+
+/* test_critical_section_is_fast — pairs timed and the ceiling (CI allowance). */
+#define F1_CRIT_PAIRS      1000000u
+#define F1_CRIT_MAX_AVG_NS 2000u
+
+/* test_signal_post_wakes_waiter — post delay and wake deadline. */
+#define F1_POST_DELAY_MS   10u
+#define F1_WAKE_DEADLINE_MS 200u
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness — one ASSERT per test function
@@ -52,22 +72,24 @@ static int g_tests_failed = 0;
  * The task function must execute and set the shared flag.
  * ------------------------------------------------------------------------- */
 
-static volatile int g_task_ran = 0;
+static embediq_osal_atomic32_t g_task_ran = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 
 static void task_set_flag(void *arg)
 {
     (void)arg;
-    g_task_ran = 1;
+    embediq_osal_atomic32_store(&g_task_ran, 1u);
 }
 
 static void test_task_create_runs_function(void)
 {
-    g_task_ran = 0;
+    embediq_osal_atomic32_store(&g_task_ran, 0u);
     EmbedIQ_Task_t *t = embediq_osal_task_create(
             "flag_setter", task_set_flag, NULL, 1, 4096);
-    while (!g_task_ran) { nanosleep(&(struct timespec){0, 500 * 1000L}, NULL); }
+    while (embediq_osal_atomic32_load(&g_task_ran) == 0u) {
+        nanosleep(&(struct timespec){0, 500 * 1000L}, NULL);
+    }
     embediq_osal_task_delete(t);
-    ASSERT(g_task_ran == 1, "task function must run");
+    ASSERT(embediq_osal_atomic32_load(&g_task_ran) == 1u, "task function must run");
 }
 
 /* ---------------------------------------------------------------------------
@@ -180,15 +202,15 @@ static void test_signal_wait_and_post(void)
  * ------------------------------------------------------------------------- */
 
 typedef struct {
-    EmbedIQ_Signal_t *sig;
-    volatile bool    *unblocked;
+    EmbedIQ_Signal_t        *sig;
+    embediq_osal_atomic32_t *unblocked;
 } isr_ctx_t;
 
 static void isr_waiter(void *arg)
 {
     isr_ctx_t *ctx = (isr_ctx_t *)arg;
     embediq_osal_signal_wait(ctx->sig);
-    *ctx->unblocked = true;
+    embediq_osal_atomic32_store(ctx->unblocked, 1u);
 }
 
 static void isr_poster(void *arg)
@@ -200,7 +222,7 @@ static void isr_poster(void *arg)
 static void test_signal_from_isr_unblocks_waiting_thread(void)
 {
     EmbedIQ_Signal_t *sig  = embediq_osal_signal_create();
-    volatile bool unblocked = false;
+    embediq_osal_atomic32_t unblocked = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
     isr_ctx_t ctx = { .sig = sig, .unblocked = &unblocked };
 
     EmbedIQ_Task_t *waiter = embediq_osal_task_create(
@@ -213,11 +235,14 @@ static void test_signal_from_isr_unblocks_waiting_thread(void)
      * cancelling the poster during its 20 ms sleep would prevent it from
      * ever posting the signal.  Polling here guarantees both threads have
      * already finished before we call delete. */
-    while (!unblocked) { nanosleep(&(struct timespec){0, 500 * 1000L}, NULL); }
+    while (embediq_osal_atomic32_load(&unblocked) == 0u) {
+        nanosleep(&(struct timespec){0, 500 * 1000L}, NULL);
+    }
 
     embediq_osal_task_delete(poster);  /* already exited — cancel is no-op */
     embediq_osal_task_delete(waiter);  /* already exited — cancel is no-op */
-    ASSERT(unblocked, "waiter thread must be unblocked by signal_from_isr");
+    ASSERT(embediq_osal_atomic32_load(&unblocked) == 1u,
+           "waiter thread must be unblocked by signal_from_isr");
 }
 
 /* ---------------------------------------------------------------------------
@@ -300,6 +325,173 @@ static void test_queue_destroy(void)
     ASSERT(1, "queue_destroy must complete without crash");
 }
 
+/* ===========================================================================
+ * F1 — critical section, 32-bit atomics, destroy/post functions
+ * ======================================================================== */
+
+/* ---------------------------------------------------------------------------
+ * test_critical_section_mutual_exclusion
+ * F1_THREADS threads each increment a plain (non-atomic) counter F1_ITERS
+ * times inside the critical section. No increment may be lost. Under TSan
+ * this test is the proof that the section serialises.
+ * ------------------------------------------------------------------------- */
+
+static uint32_t g_plain_counter = 0u;
+
+static void *crit_incrementer(void *arg)
+{
+    (void)arg;
+    for (uint32_t i = 0u; i < F1_ITERS; i++) {
+        embediq_osal_critical_enter();
+        g_plain_counter++;
+        embediq_osal_critical_exit();
+    }
+    return NULL;
+}
+
+static void test_critical_section_mutual_exclusion(void)
+{
+    pthread_t th[F1_THREADS];
+    g_plain_counter = 0u;
+    for (uint32_t i = 0u; i < F1_THREADS; i++) {
+        pthread_create(&th[i], NULL, crit_incrementer, NULL);
+    }
+    for (uint32_t i = 0u; i < F1_THREADS; i++) {
+        pthread_join(th[i], NULL);
+    }
+    ASSERT(g_plain_counter == F1_THREADS * F1_ITERS,
+           "critical section must not lose increments");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_critical_section_is_fast
+ * Uncontended enter/exit must average < 1 µs (asserted < 2 µs for CI noise).
+ * ------------------------------------------------------------------------- */
+
+static void test_critical_section_is_fast(void)
+{
+    uint32_t t0 = embediq_osal_time_us();
+    for (uint32_t i = 0u; i < F1_CRIT_PAIRS; i++) {
+        embediq_osal_critical_enter();
+        embediq_osal_critical_exit();
+    }
+    uint32_t elapsed_us = embediq_osal_time_us() - t0;
+    uint64_t avg_ns = ((uint64_t)elapsed_us * 1000u) / F1_CRIT_PAIRS;
+    printf("      critical enter/exit: %u pairs in %u us — avg %llu ns\n",
+           (unsigned)F1_CRIT_PAIRS, (unsigned)elapsed_us, (unsigned long long)avg_ns);
+    ASSERT(avg_ns < F1_CRIT_MAX_AVG_NS, "critical enter/exit must average < 2 us");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_atomic32_add_from_threads
+ * F1_THREADS threads each add 1 F1_ITERS times; the final value is exact.
+ * ------------------------------------------------------------------------- */
+
+static embediq_osal_atomic32_t g_atomic_counter = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *atomic_incrementer(void *arg)
+{
+    (void)arg;
+    for (uint32_t i = 0u; i < F1_ITERS; i++) {
+        (void)embediq_osal_atomic32_add(&g_atomic_counter, 1u);
+    }
+    return NULL;
+}
+
+static void test_atomic32_add_from_threads(void)
+{
+    pthread_t th[F1_THREADS];
+    embediq_osal_atomic32_store(&g_atomic_counter, 0u);
+    for (uint32_t i = 0u; i < F1_THREADS; i++) {
+        pthread_create(&th[i], NULL, atomic_incrementer, NULL);
+    }
+    for (uint32_t i = 0u; i < F1_THREADS; i++) {
+        pthread_join(th[i], NULL);
+    }
+    ASSERT(embediq_osal_atomic32_load(&g_atomic_counter) == F1_THREADS * F1_ITERS,
+           "atomic32_add must not lose increments");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_atomic32_cas_semantics
+ * CAS succeeds only when the current value equals expected.
+ * ------------------------------------------------------------------------- */
+
+static void test_atomic32_cas_semantics(void)
+{
+    embediq_osal_atomic32_t a = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+    bool first      = embediq_osal_atomic32_cas(&a, 0u, 5u);
+    uint32_t after1 = embediq_osal_atomic32_load(&a);
+    bool second     = embediq_osal_atomic32_cas(&a, 0u, 9u);
+    uint32_t after2 = embediq_osal_atomic32_load(&a);
+    ASSERT(first && after1 == 5u && !second && after2 == 5u,
+           "cas(0->5) succeeds, then cas(0->9) fails and leaves 5");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_atomic32_lock_free
+ * Documents the host guarantee: int-sized atomics are always lock-free.
+ * ------------------------------------------------------------------------- */
+
+static void test_atomic32_lock_free(void)
+{
+    ASSERT(ATOMIC_INT_LOCK_FREE == 2, "host int atomics must be always lock-free");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_signal_post_wakes_waiter
+ * A thread blocked in signal_wait returns after a non-ISR signal_post.
+ * ------------------------------------------------------------------------- */
+
+static EmbedIQ_Signal_t       *g_post_sig = NULL;
+static embediq_osal_atomic32_t g_post_woke = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *post_waiter(void *arg)
+{
+    (void)arg;
+    embediq_osal_signal_wait(g_post_sig);
+    embediq_osal_atomic32_store(&g_post_woke, 1u);
+    return NULL;
+}
+
+static void test_signal_post_wakes_waiter(void)
+{
+    pthread_t th;
+    g_post_sig = embediq_osal_signal_create();
+    embediq_osal_atomic32_store(&g_post_woke, 0u);
+    pthread_create(&th, NULL, post_waiter, NULL);
+
+    embediq_osal_delay_ms(F1_POST_DELAY_MS);
+    uint32_t t0 = embediq_osal_time_ms();
+    embediq_osal_signal_post(g_post_sig);
+    while (embediq_osal_atomic32_load(&g_post_woke) == 0u
+           && (embediq_osal_time_ms() - t0) < F1_WAKE_DEADLINE_MS) {
+        embediq_osal_delay_ms(1u);
+    }
+    bool woke = embediq_osal_atomic32_load(&g_post_woke) == 1u;
+    if (woke) {
+        pthread_join(th, NULL);
+    }
+    ASSERT(woke, "signal_post must wake the waiter within 200 ms");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_destroy_functions_do_not_crash
+ * mutex_destroy / signal_destroy release their handles; NULL is accepted.
+ * The ASan build is the real check.
+ * ------------------------------------------------------------------------- */
+
+static void test_destroy_functions_do_not_crash(void)
+{
+    EmbedIQ_Mutex_t  *m   = embediq_osal_mutex_create();
+    EmbedIQ_Signal_t *sig = embediq_osal_signal_create();
+    embediq_osal_mutex_destroy(m);
+    embediq_osal_signal_destroy(sig);
+    embediq_osal_mutex_destroy(NULL);
+    embediq_osal_signal_destroy(NULL);
+    ASSERT(true, "mutex_destroy and signal_destroy must complete without crash");
+}
+
 /* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
@@ -317,6 +509,13 @@ int main(void)
     test_mutex_lock_unlock();
     test_mutex_timeout_returns_false();
     test_queue_destroy();
+    test_critical_section_mutual_exclusion();
+    test_critical_section_is_fast();
+    test_atomic32_add_from_threads();
+    test_atomic32_cas_semantics();
+    test_atomic32_lock_free();
+    test_signal_post_wakes_waiter();
+    test_destroy_functions_do_not_crash();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);
