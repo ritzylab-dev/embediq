@@ -133,3 +133,82 @@ jobs:
 
       - name: MISRA-C:2012 scan — warning only (cppcheck, R-02, I-07 adjacent)
         run: python3 tools/ci/check_misra.py
+
+  tsan:
+    runs-on: ubuntu-latest
+    continue-on-error: true        # F0 only — becomes blocking in F7 once the fixes land
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate message catalogs (messages.iq → C headers)
+        run: |
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --out generated/ --output-name embediq_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/thermostat.iq \
+              --out generated/ --output-name thermostat_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --out generated/ --output-name telemetry_msg_catalog.h
+
+      - name: Verify generated headers match .iq source (drift check)
+        run: |
+          mkdir -p /tmp/iq_fresh
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --out /tmp/iq_fresh/ --output-name embediq_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/thermostat.iq \
+              --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h
+          diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h
+          diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
+          diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
+
+      - name: Generate config_iq artifacts
+        run: |
+          python3 tools/config_iq/generate.py config/config.iq \
+              --out generated/
+
+      - name: Verify config_iq generated files match schema (drift check)
+        run: |
+          mkdir -p /tmp/cfg_fresh
+          python3 tools/config_iq/generate.py config/config.iq \
+              --out /tmp/cfg_fresh/
+          diff generated/embediq_cfg_validate.h /tmp/cfg_fresh/embediq_cfg_validate.h
+          diff generated/embediq_cfg_generated.h /tmp/cfg_fresh/embediq_cfg_generated.h
+          diff generated/embediq_cfg_validate.c   /tmp/cfg_fresh/embediq_cfg_validate.c
+
+      - name: Generate Python message stubs (--lang python)
+        run: |
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --lang python --out tools/embediq_python/embediq/msgs/
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --lang python --out tools/embediq_python/embediq/msgs/
+
+      - name: Verify Python stubs match .iq source (drift check)
+        run: |
+          mkdir -p /tmp/py_fresh/
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --lang python --out /tmp/py_fresh/
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --lang python --out /tmp/py_fresh/
+          diff tools/embediq_python/embediq/msgs/core_msgs.py /tmp/py_fresh/core_msgs.py
+          diff tools/embediq_python/embediq/msgs/telemetry_msgs.py /tmp/py_fresh/telemetry_msgs.py
+
+      - name: Build (host, ThreadSanitizer)
+        run: cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON && cmake --build build_tsan
+
+      # exitcode=0 (F0 only): a race report does not fail a test that passed its own
+      # assertions — races are inventoried below instead. Assertion failures, crashes
+      # and timeouts still fail this step. F7 removes exitcode=0 to make races blocking.
+      - name: Run tests under ThreadSanitizer
+        run: TSAN_OPTIONS="halt_on_error=0 exitcode=0 suppressions=$PWD/tools/ci/tsan.supp log_path=$PWD/build_tsan/tsan" ctest --test-dir build_tsan --output-on-failure --timeout 300
+
+      - name: Summarise races
+        if: always()
+        run: python3 tools/ci/tsan_summarise.py --github build_tsan
+
+      - name: Upload TSan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: tsan-reports, path: build_tsan/tsan.*, if-no-files-found: ignore }

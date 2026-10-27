@@ -1,0 +1,14 @@
+# tsan.supp — ThreadSanitizer suppressions for the EmbedIQ tsan CI job.
+#
+# Rule: a suppression is allowed ONLY for a race whose every frame is inside
+# third_party/ (Paho MQTT C, mbedTLS). Never suppress a report with any frame
+# in core/, osal/, hal/, fbs/, examples/ or tests/ — those are the findings
+# the Set 2 fixes (F1–F7) must remove.
+#
+# Each entry carries a comment naming the TSan report's top frame and why the
+# race is third-party-only.
+#
+# @author  Ritesh Anand
+# @company embediq.com | ritzylab.com
+#
+# SPDX-License-Identifier: Apache-2.0
