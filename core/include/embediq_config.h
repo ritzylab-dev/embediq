@@ -77,6 +77,12 @@ extern "C" {
  *  Must be a power of 2 for efficient modulo masking. */
 #define EMBEDIQ_OBS_RING_DEPTH          256
 
+/** Depth of the lock-free ISR-path ring (embediq_obs_emit_from_isr), drained
+ *  into the main ring by the next thread-path emit. Power of 2. 32 because the
+ *  deepest burst of HAL faults observed between two thread-path emits is < 8;
+ *  32 × 14 B = 448 B. */
+#define EMBEDIQ_OBS_ISR_RING_DEPTH      32
+
 /* ---------------------------------------------------------------------------
  * Message bus subscription table
  * ------------------------------------------------------------------------- */

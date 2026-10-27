@@ -101,6 +101,27 @@ target_compile_options(test_observatory PRIVATE
 add_test(NAME unit_observatory COMMAND test_observatory)
 
 # ---------------------------------------------------------------------------
+# Observatory concurrency tests (Set 2 / F2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_obs_concurrent test_obs_concurrent.c)
+
+target_include_directories(test_obs_concurrent PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_obs_concurrent PRIVATE embediq_fb_engine)
+
+target_compile_options(test_obs_concurrent PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_obs_concurrent COMMAND test_obs_concurrent)
+
+# ---------------------------------------------------------------------------
 # Watchdog FB unit tests (P1-T6 / Arch-4c)
 # ---------------------------------------------------------------------------
 
