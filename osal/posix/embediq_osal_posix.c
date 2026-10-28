@@ -400,8 +400,32 @@ void embediq_osal_signal_destroy(EmbedIQ_Signal_t *sig)
  * is not exposed by all macOS SDK configurations.
  * ------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------
+ * Test-only failure injection (host builds only) — review #182 N2
+ *
+ * embediq_osal__fail_next_mutex_create(n): the nth embediq_osal_mutex_create()
+ * call from now returns NULL, once (n = 0 disarms). Lets tests drive the
+ * "required boot resource unavailable" path without exhausting memory.
+ * ------------------------------------------------------------------------- */
+
+#ifdef EMBEDIQ_PLATFORM_HOST
+static _Atomic uint32_t s_mutex_fail_countdown = 0u;
+
+void embediq_osal__fail_next_mutex_create(uint32_t nth)
+{
+    atomic_store(&s_mutex_fail_countdown, nth);
+}
+#endif
+
 EmbedIQ_Mutex_t *embediq_osal_mutex_create(void)
 {
+#ifdef EMBEDIQ_PLATFORM_HOST
+    uint32_t n = atomic_load(&s_mutex_fail_countdown);
+    while (n != 0u
+           && !atomic_compare_exchange_weak(&s_mutex_fail_countdown, &n, n - 1u)) {
+    }
+    if (n == 1u) return NULL;   /* injected allocation failure */
+#endif
     EmbedIQ_Mutex_t *m = malloc(sizeof(EmbedIQ_Mutex_t));
     if (!m) return NULL;
     pthread_mutex_init(&m->mutex, NULL);

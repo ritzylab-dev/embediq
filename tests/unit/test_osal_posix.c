@@ -7,7 +7,7 @@
  * stdlib only. Each test exercises one behaviour with one assertion.
  *
  * Run:      ./build/tests/test_osal_posix
- * Expected: "All 21 tests passed. (0 failed)"
+ * Expected: "All 22 tests passed. (0 failed)"
  *
  * ASAN:
  *   cmake -B build_asan -DEMBEDIQ_PLATFORM=host \
@@ -669,6 +669,30 @@ static void test_osal_obs_macros_use_isr_path(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_mutex_create_failure_injection (review #182 N2 seam)
+ * Armed with 2, the second create returns NULL once; later creates succeed;
+ * 0 disarms.
+ * ------------------------------------------------------------------------- */
+
+extern void embediq_osal__fail_next_mutex_create(uint32_t nth);
+
+static void test_mutex_create_failure_injection(void)
+{
+    embediq_osal__fail_next_mutex_create(2u);
+    EmbedIQ_Mutex_t *a = embediq_osal_mutex_create();
+    EmbedIQ_Mutex_t *b = embediq_osal_mutex_create();   /* injected NULL */
+    EmbedIQ_Mutex_t *c = embediq_osal_mutex_create();
+    embediq_osal__fail_next_mutex_create(1u);
+    embediq_osal__fail_next_mutex_create(0u);           /* disarm before use */
+    EmbedIQ_Mutex_t *d = embediq_osal_mutex_create();
+    bool ok = a != NULL && b == NULL && c != NULL && d != NULL;
+    embediq_osal_mutex_destroy(a);
+    embediq_osal_mutex_destroy(c);
+    embediq_osal_mutex_destroy(d);
+    ASSERT(ok, "mutex_create failure injection: nth call NULL once, then normal");
+}
+
+/* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 
@@ -695,6 +719,7 @@ int main(void)
     test_queue_send_replace_oldest_keeps_newest();
     test_queue_send_replace_oldest_concurrent_with_recv();
     test_osal_obs_macros_use_isr_path();
+    test_mutex_create_failure_injection();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

@@ -65,6 +65,20 @@ typedef enum {
 } EmbedIQ_BootPhase_t;
 
 /* ---------------------------------------------------------------------------
+ * Engine fault codes — state_or_flag of an EMBEDIQ_OBS_EVT_FAULT event the
+ * engine emits itself. Kept above the EmbedIQ_FB_State_t values (0–5), which
+ * the existing boot FAULT events carry in the same field.
+ * ------------------------------------------------------------------------- */
+
+/** Boot failed: a required per-FB resource (the FB execution lock) could not
+ *  be allocated. source_fb_id = 0xFF, target_fb_id = the FB's endpoint. */
+#define EMBEDIQ_FAULT_BOOT_RESOURCE     0x80u
+
+/** Nested fault reports exceeded EMBEDIQ_FB_FAULT_PENDING_DEPTH while the FB
+ *  was running its own code; msg_id = number of reports not applied. */
+#define EMBEDIQ_FAULT_PENDING_OVERFLOW  0x81u
+
+/* ---------------------------------------------------------------------------
  * Subscription / publication array macros
  *
  * ALWAYS use these macros. Never use compound literals.
