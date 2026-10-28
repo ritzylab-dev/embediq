@@ -254,6 +254,12 @@ static void route_message(EmbedIQ_Msg_t *msg)
     }
 #endif
 
+    /* MSG_TX tap — level-3 (trace) event, once per routed message (T2-6). */
+    if (embediq_obs_level_at_least(3u)) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX, msg->source_endpoint_id,
+                         0xFFu, prio, msg_id);
+    }
+
     /* Find first subscriber entry via binary search. */
     int first = sub_first(msg_id);
     if (first < 0) return;   /* no subscribers — silent drop, no event */

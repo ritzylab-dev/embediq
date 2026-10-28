@@ -11,6 +11,22 @@
  *   power-of-2 so index masking works).  Written on every passing emit call.
  *   Oldest event overwritten on overflow (circular buffer semantics).
  *
+ * THREAD SAFETY (Set 2 / F2) — three layers, never nested the other way:
+ *   1. s_transport_mutex (OSAL mutex) serialises a whole thread-path emit
+ *      across threads, so .iqtrace / stdout order == sequence order for
+ *      thread-path events and TLV frames are never interleaved.
+ *   2. The OSAL critical section guards ONLY the ring, its counters, the
+ *      overflow count and the sequence assignment. No I/O inside it.
+ *   3. g_sequence, g_transport and g_level are OSAL atomics.
+ *   embediq_obs_emit_from_isr() takes none of the locks: it pushes into a
+ *   lock-free multi-producer ISR ring (EMBEDIQ_OBS_ISR_RING_DEPTH), drained
+ *   into the main ring — and written to the transport — by the next
+ *   thread-path emit or capture_end(). A stream-HAL write failure that
+ *   reports through EMBEDIQ_HAL_OBS_EMIT_ERROR (→ emit_from_isr) therefore
+ *   never re-enters the transport it was called from (T1-5).
+ *   Events emitted before embediq_obs_init() (any setup call or engine boot)
+ *   are recorded in the ring but not written to a transport.
+ *
  * SEQUENCE COUNTER:
  *   uint32_t sequence — monotonic, increments on every event that enters the
  *   ring.  Wraps are acceptable; use unsigned subtraction for gap detection.
@@ -63,6 +79,7 @@
 #include "embediq_obs.h"
 #include "embediq_config.h"
 #include "embediq_bus.h"    /* embediq_bus_resolve_id() for stdout name lookup */
+#include "embediq_osal.h"   /* critical section, atomics, transport mutex */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -74,7 +91,8 @@
 #  include <time.h>
 #endif
 
-/* Stream ops — registered by platform HAL at boot. NULL = no file transport. */
+/* Stream ops — registered by platform HAL at boot. NULL = no file transport.
+ * Written under s_transport_mutex (host). */
 static const embediq_obs_stream_ops_t *s_stream_ops = NULL;
 
 /* ---------------------------------------------------------------------------
@@ -84,21 +102,43 @@ static const embediq_obs_stream_ops_t *s_stream_ops = NULL;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 
+/* Main ring — every field below is accessed only inside the OSAL critical
+ * section. */
 static EmbedIQ_Event_t g_ring[EMBEDIQ_OBS_RING_DEPTH];
 static uint32_t g_ring_head  = 0u;  /* index of oldest stored event */
 static uint32_t g_ring_count = 0u;  /* events currently in ring     */
-static uint32_t g_sequence   = 0u;  /* monotonic sequence counter   */
 static uint32_t g_total      = 0u;  /* total events written to ring */
 static uint32_t g_overflow   = 0u;  /* drops pending overflow report */
 
-static EmbedIQ_Obs_Transport_t g_transport = EMBEDIQ_OBS_TRANSPORT_STDOUT;
-static uint8_t                 g_level     = EMBEDIQ_OBS_LEVEL;
+/* Shared by the thread path and the ISR path. */
+static embediq_osal_atomic32_t g_sequence  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_transport =
+    EMBEDIQ_OSAL_ATOMIC32_INIT((uint32_t)EMBEDIQ_OBS_TRANSPORT_STDOUT);
+static embediq_osal_atomic32_t g_level     =
+    EMBEDIQ_OSAL_ATOMIC32_INIT((uint32_t)EMBEDIQ_OBS_LEVEL);
+
+/* Serialises transport I/O and setup calls. Created by embediq_obs_init(). */
+static EmbedIQ_Mutex_t *s_transport_mutex = NULL;
 
 static EmbedIQ_Obs_Session_t g_session;
 static bool                  g_session_valid = false;
 
+/* ISR ring — lock-free multi-producer; drained under the critical section.
+ * head = next slot to reserve, tail = next slot to drain (both monotonic,
+ * masked on use); ready[slot] publishes a fully written record. */
+static EmbedIQ_Event_t         g_isr_ring[EMBEDIQ_OBS_ISR_RING_DEPTH];
+static embediq_osal_atomic32_t g_isr_ready[EMBEDIQ_OBS_ISR_RING_DEPTH];
+static embediq_osal_atomic32_t g_isr_head          = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_isr_tail          = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_isr_dropped       = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_isr_dropped_total = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
 /* Power-of-2 mask: EMBEDIQ_OBS_RING_DEPTH must be a power of 2 (= 256). */
 #define RING_MASK  ((uint32_t)(EMBEDIQ_OBS_RING_DEPTH) - 1u)
+#define ISR_MASK   ((uint32_t)(EMBEDIQ_OBS_ISR_RING_DEPTH) - 1u)
+
+_Static_assert((EMBEDIQ_OBS_ISR_RING_DEPTH & (EMBEDIQ_OBS_ISR_RING_DEPTH - 1)) == 0,
+               "EMBEDIQ_OBS_ISR_RING_DEPTH must be a power of 2");
 
 /* Local implementation constants — not in embediq_config.h (host-only details). */
 #define OBS_EP_NAME_BUF    12    /* "ep_NNN" + margin */
@@ -109,7 +149,8 @@ static bool                  g_session_valid = false;
  * ------------------------------------------------------------------------- */
 
 /**
- * Write evt into the ring.  If count_overflow is true and the ring was full,
+ * Write evt into the ring. Caller holds the critical section.
+ * If count_overflow is true and the ring was full,
  * the oldest entry is silently dropped and g_overflow is incremented.
  * If count_overflow is false (used for the overflow-recovery meta-event),
  * oldest is still dropped but g_overflow is NOT incremented — prevents the
@@ -137,11 +178,12 @@ static void ring_push(const EmbedIQ_Event_t *evt, bool count_overflow)
 
 static bool passes_level(uint8_t event_type)
 {
-    if (g_level >= 2u) return true;
+    uint32_t level = embediq_osal_atomic32_load(&g_level);
+    if (level >= 2u) return true;
 
     embediq_obs_family_t fam = embediq_obs_event_family(event_type);
 
-    if (g_level >= 1u) {
+    if (level >= 1u) {
         /* level 1: level 0 + MESSAGE + STATE families */
         return fam == EMBEDIQ_OBS_FAMILY_FAULT   ||
                fam == EMBEDIQ_OBS_FAMILY_SYSTEM  ||
@@ -274,7 +316,113 @@ static int write_tlv(uint16_t type, uint16_t length, const void *payload)
     return 0;
 }
 
+/* ---------------------------------------------------------------------------
+ * Concurrency helpers
+ * ------------------------------------------------------------------------- */
+
+static EmbedIQ_Obs_Transport_t transport_get(void)
+{
+    return (EmbedIQ_Obs_Transport_t)embediq_osal_atomic32_load(&g_transport);
+}
+
+static void transport_set(EmbedIQ_Obs_Transport_t t)
+{
+    embediq_osal_atomic32_store(&g_transport, (uint32_t)t);
+}
+
+/* Next canonical sequence number — shared by both paths, lock-free. */
+static uint32_t next_sequence(void)
+{
+    return embediq_osal_atomic32_add(&g_sequence, 1u) - 1u;
+}
+
+static void transport_lock(void)
+{
+    if (s_transport_mutex) {
+        (void)embediq_osal_mutex_lock(s_transport_mutex, UINT32_MAX);
+    }
+}
+
+static void transport_unlock(void)
+{
+    if (s_transport_mutex) embediq_osal_mutex_unlock(s_transport_mutex);
+}
+
+/**
+ * Move every published ISR-ring record into the main ring (oldest first) and
+ * fold pending ISR drops into g_overflow. Caller holds the critical section.
+ * Copies up to cap drained records into out (out may be NULL). Bounded to one
+ * ring's worth per call so a producer storm cannot extend the hold time.
+ * Returns the number of records copied to out.
+ */
+static uint32_t drain_isr_ring_locked(EmbedIQ_Event_t *out, uint32_t cap)
+{
+    uint32_t copied = 0u;
+    uint32_t tail   = embediq_osal_atomic32_load(&g_isr_tail);
+    for (uint32_t i = 0u; i < EMBEDIQ_OBS_ISR_RING_DEPTH; i++) {
+        if (tail == embediq_osal_atomic32_load(&g_isr_head)) break;
+        uint32_t slot = tail & ISR_MASK;
+        if (embediq_osal_atomic32_load(&g_isr_ready[slot]) == 0u) break; /* reserved, not yet written */
+        EmbedIQ_Event_t e = g_isr_ring[slot];
+        embediq_osal_atomic32_store(&g_isr_ready[slot], 0u);
+        tail++;
+        embediq_osal_atomic32_store(&g_isr_tail, tail);
+        ring_push(&e, true);
+        g_total++;
+        if (out && copied < cap) out[copied++] = e;
+    }
+    uint32_t dropped = embediq_osal_atomic32_load(&g_isr_dropped);
+    if (dropped > 0u) {
+        (void)embediq_osal_atomic32_sub(&g_isr_dropped, dropped);
+        g_overflow += dropped;
+    }
+    return copied;
+}
+
+/**
+ * Write one event to the current transport. Caller holds s_transport_mutex.
+ * OVERFLOW meta-events are written like any other event, so a sequence gap
+ * in a .iqtrace file is always accounted for by an OVERFLOW record.
+ */
+static void transport_write_locked(const EmbedIQ_Event_t *evt)
+{
+    EmbedIQ_Obs_Transport_t t = transport_get();
+    if (t == EMBEDIQ_OBS_TRANSPORT_STDOUT) {
+        char line[OBS_LINE_BUF_SIZE];
+        format_event_internal(evt, line, sizeof(line));
+        printf("%s\n", line);
+    } else if (t == EMBEDIQ_OBS_TRANSPORT_FILE) {
+        (void)write_tlv(0x0002u, (uint16_t)sizeof(EmbedIQ_Event_t), evt);
+    }
+}
+
 #endif /* EMBEDIQ_PLATFORM_HOST */
+
+/* ---------------------------------------------------------------------------
+ * Public: embediq_obs_init()
+ * ------------------------------------------------------------------------- */
+
+void embediq_obs_init(void)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    if (s_transport_mutex) return;   /* idempotent */
+    s_transport_mutex = embediq_osal_mutex_create();
+#endif
+}
+
+/* ---------------------------------------------------------------------------
+ * Public: embediq_obs_level_at_least()
+ * ------------------------------------------------------------------------- */
+
+bool embediq_obs_level_at_least(uint8_t lvl)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    return embediq_osal_atomic32_load(&g_level) >= (uint32_t)lvl;
+#else
+    (void)lvl;
+    return false;   /* emit is a no-op on MCU production builds */
+#endif
+}
 
 /* ---------------------------------------------------------------------------
  * Public: embediq_obs_emit()
@@ -295,63 +443,69 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
 #else /* EMBEDIQ_PLATFORM_HOST */
 
     /* NULL transport: discard everything, including ring writes. */
-    if (g_transport == EMBEDIQ_OBS_TRANSPORT_NULL) return;
+    if (transport_get() == EMBEDIQ_OBS_TRANSPORT_NULL) return;
 
     /* Level filter: skip events below the configured verbosity. */
     if (!passes_level(event_type)) return;
 
-    /* ------------------------------------------------------------------
-     * Overflow recovery: before writing the incoming event, first emit a
-     * meta-event reporting how many events were dropped.  The meta-event
-     * uses ring_push(..., false) so it does NOT re-trigger overflow
-     * counting if the ring is still full.
-     * ------------------------------------------------------------------ */
-    if (g_overflow > 0u) {
-        uint32_t dropped = g_overflow;
-        g_overflow = 0u;   /* reset before push to avoid re-entry issues */
+    uint32_t        ts = obs_timestamp_us();
+    EmbedIQ_Event_t drained[EMBEDIQ_OBS_ISR_RING_DEPTH];
+    uint32_t        n_drained;
+    bool            have_ovf = false;
+    EmbedIQ_Event_t ovf;
+    EmbedIQ_Event_t evt;
 
-        EmbedIQ_Event_t ovf = {
+    transport_lock();
+
+    /* ---- critical section: ring + counters + sequence only ---- */
+    embediq_osal_critical_enter();
+
+    n_drained = drain_isr_ring_locked(drained, EMBEDIQ_OBS_ISR_RING_DEPTH);
+
+    /* Overflow recovery: report dropped events before the incoming event.
+     * ring_push(..., false) so the meta-event cannot re-trigger counting. */
+    if (g_overflow > 0u) {
+        ovf = (EmbedIQ_Event_t){
             .event_type    = EMBEDIQ_OBS_EVT_OVERFLOW,
             .source_fb_id  = 0xFFu,
             .target_fb_id  = 0xFFu,
             .state_or_flag = 0u,
-            .msg_id        = (uint16_t)dropped,   /* pack drop count here */
-            .timestamp_us  = obs_timestamp_us(),
-            .sequence      = g_sequence++,
+            .msg_id        = (uint16_t)g_overflow,   /* pack drop count here */
+            .timestamp_us  = ts,
+            .sequence      = next_sequence(),
         };
+        g_overflow = 0u;
         ring_push(&ovf, false);
         g_total++;
-
-        if (g_transport == EMBEDIQ_OBS_TRANSPORT_STDOUT) {
-            char line[OBS_LINE_BUF_SIZE];
-            format_event_internal(&ovf, line, sizeof(line));
-            printf("%s\n", line);
-        }
+        have_ovf = true;
     }
 
-    /* Build the incoming event record. */
-    EmbedIQ_Event_t evt = {
+    evt = (EmbedIQ_Event_t){
         .event_type    = event_type,
         .source_fb_id  = source,
         .target_fb_id  = target,
         .state_or_flag = state,
         .msg_id        = msg_id,
-        .timestamp_us  = obs_timestamp_us(),
-        .sequence      = g_sequence++,
+        .timestamp_us  = ts,
+        .sequence      = next_sequence(),
     };
-
     ring_push(&evt, true);   /* may increment g_overflow if ring full */
     g_total++;
 
-    if (g_transport == EMBEDIQ_OBS_TRANSPORT_STDOUT) {
-        char line[OBS_LINE_BUF_SIZE];
-        format_event_internal(&evt, line, sizeof(line));
-        printf("%s\n", line);
+    embediq_osal_critical_exit();
+    /* ---- end critical section ---- */
+
+    /* Transport I/O — outside the critical section, under the transport
+     * mutex. Skipped before embediq_obs_init() (no mutex yet). */
+    if (s_transport_mutex) {
+        for (uint32_t i = 0u; i < n_drained; i++) {
+            transport_write_locked(&drained[i]);
+        }
+        if (have_ovf) transport_write_locked(&ovf);
+        transport_write_locked(&evt);
     }
 
-    if (g_transport == EMBEDIQ_OBS_TRANSPORT_FILE) {
-        write_tlv(0x0002u, (uint16_t)sizeof(EmbedIQ_Event_t), &evt);
-    }
+    transport_unlock();
 
 #endif /* EMBEDIQ_PLATFORM_HOST */
 }
@@ -363,7 +517,10 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
 void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport)
 {
 #ifdef EMBEDIQ_PLATFORM_HOST
-    g_transport = transport;
+    embediq_obs_init();
+    transport_lock();
+    transport_set(transport);
+    transport_unlock();
 #else
     (void)transport;
 #endif
@@ -376,7 +533,9 @@ void embediq_obs_set_transport(EmbedIQ_Obs_Transport_t transport)
 void embediq_obs_set_level(uint8_t level)
 {
 #ifdef EMBEDIQ_PLATFORM_HOST
-    g_level = level;
+    transport_lock();
+    embediq_osal_atomic32_store(&g_level, (uint32_t)level);
+    transport_unlock();
 #else
     (void)level;
 #endif
@@ -389,8 +548,11 @@ void embediq_obs_set_level(uint8_t level)
 void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session)
 {
 #ifdef EMBEDIQ_PLATFORM_HOST
+    embediq_obs_init();
+    transport_lock();
     g_session       = *session;
     g_session_valid = true;
+    transport_unlock();
 #else
     (void)session;
 #endif
@@ -411,7 +573,14 @@ const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void)
 
 void embediq_obs_set_stream_ops(const embediq_obs_stream_ops_t *ops)
 {
+#ifdef EMBEDIQ_PLATFORM_HOST
+    embediq_obs_init();
+    transport_lock();
     s_stream_ops = ops;
+    transport_unlock();
+#else
+    s_stream_ops = ops;
+#endif
 }
 
 int embediq_obs_capture_begin(const char *path)
@@ -420,15 +589,12 @@ int embediq_obs_capture_begin(const char *path)
     (void)path;
     return -1;
 #else
-    if (!s_stream_ops || !s_stream_ops->open) return -1;
+    embediq_obs_init();
+    transport_lock();
+    int ret = -1;
 
     const char *p = path ? path : getenv("EMBEDIQ_OBS_PATH");
     if (!p) p = "/tmp/embediq_capture.iqtrace";
-
-    const EmbedIQ_Obs_Session_t *s = embediq_obs_session_get();
-    if (!s) return -1;
-
-    if (s_stream_ops->open(p) != 0) return -1;
 
     /* 8-byte file header: IQTR + version 1 LE + reserved */
     static const uint8_t hdr[] = {
@@ -436,20 +602,21 @@ int embediq_obs_capture_begin(const char *path)
         0x01u, 0x00u,
         0x00u, 0x00u
     };
-    if (s_stream_ops->write(hdr, (uint16_t)sizeof(hdr)) != 0) {
-        s_stream_ops->close();
-        return -1;
+
+    const EmbedIQ_Obs_Session_t *s = g_session_valid ? &g_session : NULL;
+    if (s && s_stream_ops && s_stream_ops->open && s_stream_ops->open(p) == 0) {
+        if (s_stream_ops->write(hdr, (uint16_t)sizeof(hdr)) == 0
+            && write_tlv(0x0001u, (uint16_t)sizeof(*s), s) == 0) {   /* SESSION TLV */
+            if (s_stream_ops->flush) s_stream_ops->flush();
+            transport_set(EMBEDIQ_OBS_TRANSPORT_FILE);
+            ret = 0;
+        } else {
+            s_stream_ops->close();
+        }
     }
 
-    /* SESSION TLV */
-    if (write_tlv(0x0001u, (uint16_t)sizeof(*s), s) != 0) {
-        s_stream_ops->close();
-        return -1;
-    }
-
-    if (s_stream_ops->flush) s_stream_ops->flush();
-    g_transport = EMBEDIQ_OBS_TRANSPORT_FILE;
-    return 0;
+    transport_unlock();
+    return ret;
 #endif
 }
 
@@ -458,12 +625,25 @@ int embediq_obs_capture_end(void)
 #ifndef EMBEDIQ_PLATFORM_HOST
     return -1;
 #else
+    embediq_obs_init();
+    transport_lock();   /* no emitter can be mid-write while the stream closes */
+
+    /* Flush pending ISR-path events into the ring and the capture first. */
+    EmbedIQ_Event_t drained[EMBEDIQ_OBS_ISR_RING_DEPTH];
+    embediq_osal_critical_enter();
+    uint32_t n_drained = drain_isr_ring_locked(drained, EMBEDIQ_OBS_ISR_RING_DEPTH);
+    embediq_osal_critical_exit();
+    for (uint32_t i = 0u; i < n_drained; i++) {
+        transport_write_locked(&drained[i]);
+    }
+
     int ret = write_tlv(0x0004u, 0u, NULL);  /* STREAM_END */
     if (s_stream_ops) {
         if (s_stream_ops->flush) s_stream_ops->flush();
         if (s_stream_ops->close) s_stream_ops->close();
     }
-    g_transport = EMBEDIQ_OBS_TRANSPORT_NULL;
+    transport_set(EMBEDIQ_OBS_TRANSPORT_NULL);
+    transport_unlock();
     return ret;
 #endif
 }
@@ -481,29 +661,51 @@ int embediq_obs_capture_end(void)
  */
 void obs__reset(void)
 {
+    embediq_obs_init();
+    transport_lock();
     if (s_stream_ops && s_stream_ops->close) s_stream_ops->close();
+
+    embediq_osal_critical_enter();
     memset(g_ring, 0, sizeof(g_ring));
     g_ring_head  = 0u;
     g_ring_count = 0u;
-    g_sequence   = 0u;
     g_total      = 0u;
     g_overflow   = 0u;
-    g_transport  = EMBEDIQ_OBS_TRANSPORT_STDOUT;
-    g_level      = EMBEDIQ_OBS_LEVEL;
+    embediq_osal_critical_exit();
+
+    embediq_osal_atomic32_store(&g_sequence, 0u);
+    for (uint32_t i = 0u; i < EMBEDIQ_OBS_ISR_RING_DEPTH; i++) {
+        embediq_osal_atomic32_store(&g_isr_ready[i], 0u);
+    }
+    embediq_osal_atomic32_store(&g_isr_head, 0u);
+    embediq_osal_atomic32_store(&g_isr_tail, 0u);
+    embediq_osal_atomic32_store(&g_isr_dropped, 0u);
+    embediq_osal_atomic32_store(&g_isr_dropped_total, 0u);
+    transport_set(EMBEDIQ_OBS_TRANSPORT_STDOUT);
+    embediq_osal_atomic32_store(&g_level, (uint32_t)EMBEDIQ_OBS_LEVEL);
     memset(&g_session, 0, sizeof(g_session));
     g_session_valid = false;
+    transport_unlock();
 }
 
 /** Total events written to the ring since last reset. */
 uint32_t obs__event_count(void)
 {
-    return g_total;
+    embediq_osal_critical_enter();
+    (void)drain_isr_ring_locked(NULL, 0u);
+    uint32_t n = g_total;
+    embediq_osal_critical_exit();
+    return n;
 }
 
 /** Number of events currently held in the ring buffer. */
 uint32_t obs__ring_count(void)
 {
-    return g_ring_count;
+    embediq_osal_critical_enter();
+    (void)drain_isr_ring_locked(NULL, 0u);
+    uint32_t n = g_ring_count;
+    embediq_osal_critical_exit();
+    return n;
 }
 
 /**
@@ -512,15 +714,19 @@ uint32_t obs__ring_count(void)
  */
 bool obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out)
 {
-    if (!out || idx >= g_ring_count) return false;
-    *out = g_ring[(g_ring_head + idx) & RING_MASK];
-    return true;
+    if (!out) return false;
+    embediq_osal_critical_enter();
+    (void)drain_isr_ring_locked(NULL, 0u);
+    bool ok = idx < g_ring_count;
+    if (ok) *out = g_ring[(g_ring_head + idx) & RING_MASK];
+    embediq_osal_critical_exit();
+    return ok;
 }
 
 /** Override the runtime verbosity level (test use only). */
 void obs__set_level(uint8_t level)
 {
-    g_level = level;
+    embediq_osal_atomic32_store(&g_level, (uint32_t)level);
 }
 
 /**
@@ -530,7 +736,15 @@ void obs__set_level(uint8_t level)
  */
 void obs__force_overflow(uint32_t count)
 {
+    embediq_osal_critical_enter();
     g_overflow = count;
+    embediq_osal_critical_exit();
+}
+
+/** Cumulative ISR-ring drops since the last obs__reset() (test use only). */
+uint32_t obs__isr_dropped_total(void)
+{
+    return embediq_osal_atomic32_load(&g_isr_dropped_total);
 }
 
 /**
@@ -544,18 +758,44 @@ void obs__format_event(const EmbedIQ_Event_t *evt, char *buf, size_t n)
 }
 
 /* ---------------------------------------------------------------------------
- * ISR-safe emit — host implementation
+ * ISR-safe emit — host implementation (host form of the Phase-2 MCU design)
  *
- * On the host (POSIX, single-writer), ISR context does not exist.
- * Delegate directly to embediq_obs_emit(). MCU implementation is Phase 2
- * (XOBS-1 gate) — the undefined symbol on MCU targets is intentional until
- * the ring buffer backend is implemented.
+ * Lock-free multi-producer push into g_isr_ring: reserve a slot by CAS on
+ * g_isr_head, write the record, publish it through g_isr_ready[slot]. No
+ * mutex, no critical section, no transport, no printf. A full ring counts
+ * the drop and returns; the drop is reported in the next OVERFLOW event.
+ * Drained by the next thread-path emit, capture_end(), or a test reader.
  * ------------------------------------------------------------------------- */
 void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
                                 uint8_t target, uint8_t state,
                                 uint16_t msg_id)
 {
-    embediq_obs_emit(event_type, source, target, state, msg_id);
+    if (transport_get() == EMBEDIQ_OBS_TRANSPORT_NULL) return;
+    if (!passes_level(event_type)) return;
+
+    uint32_t head;
+    for (;;) {
+        head = embediq_osal_atomic32_load(&g_isr_head);
+        uint32_t tail = embediq_osal_atomic32_load(&g_isr_tail);
+        if (head - tail >= (uint32_t)EMBEDIQ_OBS_ISR_RING_DEPTH) {
+            (void)embediq_osal_atomic32_add(&g_isr_dropped, 1u);
+            (void)embediq_osal_atomic32_add(&g_isr_dropped_total, 1u);
+            return;
+        }
+        if (embediq_osal_atomic32_cas(&g_isr_head, head, head + 1u)) break;
+    }
+
+    uint32_t slot = head & ISR_MASK;
+    g_isr_ring[slot] = (EmbedIQ_Event_t){
+        .event_type    = event_type,
+        .source_fb_id  = source,
+        .target_fb_id  = target,
+        .state_or_flag = state,
+        .msg_id        = msg_id,
+        .timestamp_us  = obs_timestamp_us(),
+        .sequence      = next_sequence(),
+    };
+    embediq_osal_atomic32_store(&g_isr_ready[slot], 1u);
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */
