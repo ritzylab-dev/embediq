@@ -38,15 +38,6 @@ extern uint32_t fb_engine__obs_event_count(void);
 extern void     fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle,
                                        uint16_t msg_id, const void *msg);
 
-/* Weak fallbacks so this file links before fb_engine.c implements the
- * declared engine API (TDD-first commit); fb_engine.c's strong definitions
- * replace them. */
-__attribute__((weak)) uint8_t embediq_engine_fb_count(void) { return 0u; }
-__attribute__((weak)) const EmbedIQ_FB_Config_t *embediq_engine_fb_config(uint8_t idx)
-{ (void)idx; return NULL; }
-__attribute__((weak)) uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t h)
-{ (void)h; return 0xFFu; }
-
 /* ---------------------------------------------------------------------------
  * F3 named constants
  * ------------------------------------------------------------------------- */

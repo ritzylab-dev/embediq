@@ -62,9 +62,6 @@
  * here avoid introducing a private header.
  * ------------------------------------------------------------------------- */
 
-extern uint8_t                     fb_engine__reg_count(void);
-extern const EmbedIQ_FB_Config_t  *fb_engine__reg_config(uint8_t idx);
-extern uint8_t                     fb_engine__get_ep_id(EmbedIQ_FB_Handle_t h);
 
 /* Notify callback — registered by the engine, called after each enqueue. */
 static embediq_notify_fn_t g_notify_fn = NULL;
@@ -171,7 +168,7 @@ void message_bus_boot(void)
 {
     if (g_bus_booted) return;   /* idempotent */
 
-    uint8_t n = fb_engine__reg_count();
+    uint8_t n = embediq_engine_fb_count();
     g_ep_count = n;
 
     /* Create three priority queues for each registered FB. */
@@ -192,7 +189,7 @@ void message_bus_boot(void)
     /* Build subscription table from each FB's subscription list. */
     g_sub_count = 0u;
     for (uint8_t i = 0u; i < n; i++) {
-        const EmbedIQ_FB_Config_t *cfg = fb_engine__reg_config(i);
+        const EmbedIQ_FB_Config_t *cfg = embediq_engine_fb_config(i);
         if (!cfg || !cfg->subscriptions) continue;
         for (uint8_t s = 0u; s < cfg->subscription_count; s++) {
             if (g_sub_count >= EMBEDIQ_MAX_SUBSCRIPTIONS) break;
@@ -213,7 +210,7 @@ void message_bus_boot(void)
 
 const char *embediq_bus_resolve_id(uint8_t endpoint_id)
 {
-    const EmbedIQ_FB_Config_t *cfg = fb_engine__reg_config(endpoint_id);
+    const EmbedIQ_FB_Config_t *cfg = embediq_engine_fb_config(endpoint_id);
     if (!cfg) return NULL;
     return cfg->name;
 }
@@ -320,10 +317,35 @@ static void route_message(EmbedIQ_Msg_t *msg)
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * message_bus_post_ep() — package-internal (fb_engine.c)
+ *
+ * Enqueue msg directly onto one endpoint's priority queue, bypassing the
+ * subscription table, then wake its dispatch thread. Used by the engine to
+ * deliver MSG_FB_FAULT to the faulted FB only. Blocking send (UINT32_MAX),
+ * as on the HIGH publish path.
+ * Returns EMBEDIQ_OK, or EMBEDIQ_ERR_INVALID if ep/prio/queue is unusable.
+ * ------------------------------------------------------------------------- */
+
+embediq_err_t message_bus_post_ep(uint8_t ep, uint8_t prio, const EmbedIQ_Msg_t *msg)
+{
+    if (!msg || ep >= g_ep_count || prio > (uint8_t)EMBEDIQ_MSG_PRIORITY_LOW) {
+        return EMBEDIQ_ERR_INVALID;
+    }
+    EmbedIQ_Queue_t *q = g_ep[ep].q[prio];
+    if (!q) return EMBEDIQ_ERR_INVALID;
+
+    EmbedIQ_Msg_t copy = *msg;
+    embediq_err_t rc = embediq_osal_queue_send(q, &copy, UINT32_MAX);
+    if (rc != EMBEDIQ_OK) return rc;
+    if (g_notify_fn) g_notify_fn(ep);
+    return EMBEDIQ_OK;
+}
+
 void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
 {
     if (!msg) return;
-    msg->source_endpoint_id = fb_engine__get_ep_id(fb);
+    msg->source_endpoint_id = embediq_engine_fb_ep(fb);
     route_message(msg);
 }
 
