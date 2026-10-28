@@ -8,7 +8,7 @@
  * Each test exercises exactly one behaviour with one ASSERT.
  *
  * Run:      ./build/tests/unit/test_fb_engine
- * Expected: "All 15 tests passed. (0 failed)"
+ * Expected: "All 17 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -52,6 +52,11 @@ extern void     fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle,
 #define F3_BURST_SPACING_MS  2u
 #define F3_BURST_WAIT_MS     500u
 #define F3_API_FBS           3u
+
+/* F9 (review R4) named constants */
+#define F9_FAULT_SLEEP_MS    100u     /* fault_fn hold time: widens any overlap */
+#define F9_REPORTERS         2u
+#define F9_MSG_SUB           0x1432u  /* community range, unique to this file */
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -721,6 +726,111 @@ static void test_platform_thread_publish_during_boot_is_not_lost(void)
  * Entry point
  * ------------------------------------------------------------------------- */
 
+/* ===========================================================================
+ * F9 — review R4: fault_fn never runs concurrently with itself
+ * ======================================================================== */
+
+/* fault_fn that sleeps and tracks overlap with atomics only (reviewer probe). */
+static embediq_osal_atomic32_t g_f9_active = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_f9_peak   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_f9_count  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_f9_go     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void f9_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
+{
+    (void)fb; (void)fb_data; (void)reason;
+    uint32_t active = embediq_osal_atomic32_add(&g_f9_active, 1u);   /* returns NEW value */
+    uint32_t peak   = embediq_osal_atomic32_load(&g_f9_peak);
+    while (active > peak && !embediq_osal_atomic32_cas(&g_f9_peak, peak, active)) {
+        peak = embediq_osal_atomic32_load(&g_f9_peak);
+    }
+    embediq_osal_delay_ms(F9_FAULT_SLEEP_MS);
+    (void)embediq_osal_atomic32_sub(&g_f9_active, 1u);
+    (void)embediq_osal_atomic32_add(&g_f9_count, 1u);
+}
+
+static void *f9_reporter(void *arg)
+{
+    while (embediq_osal_atomic32_load(&g_f9_go) == 0u) { /* start together */ }
+    embediq_fb_report_fault((EmbedIQ_FB_Handle_t)arg, F3_FAULT_REASON);
+    return NULL;
+}
+
+/* Two threads report a fault on h at the same moment; returns the peak
+ * fault_fn concurrency and stores the number of fault_fn runs in *count. */
+static uint32_t f9_report_concurrently(EmbedIQ_FB_Handle_t h, uint32_t *count)
+{
+    embediq_osal_atomic32_store(&g_f9_active, 0u);
+    embediq_osal_atomic32_store(&g_f9_peak,   0u);
+    embediq_osal_atomic32_store(&g_f9_count,  0u);
+    embediq_osal_atomic32_store(&g_f9_go,     0u);
+    pthread_t th[F9_REPORTERS];
+    for (uint32_t i = 0u; i < F9_REPORTERS; i++) {
+        pthread_create(&th[i], NULL, f9_reporter, h);
+    }
+    embediq_osal_atomic32_store(&g_f9_go, 1u);
+    for (uint32_t i = 0u; i < F9_REPORTERS; i++) {
+        pthread_join(th[i], NULL);
+    }
+    *count = embediq_osal_atomic32_load(&g_f9_count);
+    return embediq_osal_atomic32_load(&g_f9_peak);
+}
+
+/* ---------------------------------------------------------------------------
+ * test_fault_fn_never_concurrent_for_non_dispatch_fb
+ * FB with no subscriptions (no dispatch thread): two concurrent reporters.
+ * fault_fn runs twice, never overlapping.
+ * ------------------------------------------------------------------------- */
+
+static void test_fault_fn_never_concurrent_for_non_dispatch_fb(void)
+{
+    fb_engine__reset();
+    static const EmbedIQ_FB_Config_t k_cfg = {
+        .name = "f9_nosub", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .fault_fn = f9_fault_fn,
+    };
+    EmbedIQ_FB_Handle_t h = embediq_fb_register(&k_cfg);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+
+    uint32_t count = 0u;
+    uint32_t peak  = f9_report_concurrently(h, &count);
+    (void)embediq_engine_dispatch_shutdown();
+    printf("      peak=%u count=%u\n", (unsigned)peak, (unsigned)count);
+    ASSERT(peak == 1u && count == F9_REPORTERS
+           && embediq_fb_get_state(h) == EMBEDIQ_FB_STATE_FAULT,
+           "non-dispatch FB: fault_fn applied twice, never concurrently");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_fault_fn_never_concurrent_before_dispatch_boot
+ * Subscribing FB, engine booted, dispatch NOT started: two concurrent
+ * reporters (platform threads started in init_fn can do this). fault_fn runs
+ * twice, never overlapping; dispatch then starts and stops cleanly.
+ * ------------------------------------------------------------------------- */
+
+static void test_fault_fn_never_concurrent_before_dispatch_boot(void)
+{
+    fb_engine__reset();
+    EMBEDIQ_SUBS(subs, F9_MSG_SUB);
+    EmbedIQ_FB_Config_t cfg = {
+        .name = "f9_predispatch", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .fault_fn = f9_fault_fn,
+        .subscriptions = subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Handle_t h = embediq_fb_register(&cfg);
+    embediq_engine_boot();
+
+    uint32_t count = 0u;
+    uint32_t peak  = f9_report_concurrently(h, &count);
+    embediq_engine_dispatch_boot();
+    int rc = embediq_engine_dispatch_shutdown();
+    printf("      peak=%u count=%u shutdown=%d\n", (unsigned)peak, (unsigned)count, rc);
+    ASSERT(peak == 1u && count == F9_REPORTERS && rc == 0
+           && embediq_fb_get_state(h) == EMBEDIQ_FB_STATE_FAULT,
+           "pre-dispatch FB: fault_fn applied twice, never concurrently");
+}
+
 int main(void)
 {
     test_fb_register_stores_config();
@@ -738,6 +848,8 @@ int main(void)
     test_get_state_concurrent_tsan();
     test_engine_fb_api_matches_registry();
     test_platform_thread_publish_during_boot_is_not_lost();
+    test_fault_fn_never_concurrent_for_non_dispatch_fb();
+    test_fault_fn_never_concurrent_before_dispatch_boot();
     fb_engine__reset();
 
     printf("\nAll %d tests passed. (%d failed)\n",

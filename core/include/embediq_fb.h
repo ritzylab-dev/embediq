@@ -94,7 +94,17 @@ typedef void (*embediq_fb_run_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data);
 /** Called once during ordered shutdown before the FB thread is stopped. */
 typedef void (*embediq_fb_exit_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data);
 
-/** Called when the FB enters FAULT state. reason is a caller-defined code. */
+/**
+ * Called when the FB enters FAULT state. reason is a caller-defined code.
+ * Ownership: executes on the FB's dispatch thread when one exists, otherwise
+ * on the reporting thread under a framework-owned per-FB lock; never
+ * concurrently with itself; may run before dispatch_boot (platform threads
+ * started in init_fn). A fault reported for the same FB from inside its own
+ * fault_fn is applied after that fault_fn returns. A fault_fn that publishes
+ * HIGH to a full queue blocks only further faults of its own FB; two FBs
+ * without dispatch threads must not report faults on each other from their
+ * fault_fns (each would wait for the other's lock).
+ */
 typedef void (*embediq_fb_fault_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data,
                                     uint32_t reason);
 
@@ -139,10 +149,13 @@ EmbedIQ_FB_Handle_t embediq_fb_register(const EmbedIQ_FB_Config_t *config);
  * Observatory LIFECYCLE event and fault_fn all run on the FB's own dispatch
  * thread — never concurrently with its run_fn. Called from the FB's own
  * dispatch thread, it applies the fault immediately (already the right thread).
- * An FB without a dispatch thread has no concurrent execution context; its
- * fault is applied on the reporting thread.
+ * An FB without a dispatch thread — and any FB before dispatch starts — has
+ * its fault applied on the reporting thread, under the FB's framework-owned
+ * fault lock, so concurrent reporters are serialised: fault_fn never runs
+ * concurrently with itself on any path.
  *
- * Calling context: any thread.
+ * Calling context: any thread; may block only on that FB's fault lock
+ * (bounded by its fault_fn).
  */
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t fb, uint32_t reason);
 
