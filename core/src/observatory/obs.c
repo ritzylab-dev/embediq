@@ -799,3 +799,21 @@ void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */
+
+#ifndef EMBEDIQ_PLATFORM_HOST
+/* ---------------------------------------------------------------------------
+ * ISR-safe emit — MCU build
+ *
+ * MCU no-op until the Phase-2 ISR-reentrant ring (ARCHITECTURE.md 'Phase 2
+ * MCU Observatory Design Constraints') lands; the OSAL and HAL obligation
+ * macros reference this symbol on every target. Symmetric with the MCU
+ * no-op in embediq_obs_emit().
+ * ------------------------------------------------------------------------- */
+void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
+                                uint8_t target, uint8_t state,
+                                uint16_t msg_id)
+{
+    (void)event_type; (void)source; (void)target;
+    (void)state;      (void)msg_id;
+}
+#endif /* !EMBEDIQ_PLATFORM_HOST */
