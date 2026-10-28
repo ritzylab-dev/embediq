@@ -74,6 +74,17 @@ void message_bus_boot(void);
 void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg);
 
 /* ---------------------------------------------------------------------------
+ * Reserved endpoint sentinels (source_endpoint_id / target_endpoint_id)
+ *
+ *   0xFF  broadcast / N-A   — target "all subscribers"; "name not found"
+ *   0xFE  test harness      — EMBEDIQ_TEST_SOURCE_ID (embediq_test.h)
+ *   0xFD  framework         — EMBEDIQ_EP_FRAMEWORK: messages the engine
+ *                             itself posts (e.g. MSG_FB_FAULT delivered to an
+ *                             FB's own HIGH queue by embediq_fb_report_fault)
+ * ------------------------------------------------------------------------- */
+#define EMBEDIQ_EP_FRAMEWORK  ((uint8_t)0xFDu)
+
+/* ---------------------------------------------------------------------------
  * Endpoint resolution
  *
  * These are primarily used by the test harness and Observatory.

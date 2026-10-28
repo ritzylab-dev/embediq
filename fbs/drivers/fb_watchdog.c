@@ -54,9 +54,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-/* Package-internal: get endpoint index for an FB handle. */
-extern uint8_t fb_engine__get_ep_id(EmbedIQ_FB_Handle_t handle);
-
 /* ---------------------------------------------------------------------------
  * Internal types
  * ------------------------------------------------------------------------- */
@@ -112,7 +109,7 @@ static void monitor_scan(void)
 
         if (elapsed_us > timeout_us) {
             all_ok = false;
-            uint8_t ep = fb_engine__get_ep_id(g_slots[i].handle);
+            uint8_t ep = embediq_engine_fb_ep(g_slots[i].handle);
 
             /* Observatory fault event */
             embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,
@@ -123,7 +120,8 @@ static void monitor_scan(void)
                 embediq_fb_report_fault(g_wdg_fb, WDG_REASON_MISSED_CHECKIN);
             }
 
-            /* Publish MSG_WDG_MISSED_CHECKIN (payload byte 0 = missed ep) */
+            /* Publish MSG_WDG_MISSED_CHECKIN (payload byte 0 = missed ep).
+             * F5: HIGH publish while holding g_mutex — move after unlock. */
             if (g_wdg_fb) {
                 EmbedIQ_Msg_t m;
                 memset(&m, 0, sizeof(m));
@@ -155,7 +153,7 @@ static void monitor_scan(void)
          * tests that bypass wdg_init() — guard with 0xFFu sentinel. */
         {
             uint8_t const wdg_src_id = g_wdg_fb
-                                       ? fb_engine__get_ep_id(g_wdg_fb)
+                                       ? embediq_engine_fb_ep(g_wdg_fb)
                                        : 0xFFu;
             EMBEDIQ_OBS_EMIT_TIMING(EMBEDIQ_OBS_EVT_WDG_CHECKIN,
                                     wdg_src_id, 0xFFu,

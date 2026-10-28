@@ -48,10 +48,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-/* Package-internal FB registry accessors — implemented in fb_engine.c. */
-extern uint8_t fb_engine__reg_count(void);
-extern const EmbedIQ_FB_Config_t *fb_engine__reg_config(uint8_t idx);
-
 /* ---------------------------------------------------------------------------
  * Module state
  * ------------------------------------------------------------------------- */
@@ -149,9 +145,9 @@ static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 
     /* Scan all registered FBs to detect a MSG_TIMER_1MS subscriber. */
     g_has_1ms_sub = false;
-    uint8_t n = fb_engine__reg_count();
+    uint8_t n = embediq_engine_fb_count();
     for (uint8_t i = 0u; i < n && !g_has_1ms_sub; i++) {
-        const EmbedIQ_FB_Config_t *cfg = fb_engine__reg_config(i);
+        const EmbedIQ_FB_Config_t *cfg = embediq_engine_fb_config(i);
         if (!cfg) continue;
         for (uint8_t s = 0u; s < cfg->subscription_count; s++) {
             if (cfg->subscriptions[s] == MSG_TIMER_1MS) {

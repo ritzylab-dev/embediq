@@ -130,11 +130,50 @@ typedef struct {
 /** Register an FB with the framework. Returns a handle, or NULL on error. */
 EmbedIQ_FB_Handle_t embediq_fb_register(const EmbedIQ_FB_Config_t *config);
 
-/** Transition the FB to FAULT state with a diagnostic reason code. */
+/**
+ * Transition the FB to FAULT state with a diagnostic reason code.
+ *
+ * If the FB has a dispatch thread (it subscribes to at least one message and
+ * dispatch is running), the fault is delivered as a HIGH-priority
+ * MSG_FB_FAULT posted directly to that FB's queue, and the state change,
+ * Observatory LIFECYCLE event and fault_fn all run on the FB's own dispatch
+ * thread — never concurrently with its run_fn. Called from the FB's own
+ * dispatch thread, it applies the fault immediately (already the right thread).
+ * An FB without a dispatch thread has no concurrent execution context; its
+ * fault is applied on the reporting thread.
+ *
+ * Calling context: any thread.
+ */
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t fb, uint32_t reason);
 
-/** Return the current lifecycle state of an FB. */
+/**
+ * Return the current lifecycle state of an FB (atomic read).
+ * Calling context: any thread.
+ */
 EmbedIQ_FB_State_t embediq_fb_get_state(EmbedIQ_FB_Handle_t fb);
+
+/* ---------------------------------------------------------------------------
+ * Engine registry API — read-only views of the static FB registry.
+ * Replaces the former undeclared fb_engine__* accessors (T2-7).
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Number of registered FBs.
+ * Calling context: any thread; read-only after embediq_engine_boot().
+ */
+uint8_t embediq_engine_fb_count(void);
+
+/**
+ * Config of the FB at registry index idx, or NULL if idx is out of range.
+ * Calling context: any thread; read-only after embediq_engine_boot().
+ */
+const EmbedIQ_FB_Config_t *embediq_engine_fb_config(uint8_t idx);
+
+/**
+ * Endpoint index of an FB handle, or 0xFF for a NULL handle.
+ * Calling context: any thread; read-only after embediq_engine_boot().
+ */
+uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
 
 /* embediq_bus_resolve_name() is declared in embediq_bus.h */
 
