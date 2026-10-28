@@ -116,6 +116,15 @@ embediq_err_t embediq_osal_queue_send(EmbedIQ_Queue_t *q, const void *item,
 embediq_err_t embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
                                        uint32_t timeout_ms);
 
+/** Enqueue; if full, discard the OLDEST element and enqueue — one atomic
+ *  operation under the queue lock. out_dropped (optional) is set true when an
+ *  element was discarded.
+ *  Returns EMBEDIQ_OK, or EMBEDIQ_ERR_INVALID if q is NULL (programming error).
+ *  Calling context: any thread (non-ISR on POSIX). Never blocks. Never fails on
+ *  a non-NULL queue. */
+embediq_err_t embediq_osal_queue_send_replace_oldest(EmbedIQ_Queue_t *q, const void *item,
+                                                      bool *out_dropped);
+
 /** Return the number of items currently in the queue. */
 uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q);
 

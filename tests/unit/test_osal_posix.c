@@ -7,7 +7,7 @@
  * stdlib only. Each test exercises one behaviour with one assertion.
  *
  * Run:      ./build/tests/test_osal_posix
- * Expected: "All 18 tests passed. (0 failed)"
+ * Expected: "All 20 tests passed. (0 failed)"
  *
  * ASAN:
  *   cmake -B build_asan -DEMBEDIQ_PLATFORM=host \
@@ -49,6 +49,21 @@
 /* test_signal_post_wakes_waiter — post delay and wake deadline. */
 #define F1_POST_DELAY_MS   10u
 #define F1_WAKE_DEADLINE_MS 200u
+
+/* F4 replace-oldest tests. */
+#define F4_Q_DEPTH         4u
+#define F4_REPLACE_ITEMS   50000u
+#define F4_RECV_POLL_MS    1u
+
+/* Weak fallback so this file links before the OSAL implements the call
+ * (TDD-first commit); the OSAL's strong definition replaces it. */
+__attribute__((weak)) embediq_err_t
+embediq_osal_queue_send_replace_oldest(EmbedIQ_Queue_t *q, const void *item, bool *out_dropped)
+{
+    (void)q; (void)item;
+    if (out_dropped) *out_dropped = false;
+    return EMBEDIQ_ERR;
+}
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness — one ASSERT per test function
@@ -492,6 +507,99 @@ static void test_destroy_functions_do_not_crash(void)
     ASSERT(true, "mutex_destroy and signal_destroy must complete without crash");
 }
 
+/* ===========================================================================
+ * F4 — atomic send-or-replace-oldest
+ * ======================================================================== */
+
+/* ---------------------------------------------------------------------------
+ * test_queue_send_replace_oldest_keeps_newest
+ * Full depth-4 queue holding 1..4: replace_oldest(5) drops 1 → 2,3,4,5.
+ * ------------------------------------------------------------------------- */
+
+static void test_queue_send_replace_oldest_keeps_newest(void)
+{
+    EmbedIQ_Queue_t *q = embediq_osal_queue_create(F4_Q_DEPTH, sizeof(uint32_t));
+    for (uint32_t v = 1u; v <= F4_Q_DEPTH; v++) {
+        (void)embediq_osal_queue_send(q, &v, 0u);
+    }
+    uint32_t five = F4_Q_DEPTH + 1u;
+    bool dropped = false;
+    embediq_err_t rc = embediq_osal_queue_send_replace_oldest(q, &five, &dropped);
+
+    bool ok = rc == EMBEDIQ_OK && dropped;
+    for (uint32_t want = 2u; ok && want <= F4_Q_DEPTH + 1u; want++) {
+        uint32_t got = 0u;
+        ok = embediq_osal_queue_recv(q, &got, 0u) == EMBEDIQ_OK && got == want;
+    }
+    embediq_osal_queue_destroy(q);
+    ASSERT(ok, "replace_oldest on a full queue must drop the oldest and keep 2,3,4,5");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_queue_send_replace_oldest_concurrent_with_recv
+ * A producer replace_oldest()s 1..50,000 while a consumer receives. Every
+ * received value was sent, values arrive strictly increasing, and
+ * received + dropped == sent.
+ * ------------------------------------------------------------------------- */
+
+static EmbedIQ_Queue_t        *g_f4_q;
+static embediq_osal_atomic32_t g_f4_done    = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static uint32_t                g_f4_dropped = 0u;   /* producer-only until joined */
+static uint32_t                g_f4_received = 0u;  /* consumer-only until joined */
+static bool                    g_f4_order_ok = true;
+
+static void *f4_producer(void *arg)
+{
+    (void)arg;
+    for (uint32_t v = 1u; v <= F4_REPLACE_ITEMS; v++) {
+        bool dropped = false;
+        if (embediq_osal_queue_send_replace_oldest(g_f4_q, &v, &dropped) != EMBEDIQ_OK) {
+            g_f4_dropped++;            /* treat a failed enqueue as lost */
+        } else if (dropped) {
+            g_f4_dropped++;
+        }
+    }
+    embediq_osal_atomic32_store(&g_f4_done, 1u);
+    return NULL;
+}
+
+static void *f4_consumer(void *arg)
+{
+    (void)arg;
+    uint32_t last = 0u;
+    for (;;) {
+        uint32_t v = 0u;
+        if (embediq_osal_queue_recv(g_f4_q, &v, F4_RECV_POLL_MS) == EMBEDIQ_OK) {
+            if (v == 0u || v > F4_REPLACE_ITEMS || v <= last) g_f4_order_ok = false;
+            last = v;
+            g_f4_received++;
+        } else if (embediq_osal_atomic32_load(&g_f4_done) != 0u) {
+            break;   /* producer finished and the queue is drained */
+        }
+    }
+    return NULL;
+}
+
+static void test_queue_send_replace_oldest_concurrent_with_recv(void)
+{
+    g_f4_q = embediq_osal_queue_create(F4_Q_DEPTH, sizeof(uint32_t));
+    embediq_osal_atomic32_store(&g_f4_done, 0u);
+    g_f4_dropped = 0u; g_f4_received = 0u; g_f4_order_ok = true;
+
+    pthread_t prod, cons;
+    pthread_create(&cons, NULL, f4_consumer, NULL);
+    pthread_create(&prod, NULL, f4_producer, NULL);
+    pthread_join(prod, NULL);
+    pthread_join(cons, NULL);
+
+    printf("      sent=%u received=%u dropped=%u\n", (unsigned)F4_REPLACE_ITEMS,
+           (unsigned)g_f4_received, (unsigned)g_f4_dropped);
+    bool ok = g_f4_order_ok && g_f4_received > 0u
+              && g_f4_received + g_f4_dropped == F4_REPLACE_ITEMS;
+    embediq_osal_queue_destroy(g_f4_q);
+    ASSERT(ok, "concurrent replace_oldest: received + dropped == sent, in order");
+}
+
 /* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
@@ -516,6 +624,8 @@ int main(void)
     test_atomic32_lock_free();
     test_signal_post_wakes_waiter();
     test_destroy_functions_do_not_crash();
+    test_queue_send_replace_oldest_keeps_newest();
+    test_queue_send_replace_oldest_concurrent_with_recv();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

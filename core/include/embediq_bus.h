@@ -112,15 +112,36 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out);
  * ------------------------------------------------------------------------- */
 
 /**
- * ISR-safe and callback-safe bus post.
+ * Return the async-post token for an FB. The token names the FB as the source
+ * of messages posted with embediq_bus_post_async(). Tokens live in a static
+ * per-endpoint table (no allocation): the same FB always gets the same
+ * pointer, valid for the life of the process. Returns NULL for a NULL or
+ * unregistered handle.
+ * Calling context: boot thread or the FB's dispatch thread.
+ */
+embediq_bus_token_t *embediq_bus_token_for(EmbedIQ_FB_Handle_t fb);
+
+/**
+ * Callback-safe, never-blocking bus post — the bus entry point for HAL and
+ * ops-table callbacks (timer ticks, stream HALs).
  *
- * The ONLY function permitted inside an async ops table callback.
- * On FreeRTOS: maps to xQueueSendFromISR().
- * On POSIX host: maps to embediq_publish() with mutex guard.
+ * The message is copied, its source_endpoint_id is taken from the token, and
+ * it is routed to every subscriber with NON-BLOCKING delivery on every
+ * priority:
+ *   HIGH   full → not delivered to that subscriber; QUEUE_DROP observed;
+ *                 the call returns EMBEDIQ_ERR (it never blocks)
+ *   NORMAL full → oldest discarded, new enqueued (drop-oldest policy)
+ *   LOW    full → new message discarded (drop-incoming policy)
+ * Observatory events use embediq_obs_emit_from_isr() (lock-free ISR ring).
+ * Dispatch threads are woken with an any-thread semaphore post.
  *
- * token: must be the token received in the callback — not a stored copy.
+ * token: from embediq_bus_token_for().
  * msg:   message to post; copied by value.
- * Returns EMBEDIQ_OK on success, EMBEDIQ_ERR if queue is full.
+ * Returns EMBEDIQ_OK unless a HIGH delivery failed (EMBEDIQ_ERR) or token/msg
+ * is NULL (EMBEDIQ_ERR). NORMAL/LOW overflow follows the bus policy and is
+ * counted and observed, not reported here.
+ * Calling context: any thread or ISR. On POSIX the queues are mutex-backed;
+ * on an MCU the OSAL maps the non-blocking sends to its from-ISR primitives.
  */
 int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *msg);
 

@@ -16,7 +16,7 @@
  * Note: tests 1 and 2 involve real time (≈ 1 second each).
  *
  * Run:      ./build/tests/unit/test_fb_timer
- * Expected: "All 10 tests passed. (0 failed)"
+ * Expected: "All 11 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -229,6 +229,26 @@ static void test_hal_timer_deinit_allows_reinit(void)
     hal_timer_deinit();
 }
 
+/*
+ * test_timer_deinit_without_start_and_double_deinit (F4)
+ * deinit on a timer that was never started must not join a thread that does
+ * not exist; a second deinit is a no-op. Under TSan: no report on s_running
+ * and no runtime abort in pthread_join.
+ */
+static void test_timer_deinit_without_start_and_double_deinit(void)
+{
+    hal_timer_init(1000u, hal_test_cb, NULL);
+    hal_timer_deinit();                     /* never started */
+
+    hal_timer_init(5000u, hal_test_cb, NULL);
+    hal_timer_start();
+    embediq_osal_delay_ms(15u);
+    hal_timer_stop();
+    hal_timer_deinit();
+    hal_timer_deinit();                     /* double deinit */
+    ASSERT(true, "deinit without start and double deinit must not crash");
+}
+
 /* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
@@ -243,6 +263,7 @@ int main(void)
     test_hal_timer_fires_callback();
     test_hal_timer_stop_halts_callback();
     test_hal_timer_deinit_allows_reinit();
+    test_timer_deinit_without_start_and_double_deinit();
 
     printf("\n");
     if (g_tests_failed == 0) {
