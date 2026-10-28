@@ -8,7 +8,7 @@
  * Each test exercises exactly one behaviour with one ASSERT.
  *
  * Run:      ./build/tests/unit/test_fb_engine
- * Expected: "All 10 tests passed. (0 failed)"
+ * Expected: "All 15 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -18,8 +18,12 @@
 
 #include "embediq_fb.h"
 #include "embediq_subfn.h"
+#include "embediq_bus.h"
+#include "embediq_msg.h"
+#include "embediq_osal.h"
 #include "embediq_config.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -33,6 +37,30 @@ extern void     fb_engine__reset(void);
 extern uint32_t fb_engine__obs_event_count(void);
 extern void     fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle,
                                        uint16_t msg_id, const void *msg);
+
+/* Weak fallbacks so this file links before fb_engine.c implements the
+ * declared engine API (TDD-first commit); fb_engine.c's strong definitions
+ * replace them. */
+__attribute__((weak)) uint8_t embediq_engine_fb_count(void) { return 0u; }
+__attribute__((weak)) const EmbedIQ_FB_Config_t *embediq_engine_fb_config(uint8_t idx)
+{ (void)idx; return NULL; }
+__attribute__((weak)) uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t h)
+{ (void)h; return 0xFFu; }
+
+/* ---------------------------------------------------------------------------
+ * F3 named constants
+ * ------------------------------------------------------------------------- */
+
+#define F3_MSG_PING          0x1430u  /* community range, unique to this file */
+#define F3_MSG_BURST         0x1431u
+#define F3_FAULT_REASON      0x55u
+#define F3_WAIT_MS           200u
+#define F3_GETSTATE_THREADS  4u
+#define F3_GETSTATE_ITERS    20000u
+#define F3_BURST_COUNT       50u
+#define F3_BURST_SPACING_MS  2u
+#define F3_BURST_WAIT_MS     500u
+#define F3_API_FBS           3u
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -396,6 +424,308 @@ static void test_max_endpoint_overflow_returns_null(void)
            "registering beyond EMBEDIQ_MAX_ENDPOINTS must return NULL");
 }
 
+/* ===========================================================================
+ * F3 — faults on the FB thread, engine API, boot-order race
+ * ======================================================================== */
+
+/* Shared recorders. pthread_t values are published by the atomic flags that
+ * guard them (seq_cst store/load gives the needed happens-before). */
+static embediq_osal_atomic32_t g_f3_run_seen   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_f3_fault_seen = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static pthread_t               g_f3_run_thread;
+static pthread_t               g_f3_fault_thread;
+static uint32_t                g_f3_fault_reason;
+
+static void f3_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *fb_data,
+                      void *subfn_data)
+{
+    (void)fb; (void)msg; (void)fb_data; (void)subfn_data;
+    g_f3_run_thread = pthread_self();
+    embediq_osal_atomic32_store(&g_f3_run_seen, 1u);
+}
+
+static void f3_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
+{
+    (void)fb; (void)fb_data;
+    g_f3_fault_thread = pthread_self();
+    g_f3_fault_reason = reason;
+    embediq_osal_atomic32_store(&g_f3_fault_seen, 1u);
+}
+
+EMBEDIQ_SUBS(g_f3_ping_subs, F3_MSG_PING);
+
+static const EmbedIQ_SubFn_Config_t g_f3_ping_subfn = {
+    .name = "f3_ping", .init_order = 0,
+    .subscriptions = g_f3_ping_subs, .subscription_count = 1,
+    .run_fn = f3_run_fn,
+};
+
+static void f3_ping_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)d;
+    embediq_subfn_register(h, &g_f3_ping_subfn);
+}
+
+/* Spin (1 ms steps) until flag != 0 or ms elapse. Returns the final flag. */
+static bool f3_wait_flag(embediq_osal_atomic32_t *flag, uint32_t ms)
+{
+    uint32_t t0 = embediq_osal_time_ms();
+    while (embediq_osal_atomic32_load(flag) == 0u
+           && (embediq_osal_time_ms() - t0) < ms) {
+        embediq_osal_delay_ms(1u);
+    }
+    return embediq_osal_atomic32_load(flag) != 0u;
+}
+
+typedef struct { EmbedIQ_FB_Handle_t h; uint32_t reason; } f3_fault_req_t;
+
+static void *f3_fault_reporter(void *arg)
+{
+    const f3_fault_req_t *r = (const f3_fault_req_t *)arg;
+    embediq_fb_report_fault(r->h, r->reason);
+    return NULL;
+}
+
+/* ---------------------------------------------------------------------------
+ * test_report_fault_from_foreign_thread_applies_on_fb_thread
+ * A fault reported from another thread runs fault_fn on the FB's own
+ * dispatch thread (the thread its run_fn runs on), with the reason intact.
+ * ------------------------------------------------------------------------- */
+
+static void test_report_fault_from_foreign_thread_applies_on_fb_thread(void)
+{
+    fb_engine__reset();
+    embediq_osal_atomic32_store(&g_f3_run_seen, 0u);
+    embediq_osal_atomic32_store(&g_f3_fault_seen, 0u);
+
+    static const EmbedIQ_FB_Config_t k_src = {
+        .name = "f3_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    };
+    static const EmbedIQ_FB_Config_t k_dst = {
+        .name = "f3_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .init_fn = f3_ping_init, .fault_fn = f3_fault_fn,
+        .subscriptions = g_f3_ping_subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&k_src);
+    EmbedIQ_FB_Handle_t dst = embediq_fb_register(&k_dst);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+
+    /* Learn the dispatch thread's identity through a normal message. */
+    EmbedIQ_Msg_t m;
+    memset(&m, 0, sizeof(m));
+    m.msg_id   = F3_MSG_PING;
+    m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
+    embediq_publish(src, &m);
+    bool ran = f3_wait_flag(&g_f3_run_seen, F3_WAIT_MS);
+
+    pthread_t th;
+    f3_fault_req_t req = { dst, F3_FAULT_REASON };
+    pthread_create(&th, NULL, f3_fault_reporter, &req);
+    pthread_join(th, NULL);
+    bool faulted = f3_wait_flag(&g_f3_fault_seen, F3_WAIT_MS);
+
+    bool ok = ran && faulted
+              && pthread_equal(g_f3_fault_thread, g_f3_run_thread)
+              && !pthread_equal(g_f3_fault_thread, th)
+              && g_f3_fault_reason == F3_FAULT_REASON
+              && embediq_fb_get_state(dst) == EMBEDIQ_FB_STATE_FAULT;
+    (void)embediq_engine_dispatch_shutdown();
+    ASSERT(ok, "fault_fn must run on the FB's dispatch thread with reason 0x55");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_report_fault_inline_for_fb_without_dispatch_thread
+ * An FB with no subscriptions has no dispatch thread: the fault is applied
+ * on the reporting thread before report_fault returns.
+ * ------------------------------------------------------------------------- */
+
+static void test_report_fault_inline_for_fb_without_dispatch_thread(void)
+{
+    fb_engine__reset();
+    embediq_osal_atomic32_store(&g_f3_fault_seen, 0u);
+
+    static const EmbedIQ_FB_Config_t k_cfg = {
+        .name = "f3_nosub", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .fault_fn = f3_fault_fn,
+    };
+    EmbedIQ_FB_Handle_t h = embediq_fb_register(&k_cfg);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+
+    pthread_t th;
+    f3_fault_req_t req = { h, F3_FAULT_REASON };
+    pthread_create(&th, NULL, f3_fault_reporter, &req);
+    pthread_join(th, NULL);   /* report_fault has returned */
+
+    bool ok = embediq_osal_atomic32_load(&g_f3_fault_seen) == 1u
+              && pthread_equal(g_f3_fault_thread, th)
+              && embediq_fb_get_state(h) == EMBEDIQ_FB_STATE_FAULT;
+    (void)embediq_engine_dispatch_shutdown();
+    ASSERT(ok, "no-dispatch-thread FB: fault applied inline on the reporting thread");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_get_state_concurrent_tsan
+ * Readers poll embediq_fb_get_state() while another thread reports faults.
+ * No crash; under TSan, no report on the state field.
+ * ------------------------------------------------------------------------- */
+
+static EmbedIQ_FB_Handle_t     g_f3_state_fb   = NULL;
+static embediq_osal_atomic32_t g_f3_state_stop = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *f3_state_reader(void *arg)
+{
+    (void)arg;
+    uint32_t n = 0u;
+    while (embediq_osal_atomic32_load(&g_f3_state_stop) == 0u && n < F3_GETSTATE_ITERS) {
+        (void)embediq_fb_get_state(g_f3_state_fb);
+        n++;
+    }
+    return NULL;
+}
+
+static void test_get_state_concurrent_tsan(void)
+{
+    fb_engine__reset();
+    static const EmbedIQ_FB_Config_t k_cfg = {
+        .name = "f3_state", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    };
+    g_f3_state_fb = embediq_fb_register(&k_cfg);
+    embediq_engine_boot();
+    embediq_osal_atomic32_store(&g_f3_state_stop, 0u);
+
+    pthread_t rd[F3_GETSTATE_THREADS], wr;
+    for (uint32_t i = 0u; i < F3_GETSTATE_THREADS; i++) {
+        pthread_create(&rd[i], NULL, f3_state_reader, NULL);
+    }
+    f3_fault_req_t req = { g_f3_state_fb, F3_FAULT_REASON };
+    pthread_create(&wr, NULL, f3_fault_reporter, &req);
+    pthread_join(wr, NULL);
+    pthread_create(&wr, NULL, f3_fault_reporter, &req);   /* report twice */
+    pthread_join(wr, NULL);
+    embediq_osal_atomic32_store(&g_f3_state_stop, 1u);
+    for (uint32_t i = 0u; i < F3_GETSTATE_THREADS; i++) {
+        pthread_join(rd[i], NULL);
+    }
+    ASSERT(embediq_fb_get_state(g_f3_state_fb) == EMBEDIQ_FB_STATE_FAULT,
+           "concurrent get_state while faulting must be safe and end in FAULT");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_engine_fb_api_matches_registry
+ * embediq_engine_fb_count / fb_config / fb_ep agree with what was registered.
+ * ------------------------------------------------------------------------- */
+
+static void test_engine_fb_api_matches_registry(void)
+{
+    fb_engine__reset();
+    static const EmbedIQ_FB_Config_t k_cfgs[F3_API_FBS] = {
+        { .name = "f3_api_a", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION },
+        { .name = "f3_api_b", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION },
+        { .name = "f3_api_c", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION },
+    };
+    EmbedIQ_FB_Handle_t h[F3_API_FBS];
+    for (uint8_t i = 0u; i < F3_API_FBS; i++) h[i] = embediq_fb_register(&k_cfgs[i]);
+    embediq_engine_boot();
+
+    bool ok = embediq_engine_fb_count() == F3_API_FBS
+              && embediq_engine_fb_config(F3_API_FBS) == NULL
+              && embediq_engine_fb_ep(NULL) == 0xFFu;
+    for (uint8_t i = 0u; ok && i < F3_API_FBS; i++) {
+        const EmbedIQ_FB_Config_t *c = embediq_engine_fb_config(i);
+        uint8_t ep = embediq_engine_fb_ep(h[i]);
+        ok = c != NULL && strcmp(c->name, k_cfgs[i].name) == 0
+             && ep == i && ep == embediq_bus_resolve_name(k_cfgs[i].name);
+    }
+    ASSERT(ok, "engine API must agree with the registered handles");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_platform_thread_publish_during_boot_is_not_lost
+ * FB A's init_fn starts a thread that publishes immediately — while boot is
+ * still running — and keeps publishing. FB B receives every message. Under
+ * TSan nothing races on the notify callback or the dispatch semaphores.
+ * ------------------------------------------------------------------------- */
+
+static EmbedIQ_FB_Handle_t     g_f3_burst_src = NULL;
+static embediq_osal_atomic32_t g_f3_burst_rx  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static pthread_t               g_f3_burst_th;
+
+static void *f3_burst_publisher(void *arg)
+{
+    (void)arg;
+    for (uint32_t i = 0u; i < F3_BURST_COUNT; i++) {
+        EmbedIQ_Msg_t m;
+        memset(&m, 0, sizeof(m));
+        m.msg_id   = F3_MSG_BURST;
+        m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
+        embediq_publish(g_f3_burst_src, &m);
+        embediq_osal_delay_ms(F3_BURST_SPACING_MS);  /* stay under the NORMAL depth */
+    }
+    return NULL;
+}
+
+static void f3_burst_src_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)d;
+    g_f3_burst_src = h;
+    pthread_create(&g_f3_burst_th, NULL, f3_burst_publisher, NULL);
+}
+
+static void f3_burst_rx_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *fb_data,
+                           void *subfn_data)
+{
+    (void)fb; (void)msg; (void)fb_data; (void)subfn_data;
+    (void)embediq_osal_atomic32_add(&g_f3_burst_rx, 1u);
+}
+
+EMBEDIQ_SUBS(g_f3_burst_subs, F3_MSG_BURST);
+
+static const EmbedIQ_SubFn_Config_t g_f3_burst_subfn = {
+    .name = "f3_burst_rx", .init_order = 0,
+    .subscriptions = g_f3_burst_subs, .subscription_count = 1,
+    .run_fn = f3_burst_rx_fn,
+};
+
+static void f3_burst_dst_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)d;
+    embediq_subfn_register(h, &g_f3_burst_subfn);
+}
+
+static void test_platform_thread_publish_during_boot_is_not_lost(void)
+{
+    fb_engine__reset();
+    embediq_osal_atomic32_store(&g_f3_burst_rx, 0u);
+
+    /* A boots first (PLATFORM) so its thread publishes while B is still booting. */
+    static const EmbedIQ_FB_Config_t k_src = {
+        .name = "f3_burst_src", .boot_phase = EMBEDIQ_BOOT_PHASE_PLATFORM,
+        .init_fn = f3_burst_src_init,
+    };
+    static const EmbedIQ_FB_Config_t k_dst = {
+        .name = "f3_burst_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .init_fn = f3_burst_dst_init,
+        .subscriptions = g_f3_burst_subs, .subscription_count = 1,
+    };
+    embediq_fb_register(&k_src);
+    embediq_fb_register(&k_dst);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+
+    pthread_join(g_f3_burst_th, NULL);
+    uint32_t t0 = embediq_osal_time_ms();
+    while (embediq_osal_atomic32_load(&g_f3_burst_rx) < F3_BURST_COUNT
+           && (embediq_osal_time_ms() - t0) < F3_BURST_WAIT_MS) {
+        embediq_osal_delay_ms(1u);
+    }
+    uint32_t got = embediq_osal_atomic32_load(&g_f3_burst_rx);
+    (void)embediq_engine_dispatch_shutdown();
+    printf("      received %u / %u\n", (unsigned)got, (unsigned)F3_BURST_COUNT);
+    ASSERT(got == F3_BURST_COUNT, "every message published during boot must be delivered");
+}
+
 /* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
@@ -412,6 +742,12 @@ int main(void)
     test_subfn_dispatch_in_registration_order();
     test_lifecycle_events_emitted_to_observatory();
     test_max_endpoint_overflow_returns_null();
+    test_report_fault_from_foreign_thread_applies_on_fb_thread();
+    test_report_fault_inline_for_fb_without_dispatch_thread();
+    test_get_state_concurrent_tsan();
+    test_engine_fb_api_matches_registry();
+    test_platform_thread_publish_during_boot_is_not_lost();
+    fb_engine__reset();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

@@ -20,6 +20,7 @@
  */
 
 #include "embediq_fb.h"
+#include "embediq_subfn.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
 #include "hal/hal_wdg.h"
@@ -45,6 +46,7 @@ extern void embediq_wdg_unregister(void *fb);
 
 /* Test-only FB engine API */
 extern void     fb_engine__reset(void);
+extern EmbedIQ_FB_Handle_t fb_watchdog_register(void);
 extern uint32_t fb_engine__obs_event_count(void);
 
 /* Package-internal Observatory capture API (EMBEDIQ_PLATFORM_HOST only) */
@@ -281,6 +283,79 @@ static void test_wdg_checkin_emits_timing_event(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_watchdog_fault_delivered_as_message (F3)
+ *
+ * fb_watchdog's monitor task — a Platform thread — detects a missed check-in
+ * and reports the fault on fb_watchdog itself. fb_watchdog has no dispatch
+ * thread, so the fault is applied inline on the monitor task; its state must
+ * be readable from another thread without a data race (atomic state). The
+ * monitored FB is NOT faulted by fb_watchdog: its fault_fn never runs and it
+ * stays RUNNING on its own dispatch thread.
+ * Must run last: the monitor task keeps running until process exit.
+ * ------------------------------------------------------------------------- */
+
+#define F3_WDG_MSG_ID       0x1438u   /* community range, unique to this file */
+#define F3_WDG_TIMEOUT_MS   30u
+#define F3_WDG_DEADLINE_MS  1000u
+
+static embediq_osal_atomic32_t g_f3_mon_fault = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void f3_mon_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
+{
+    (void)fb; (void)fb_data; (void)reason;
+    embediq_osal_atomic32_store(&g_f3_mon_fault, 1u);
+}
+
+static void f3_mon_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *fb_data,
+                          void *subfn_data)
+{
+    (void)fb; (void)msg; (void)fb_data; (void)subfn_data;
+}
+
+EMBEDIQ_SUBS(g_f3_mon_subs, F3_WDG_MSG_ID);
+
+static const EmbedIQ_SubFn_Config_t g_f3_mon_subfn = {
+    .name = "f3_mon", .init_order = 0,
+    .subscriptions = g_f3_mon_subs, .subscription_count = 1,
+    .run_fn = f3_mon_run_fn,
+};
+
+static void f3_mon_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)d;
+    embediq_subfn_register(h, &g_f3_mon_subfn);
+}
+
+static void test_watchdog_fault_delivered_as_message(void)
+{
+    fb_engine__reset();
+    wdg__init_state();
+    embediq_osal_atomic32_store(&g_f3_mon_fault, 0u);
+
+    static const EmbedIQ_FB_Config_t k_mon = {
+        .name = "f3_monitored", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .init_fn = f3_mon_init, .fault_fn = f3_mon_fault_fn,
+        .subscriptions = g_f3_mon_subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Handle_t mon = embediq_fb_register(&k_mon);
+    EmbedIQ_FB_Handle_t wdg = fb_watchdog_register();
+    embediq_engine_boot();              /* wdg_init starts the monitor task */
+    embediq_engine_dispatch_boot();
+    embediq_wdg_register(mon, F3_WDG_TIMEOUT_MS);   /* never checks in */
+
+    uint32_t t0 = embediq_osal_time_ms();
+    while (embediq_fb_get_state(wdg) != EMBEDIQ_FB_STATE_FAULT
+           && (embediq_osal_time_ms() - t0) < F3_WDG_DEADLINE_MS) {
+        embediq_osal_delay_ms(1u);
+    }
+    bool wdg_faulted = embediq_fb_get_state(wdg) == EMBEDIQ_FB_STATE_FAULT;
+    bool mon_untouched = embediq_osal_atomic32_load(&g_f3_mon_fault) == 0u
+                         && embediq_fb_get_state(mon) == EMBEDIQ_FB_STATE_RUNNING;
+    ASSERT(wdg_faulted && mon_untouched,
+           "missed check-in faults fb_watchdog inline; the monitored FB is untouched");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -300,6 +375,9 @@ int main(void)
 
     /* XOBS-4 TIMING band test */
     test_wdg_checkin_emits_timing_event();
+
+    /* F3 — must be last (leaves the monitor task running) */
+    test_watchdog_fault_delivered_as_message();
 
     printf("\n");
     if (g_tests_failed == 0) {
