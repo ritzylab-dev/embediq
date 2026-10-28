@@ -21,7 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "embediq_obs.h"  /* OSAL observation obligation macros use embediq_obs_emit() */
+#include "embediq_obs.h"  /* OSAL observation obligation macros use embediq_obs_emit_from_isr() */
 
 #ifdef __cplusplus
 extern "C" {
@@ -266,24 +266,34 @@ uint32_t embediq_osal_time_ms(void);
  *   state_or_flag: sub-type — see embediq_obs.h EMBEDIQ_OBS_EVT_OSAL_FAULT
  *   msg_id:        resource instance index (0 = unknown / POSIX simulation)
  *
+ * Emit path: every macro uses embediq_obs_emit_from_isr(), never the
+ * thread-path embediq_obs_emit(). OSAL failure paths run on arbitrary
+ * threads, inside HAL / ops-table callbacks (embediq_bus_post_async() on a
+ * full queue) and next to ISR context; the thread-path emit takes the
+ * Observatory transport mutex and writes the transport synchronously, which
+ * would stall that caller for the length of the trace I/O (review R1). The
+ * lock-free ISR ring is the only Observatory path that is safe everywhere;
+ * the next thread-path emit or capture_end() drains it to the transport
+ * (F2), in order, with drops reported by an OVERFLOW record.
+ *
  * R-osal-01: Never negate embediq_err_t. Always compare explicitly.
  * See: PM/CROSS_LAYER_OBSERVABILITY_PLAN.md — XOBS-1
  * ------------------------------------------------------------------------- */
 #define EMBEDIQ_OSAL_OBS_TASK_FAIL(idx) \
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
-                     EMBEDIQ_OSAL_SRC_TASKS, 0, 0, (uint16_t)(idx))
+    embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                              EMBEDIQ_OSAL_SRC_TASKS, 0, 0, (uint16_t)(idx))
 #define EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(idx) \
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
-                     EMBEDIQ_OSAL_SRC_MUTEXES, 0, 1, (uint16_t)(idx))
+    embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                              EMBEDIQ_OSAL_SRC_MUTEXES, 0, 1, (uint16_t)(idx))
 #define EMBEDIQ_OSAL_OBS_QUEUE_FULL(idx) \
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
-                     EMBEDIQ_OSAL_SRC_QUEUES, 0, 2, (uint16_t)(idx))
+    embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                              EMBEDIQ_OSAL_SRC_QUEUES, 0, 2, (uint16_t)(idx))
 #define EMBEDIQ_OSAL_OBS_SIGNAL_TIMEOUT(idx) \
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
-                     EMBEDIQ_OSAL_SRC_SIGNALS, 0, 3, (uint16_t)(idx))
+    embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                              EMBEDIQ_OSAL_SRC_SIGNALS, 0, 3, (uint16_t)(idx))
 #define EMBEDIQ_OSAL_OBS_STACK_OVERFLOW(idx) \
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
-                     EMBEDIQ_OSAL_SRC_TASKS, 0, 4, (uint16_t)(idx))
+    embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_OSAL_FAULT, \
+                              EMBEDIQ_OSAL_SRC_TASKS, 0, 4, (uint16_t)(idx))
 
 #ifdef __cplusplus
 }

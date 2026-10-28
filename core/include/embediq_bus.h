@@ -29,7 +29,8 @@
  * ONLY argument permitted inside a callback — it physically prevents
  * callbacks from accessing FB state or calling OSAL primitives.
  *
- * Lifecycle: valid only for the duration of the callback invocation.
+ * Lifecycle: tokens are filled once by the bus at boot and are read-only
+ * afterwards; a token pointer stays valid for the life of the process.
  * The only permitted operation on a token: pass it to embediq_bus_post_async().
  * ------------------------------------------------------------------------- */
 typedef struct embediq_bus_token embediq_bus_token_t;
@@ -114,34 +115,49 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out);
 /**
  * Return the async-post token for an FB. The token names the FB as the source
  * of messages posted with embediq_bus_post_async(). Tokens live in a static
- * per-endpoint table (no allocation): the same FB always gets the same
- * pointer, valid for the life of the process. Returns NULL for a NULL or
- * unregistered handle.
- * Calling context: boot thread or the FB's dispatch thread.
+ * per-endpoint table (no allocation) filled once by the bus at boot: the same
+ * FB always gets the same pointer, valid for the life of the process. The
+ * lookup only validates the handle and returns a pointer; it writes nothing,
+ * so it may overlap embediq_bus_post_async() on any other thread.
+ * Returns NULL for a NULL or out-of-range handle.
+ * Calling context: any thread after boot (read-only lookup).
  */
 embediq_bus_token_t *embediq_bus_token_for(EmbedIQ_FB_Handle_t fb);
 
 /**
- * Callback-safe, never-blocking bus post — the bus entry point for HAL and
- * ops-table callbacks (timer ticks, stream HALs).
+ * Callback-safe bus post — the bus entry point for HAL and ops-table
+ * callbacks (timer ticks, stream HALs).
  *
  * The message is copied, its source_endpoint_id is taken from the token, and
- * it is routed to every subscriber with NON-BLOCKING delivery on every
- * priority:
+ * it is routed to every subscriber; no send waits for queue capacity:
  *   HIGH   full → not delivered to that subscriber; QUEUE_DROP observed;
- *                 the call returns EMBEDIQ_ERR (it never blocks)
+ *                 the call returns EMBEDIQ_ERR
  *   NORMAL full → oldest discarded, new enqueued (drop-oldest policy)
  *   LOW    full → new message discarded (drop-incoming policy)
- * Observatory events use embediq_obs_emit_from_isr() (lock-free ISR ring).
- * Dispatch threads are woken with an any-thread semaphore post.
+ *
+ * Guarantee:
+ *   - Never waits for queue capacity (every send uses timeout 0) and never
+ *     performs transport I/O or a thread-path Observatory emit: the bus and
+ *     the OSAL failure paths it reaches record through
+ *     embediq_obs_emit_from_isr() only. Returns EMBEDIQ_ERR if any HIGH
+ *     delivery failed. Fan-out is partial on error: subscribers earlier in
+ *     the list may already have received the message, so the caller must not
+ *     blindly retry the whole post.
+ *   - POSIX host: callback-safe from any thread. It takes the target queue's
+ *     mutex and the FB dispatch semaphore's mutex, each held only for a
+ *     message copy or a signal (bounded, not lock-free). NOT ISR-safe on
+ *     POSIX (there is no ISR on POSIX).
+ *   - MCU (FreeRTOS/Zephyr): the OSAL implementation must map this path to
+ *     its *FromISR queue and semaphore primitives; ISR-safety is a property
+ *     of that OSAL, not of this function.
  *
  * token: from embediq_bus_token_for().
  * msg:   message to post; copied by value.
  * Returns EMBEDIQ_OK unless a HIGH delivery failed (EMBEDIQ_ERR) or token/msg
  * is NULL (EMBEDIQ_ERR). NORMAL/LOW overflow follows the bus policy and is
  * counted and observed, not reported here.
- * Calling context: any thread or ISR. On POSIX the queues are mutex-backed;
- * on an MCU the OSAL maps the non-blocking sends to its from-ISR primitives.
+ * Calling context: any thread after boot (HAL / ops-table callbacks); ISR
+ * only where the OSAL provides from-ISR primitives (see above).
  */
 int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *msg);
 
