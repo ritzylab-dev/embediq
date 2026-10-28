@@ -104,8 +104,10 @@ __attribute__((weak)) uint32_t obs__isr_dropped_total(void) { return 0u; }
 #define TLV_STREAM_END       0x0004u
 #define IQTRACE_HDR          8u
 
-#define REC_CAP              (256u * 1024u)
-#define SEQ_CAP              8192u
+/* Recording buffers: up to 2 frames per emit once the 256-event ring is full
+ * (each emit then also writes an OVERFLOW record). */
+#define REC_CAP              (1024u * 1024u)
+#define SEQ_CAP              32768u
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness — one ASSERT per test function
@@ -209,11 +211,13 @@ static int cmp_u32(const void *a, const void *b)
 }
 
 /* Parse g_rec as back-to-back EVENT TLVs. Returns frame count, or -1 on any
- * framing error. Fills seq[] (file order) and counts HAL_FAULT frames. */
-static int parse_event_frames(uint32_t *seq, uint32_t cap, uint32_t *hal_faults)
+ * framing error or if the frames exceed cap. Fills seq[] (file order) and
+ * counts the frames whose event_type == count_type. */
+static int parse_event_frames(uint32_t *seq, uint32_t cap,
+                              uint8_t count_type, uint32_t *counted)
 {
     uint32_t off = 0u, n = 0u;
-    if (hal_faults) *hal_faults = 0u;
+    if (counted) *counted = 0u;
     while (off < g_rec_len) {
         if (off + TLV_HDR > g_rec_len) return -1;
         uint16_t type = rd_u16(&g_rec[off]);
@@ -222,8 +226,9 @@ static int parse_event_frames(uint32_t *seq, uint32_t cap, uint32_t *hal_faults)
         if (off + TLV_HDR + len > g_rec_len) return -1;
         EmbedIQ_Event_t e;
         memcpy(&e, &g_rec[off + TLV_HDR], sizeof(e));
-        if (n < cap) seq[n] = e.sequence;
-        if (hal_faults && e.event_type == EMBEDIQ_OBS_EVT_HAL_FAULT) (*hal_faults)++;
+        if (n >= cap) return -1;
+        seq[n] = e.sequence;
+        if (counted && e.event_type == count_type) (*counted)++;
         n++;
         off += TLV_HDR + len;
     }
@@ -334,9 +339,9 @@ static void test_isr_path_no_lock_and_drained(void)
     embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);  /* final drain */
 
     uint32_t hal = 0u;
-    int frames = parse_event_frames(g_seq_buf, SEQ_CAP, &hal);
+    int frames = parse_event_frames(g_seq_buf, SEQ_CAP, EMBEDIQ_OBS_EVT_HAL_FAULT, &hal);
     uint32_t dropped = obs__isr_dropped_total();
-    bool ok = frames > 0 && (uint32_t)frames <= SEQ_CAP
+    bool ok = frames > 0
               && hal + dropped == OBS_ISR_PRODUCERS * OBS_ISR_PER_THREAD;
     if (ok) {
         qsort(g_seq_buf, (size_t)frames, sizeof(uint32_t), cmp_u32);
@@ -385,7 +390,8 @@ static void test_isr_ring_overflow_counted(void)
 /* ---------------------------------------------------------------------------
  * test_file_transport_frames_not_interleaved
  * 4 threads × 2,000 emits to a recording stream: every frame is a whole
- * 14-byte EVENT TLV and sequence numbers rise strictly in file order.
+ * 14-byte EVENT TLV, all 8,000 emitted events are present, and sequence
+ * numbers rise strictly in file order (OVERFLOW records included).
  * ------------------------------------------------------------------------- */
 
 static void test_file_transport_frames_not_interleaved(void)
@@ -402,13 +408,14 @@ static void test_file_transport_frames_not_interleaved(void)
         pthread_join(th[i], NULL);
     }
 
-    int frames = parse_event_frames(g_seq_buf, SEQ_CAP, NULL);
-    bool ok = frames == (int)(OBS_FILE_THREADS * OBS_FILE_PER_THREAD);
+    uint32_t lifecycle = 0u;
+    int frames = parse_event_frames(g_seq_buf, SEQ_CAP, EMBEDIQ_OBS_EVT_LIFECYCLE, &lifecycle);
+    bool ok = frames > 0 && lifecycle == OBS_FILE_THREADS * OBS_FILE_PER_THREAD;
     for (int i = 1; ok && i < frames; i++) {
         ok = g_seq_buf[i] > g_seq_buf[i - 1];
     }
-    printf("      frames=%d (expected %u)\n",
-           frames, (unsigned)(OBS_FILE_THREADS * OBS_FILE_PER_THREAD));
+    printf("      frames=%d lifecycle=%u (expected %u)\n", frames, (unsigned)lifecycle,
+           (unsigned)(OBS_FILE_THREADS * OBS_FILE_PER_THREAD));
     ASSERT(ok, "frames must be whole and in strictly increasing sequence order");
 }
 

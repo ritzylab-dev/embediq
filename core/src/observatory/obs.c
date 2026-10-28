@@ -381,17 +381,17 @@ static uint32_t drain_isr_ring_locked(EmbedIQ_Event_t *out, uint32_t cap)
 
 /**
  * Write one event to the current transport. Caller holds s_transport_mutex.
- * to_file is false for the OVERFLOW meta-event, which (as before F2) is
- * printed to stdout but not written to .iqtrace.
+ * OVERFLOW meta-events are written like any other event, so a sequence gap
+ * in a .iqtrace file is always accounted for by an OVERFLOW record.
  */
-static void transport_write_locked(const EmbedIQ_Event_t *evt, bool to_file)
+static void transport_write_locked(const EmbedIQ_Event_t *evt)
 {
     EmbedIQ_Obs_Transport_t t = transport_get();
     if (t == EMBEDIQ_OBS_TRANSPORT_STDOUT) {
         char line[OBS_LINE_BUF_SIZE];
         format_event_internal(evt, line, sizeof(line));
         printf("%s\n", line);
-    } else if (t == EMBEDIQ_OBS_TRANSPORT_FILE && to_file) {
+    } else if (t == EMBEDIQ_OBS_TRANSPORT_FILE) {
         (void)write_tlv(0x0002u, (uint16_t)sizeof(EmbedIQ_Event_t), evt);
     }
 }
@@ -499,10 +499,10 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
      * mutex. Skipped before embediq_obs_init() (no mutex yet). */
     if (s_transport_mutex) {
         for (uint32_t i = 0u; i < n_drained; i++) {
-            transport_write_locked(&drained[i], true);
+            transport_write_locked(&drained[i]);
         }
-        if (have_ovf) transport_write_locked(&ovf, false);
-        transport_write_locked(&evt, true);
+        if (have_ovf) transport_write_locked(&ovf);
+        transport_write_locked(&evt);
     }
 
     transport_unlock();
@@ -634,7 +634,7 @@ int embediq_obs_capture_end(void)
     uint32_t n_drained = drain_isr_ring_locked(drained, EMBEDIQ_OBS_ISR_RING_DEPTH);
     embediq_osal_critical_exit();
     for (uint32_t i = 0u; i < n_drained; i++) {
-        transport_write_locked(&drained[i], true);
+        transport_write_locked(&drained[i]);
     }
 
     int ret = write_tlv(0x0004u, 0u, NULL);  /* STREAM_END */
