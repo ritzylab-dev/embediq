@@ -8,7 +8,7 @@
  * Each test exercises exactly one behaviour with one ASSERT.
  *
  * Run:      ./build/tests/unit/test_message_bus
- * Expected: "All 15 tests passed. (0 failed)"
+ * Expected: "All 17 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -43,6 +43,7 @@ extern bool     message_bus__test_recv(uint8_t ep_id, uint8_t prio,
 extern uint32_t message_bus__drop_count(void);
 
 extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
+extern void     obs__set_level(uint8_t level);
 
 /* F4 named constants */
 #define F4_PUB_THREADS      4u
@@ -52,6 +53,14 @@ extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 #define F4_MSG_OVF          0x1440u  /* community range, unique to this file */
 #define F4_MSG_ASYNC_HIGH   0x1441u
 #define F4_MSG_ASYNC_NORM   0x1442u
+
+/* F4b (review R1/R2) named constants */
+#define F4B_SLOW_WRITE_MS   100u     /* stub transport: delay per write */
+#define F4B_ASYNC_MAX_US    5000u    /* bound on one post_async call */
+#define F4B_TOKEN_ITERS     100000u
+#define F4B_REC_CAP         48u      /* event records kept by the stub */
+#define F4B_MSG_IO          0x1443u
+#define F4B_MSG_TOK         0x1444u
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -782,6 +791,202 @@ static void test_token_for_is_stable_and_static(void)
  * Entry point
  * ------------------------------------------------------------------------- */
 
+/* ===========================================================================
+ * F4b — review R1/R2: the async chain never touches the transport;
+ * the token table is read-only after boot
+ * ======================================================================== */
+
+/* Slow stream-ops stub: counts every write; while g_f4b_slow is set each
+ * write sleeps F4B_SLOW_WRITE_MS. Event records (len == sizeof(Event)) are
+ * recorded in order. write() runs under the Observatory transport mutex. */
+static embediq_osal_atomic32_t g_f4b_writes = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_f4b_slow   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static EmbedIQ_Event_t         g_f4b_recs[F4B_REC_CAP];
+static uint32_t                g_f4b_rec_n  = 0u;
+
+static int f4b_open(const char *p)  { (void)p; return 0; }
+static int f4b_flush(void)          { return 0; }
+static int f4b_close(void)          { return 0; }
+static int f4b_write(const void *p, uint16_t n)
+{
+    (void)embediq_osal_atomic32_add(&g_f4b_writes, 1u);
+    if (embediq_osal_atomic32_load(&g_f4b_slow) != 0u) {
+        embediq_osal_delay_ms(F4B_SLOW_WRITE_MS);
+    }
+    if (n == (uint16_t)sizeof(EmbedIQ_Event_t) && g_f4b_rec_n < F4B_REC_CAP) {
+        memcpy(&g_f4b_recs[g_f4b_rec_n++], p, sizeof(EmbedIQ_Event_t));
+    }
+    return 0;
+}
+static const embediq_obs_stream_ops_t k_f4b_ops = {
+    .open = f4b_open, .write = f4b_write, .flush = f4b_flush, .close = f4b_close,
+};
+
+/* Records written at index >= from with this type / source / state
+ * (src or state < 0 = any). */
+static uint32_t f4b_count_recs(uint32_t from, uint8_t type, int src, int state)
+{
+    uint32_t n = 0u;
+    for (uint32_t i = from; i < g_f4b_rec_n; i++) {
+        const EmbedIQ_Event_t *e = &g_f4b_recs[i];
+        if (e->event_type == type
+            && (src   < 0 || e->source_fb_id  == (uint8_t)src)
+            && (state < 0 || e->state_or_flag == (uint8_t)state)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* ---------------------------------------------------------------------------
+ * test_post_async_never_does_transport_io
+ * FILE transport with a 100 ms-per-write stub. post_async of a HIGH and a
+ * LOW message into full queues, from a thread: each call returns within
+ * F4B_ASYNC_MAX_US and performs zero transport writes. The OSAL_FAULT and
+ * QUEUE_DROP records reach the transport on the next thread-path emit.
+ * ------------------------------------------------------------------------- */
+
+static embediq_bus_token_t *g_f4b_tok = NULL;
+static uint32_t g_f4b_us[2];        /* elapsed per call: HIGH, LOW */
+static uint32_t g_f4b_wr[2];        /* transport writes during each call */
+static int32_t  g_f4b_rc[2];
+
+static void *f4b_async_io_poster(void *arg)
+{
+    (void)arg;
+    static const uint8_t prios[2] = {
+        EMBEDIQ_MSG_PRIORITY_HIGH, EMBEDIQ_MSG_PRIORITY_LOW,
+    };
+    for (uint32_t i = 0u; i < 2u; i++) {
+        EmbedIQ_Msg_t m = make_msg(F4B_MSG_IO, prios[i], 0xB0u + i);
+        uint32_t w0 = embediq_osal_atomic32_load(&g_f4b_writes);
+        uint32_t t0 = embediq_osal_time_us();
+        g_f4b_rc[i] = embediq_bus_post_async(g_f4b_tok, &m);
+        g_f4b_us[i] = embediq_osal_time_us() - t0;
+        g_f4b_wr[i] = embediq_osal_atomic32_load(&g_f4b_writes) - w0;
+    }
+    return NULL;
+}
+
+static void test_post_async_never_does_transport_io(void)
+{
+    full_reset();
+    EMBEDIQ_SUBS(subs, F4B_MSG_IO);
+    EmbedIQ_FB_Config_t cfg_dst = {
+        .name = "fb_f4b_io_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .subscriptions = subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Config_t cfg_src = {
+        .name = "fb_f4b_io_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    };
+    embediq_fb_register(&cfg_dst);
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&cfg_src);
+    embediq_engine_boot();
+    uint8_t dst = embediq_bus_resolve_name("fb_f4b_io_dst");
+
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);   /* quiet fill */
+    for (uint32_t i = 0u; i < EMBEDIQ_HIGH_QUEUE_DEPTH; i++) {
+        EmbedIQ_Msg_t m = make_msg(F4B_MSG_IO, EMBEDIQ_MSG_PRIORITY_HIGH, i);
+        embediq_publish(src, &m);
+    }
+    for (uint32_t i = 0u; i < EMBEDIQ_LOW_QUEUE_DEPTH; i++) {
+        EmbedIQ_Msg_t m = make_msg(F4B_MSG_IO, EMBEDIQ_MSG_PRIORITY_LOW, i);
+        embediq_publish(src, &m);
+    }
+
+    EmbedIQ_Obs_Session_t s;
+    memset(&s, 0, sizeof(s));
+    embediq_obs_session_begin(&s);
+    embediq_obs_set_stream_ops(&k_f4b_ops);
+    int cap = embediq_obs_capture_begin("unused");
+    obs__set_level(1u);
+    g_f4b_rec_n = 0u;
+
+    g_f4b_tok = embediq_bus_token_for(src);
+    embediq_osal_atomic32_store(&g_f4b_slow, 1u);
+    pthread_t th;
+    pthread_create(&th, NULL, f4b_async_io_poster, NULL);
+    pthread_join(th, NULL);
+    embediq_osal_atomic32_store(&g_f4b_slow, 0u);
+
+    /* One thread-path emit drains the ISR ring to the transport. */
+    uint32_t mark = g_f4b_rec_n;
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFEu, 0xFFu, 0u, F4B_MSG_IO);
+    uint32_t osal_q  = f4b_count_recs(mark, EMBEDIQ_OBS_EVT_OSAL_FAULT,
+                                      EMBEDIQ_OSAL_SRC_QUEUES, -1);
+    uint32_t drop_hi = f4b_count_recs(mark, EMBEDIQ_OBS_EVT_QUEUE_DROP, -1,
+                                      EMBEDIQ_MSG_PRIORITY_HIGH);
+    uint32_t drop_lo = f4b_count_recs(mark, EMBEDIQ_OBS_EVT_QUEUE_DROP, -1,
+                                      EMBEDIQ_MSG_PRIORITY_LOW);
+    (void)embediq_obs_capture_end();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+    (void)dst;
+
+    printf("      capture=%d high: rc=%d us=%u writes=%u | low: rc=%d us=%u writes=%u"
+           " | drained osal_q=%u drop_hi=%u drop_lo=%u\n",
+           cap, (int)g_f4b_rc[0], (unsigned)g_f4b_us[0], (unsigned)g_f4b_wr[0],
+           (int)g_f4b_rc[1], (unsigned)g_f4b_us[1], (unsigned)g_f4b_wr[1],
+           (unsigned)osal_q, (unsigned)drop_hi, (unsigned)drop_lo);
+    ASSERT(cap == 0
+           && g_f4b_rc[0] == EMBEDIQ_ERR && g_f4b_rc[1] == EMBEDIQ_OK
+           && g_f4b_us[0] < F4B_ASYNC_MAX_US && g_f4b_us[1] < F4B_ASYNC_MAX_US
+           && g_f4b_wr[0] == 0u && g_f4b_wr[1] == 0u
+           && osal_q == 2u && drop_hi == 1u && drop_lo == 1u,
+           "post_async on full HIGH/LOW: no transport I/O, bounded, records drained later");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_token_lookup_concurrent_with_posting
+ * One thread posts F4B_TOKEN_ITERS messages through a token while the main
+ * thread looks the same token up F4B_TOKEN_ITERS times. The pointer never
+ * changes; under TSan there is no report (lookup is read-only).
+ * ------------------------------------------------------------------------- */
+
+static embediq_bus_token_t    *g_f4b_ptok = NULL;
+static embediq_osal_atomic32_t g_f4b_go   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *f4b_token_poster(void *arg)
+{
+    (void)arg;
+    while (embediq_osal_atomic32_load(&g_f4b_go) == 0u) { /* start together */ }
+    EmbedIQ_Msg_t m = make_msg(F4B_MSG_TOK, EMBEDIQ_MSG_PRIORITY_NORMAL, 0u);
+    for (uint32_t i = 0u; i < F4B_TOKEN_ITERS; i++) {
+        (void)embediq_bus_post_async(g_f4b_ptok, &m);
+    }
+    return NULL;
+}
+
+static void test_token_lookup_concurrent_with_posting(void)
+{
+    full_reset();
+    EMBEDIQ_SUBS(subs, F4B_MSG_TOK);
+    EmbedIQ_FB_Config_t cfg_dst = {
+        .name = "fb_f4b_tok_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .subscriptions = subs, .subscription_count = 1,
+    };
+    EmbedIQ_FB_Config_t cfg_src = {
+        .name = "fb_f4b_tok_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    };
+    embediq_fb_register(&cfg_dst);
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&cfg_src);
+    embediq_engine_boot();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    g_f4b_ptok = embediq_bus_token_for(src);
+    embediq_osal_atomic32_store(&g_f4b_go, 0u);
+    pthread_t th;
+    pthread_create(&th, NULL, f4b_token_poster, NULL);
+    embediq_osal_atomic32_store(&g_f4b_go, 1u);
+    uint32_t changed = 0u;
+    for (uint32_t i = 0u; i < F4B_TOKEN_ITERS; i++) {
+        if (embediq_bus_token_for(src) != g_f4b_ptok) changed++;
+    }
+    pthread_join(th, NULL);
+
+    ASSERT(g_f4b_ptok != NULL && changed == 0u,
+           "token lookup concurrent with posting: pointer stable (TSan: no report)");
+}
+
 int main(void)
 {
     test_publish_reaches_all_subscribers();
@@ -799,6 +1004,8 @@ int main(void)
     test_post_async_never_blocks_on_full_high();
     test_post_async_delivers_like_publish();
     test_token_for_is_stable_and_static();
+    test_post_async_never_does_transport_io();
+    test_token_lookup_concurrent_with_posting();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);
