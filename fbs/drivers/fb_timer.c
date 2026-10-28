@@ -53,7 +53,8 @@
  * ------------------------------------------------------------------------- */
 
 static EmbedIQ_FB_Handle_t  g_fb          = NULL;
-static volatile bool        g_running     = false;
+static embediq_bus_token_t *s_token       = NULL;  /* async-post identity of g_fb */
+static embediq_osal_atomic32_t g_running  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);  /* read by the HAL timer thread */
 static bool                 g_has_1ms_sub = false;
 static volatile uint32_t    g_tick        = 0u;
 
@@ -65,14 +66,32 @@ static volatile uint32_t    g_cnt_1sec    = 0u;
 #endif /* EMBEDIQ_PLATFORM_HOST */
 
 /* ---------------------------------------------------------------------------
- * HAL timer callback — invoked every 1 ms
+ * HAL timer callback — invoked every 1 ms on the HAL timer thread (ISR-like
+ * context): posts through embediq_bus_post_async(), which never blocks.
+ *
+ * g_tick is touched only by this callback; fb_timer__reset_counts() writes it
+ * from tests strictly after fb_timer__stop_and_wait() has joined the timer
+ * thread, so it needs no atomic.
  * ------------------------------------------------------------------------- */
+
+static void post_tick(uint16_t msg_id)
+{
+    if (!s_token) return;
+    EmbedIQ_Msg_t m;
+    memset(&m, 0, sizeof(m));
+    m.msg_id   = msg_id;
+    m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
+    if (embediq_bus_post_async(s_token, &m) != EMBEDIQ_OK) {
+        /* NORMAL never fails: overflow drops the oldest and is counted and
+         * observed by the bus. Nothing further to do from a timer callback. */
+    }
+}
 
 static void timer_callback(void *ctx)
 {
     (void)ctx;
 
-    if (!g_running) {
+    if (embediq_osal_atomic32_load(&g_running) == 0u) {
         return;
     }
 
@@ -83,12 +102,8 @@ static void timer_callback(void *ctx)
 #endif
 
     /* 1 ms — only publish if a subscriber was found at init. */
-    if (g_has_1ms_sub && g_fb) {
-        EmbedIQ_Msg_t m;
-        memset(&m, 0, sizeof(m));
-        m.msg_id   = MSG_TIMER_1MS;
-        m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-        embediq_publish(g_fb, &m);
+    if (g_has_1ms_sub) {
+        post_tick(MSG_TIMER_1MS);
     }
 
     /* 10 ms */
@@ -96,13 +111,7 @@ static void timer_callback(void *ctx)
 #ifdef EMBEDIQ_PLATFORM_HOST
         g_cnt_10ms++;
 #endif
-        if (g_fb) {
-            EmbedIQ_Msg_t m;
-            memset(&m, 0, sizeof(m));
-            m.msg_id   = MSG_TIMER_10MS;
-            m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-            embediq_publish(g_fb, &m);
-        }
+        post_tick(MSG_TIMER_10MS);
     }
 
     /* 100 ms */
@@ -110,13 +119,7 @@ static void timer_callback(void *ctx)
 #ifdef EMBEDIQ_PLATFORM_HOST
         g_cnt_100ms++;
 #endif
-        if (g_fb) {
-            EmbedIQ_Msg_t m;
-            memset(&m, 0, sizeof(m));
-            m.msg_id   = MSG_TIMER_100MS;
-            m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-            embediq_publish(g_fb, &m);
-        }
+        post_tick(MSG_TIMER_100MS);
     }
 
     /* 1 s */
@@ -124,13 +127,7 @@ static void timer_callback(void *ctx)
 #ifdef EMBEDIQ_PLATFORM_HOST
         g_cnt_1sec++;
 #endif
-        if (g_fb) {
-            EmbedIQ_Msg_t m;
-            memset(&m, 0, sizeof(m));
-            m.msg_id   = MSG_TIMER_1SEC;
-            m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
-            embediq_publish(g_fb, &m);
-        }
+        post_tick(MSG_TIMER_1SEC);
     }
 }
 
@@ -157,7 +154,8 @@ static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
         }
     }
 
-    g_running = true;
+    s_token = embediq_bus_token_for(g_fb);
+    embediq_osal_atomic32_store(&g_running, 1u);
     hal_timer_init(1000u, timer_callback, NULL);
     hal_timer_start();
 }
@@ -165,7 +163,7 @@ static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 static void timer_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
-    g_running = false;
+    embediq_osal_atomic32_store(&g_running, 0u);
     hal_timer_stop();
     hal_timer_deinit();
 }
@@ -203,7 +201,8 @@ EmbedIQ_FB_Handle_t fb_timer_register(void)
 /** Start the HAL timer directly without going through embediq_engine_boot(). */
 void fb_timer__start(void)
 {
-    g_running = true;
+    s_token = g_fb ? embediq_bus_token_for(g_fb) : NULL;
+    embediq_osal_atomic32_store(&g_running, 1u);
     hal_timer_init(1000u, timer_callback, NULL);
     hal_timer_start();
 }
@@ -214,7 +213,7 @@ void fb_timer__start(void)
  */
 void fb_timer__stop_and_wait(void)
 {
-    g_running = false;
+    embediq_osal_atomic32_store(&g_running, 0u);
     hal_timer_stop();
     embediq_osal_delay_ms(20u);
     hal_timer_deinit();

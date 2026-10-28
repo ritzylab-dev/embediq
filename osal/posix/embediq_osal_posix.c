@@ -278,6 +278,27 @@ embediq_err_t embediq_osal_queue_recv(EmbedIQ_Queue_t *q, void *item,
     return EMBEDIQ_OK;
 }
 
+embediq_err_t embediq_osal_queue_send_replace_oldest(EmbedIQ_Queue_t *q, const void *item,
+                                                      bool *out_dropped)
+{
+    if (out_dropped) *out_dropped = false;
+    if (!q) return EMBEDIQ_ERR_INVALID;   /* programming error, not an overflow */
+
+    pthread_mutex_lock(&q->mutex);
+    if (q->count >= q->depth) {
+        /* Full: discard the oldest in the same critical region as the write. */
+        q->head  = (uint16_t)((q->head + 1u) % q->depth);
+        q->count = (uint16_t)(q->count - 1u);
+        if (out_dropped) *out_dropped = true;
+    }
+    memcpy(q->buf + (size_t)q->tail * q->item_size, item, q->item_size);
+    q->tail  = (uint16_t)((q->tail  + 1u) % q->depth);
+    q->count = (uint16_t)( q->count + 1u);
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->mutex);
+    return EMBEDIQ_OK;
+}
+
 uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q)
 {
     pthread_mutex_lock(&q->mutex);

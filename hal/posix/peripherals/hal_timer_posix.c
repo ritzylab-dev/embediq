@@ -7,7 +7,8 @@
  * sleeps with CLOCK_MONOTONIC drift correction.  next_fire is tracked as an
  * absolute timespec so accumulated sleep overshoot is compensated each tick.
  *
- * Only includes: hal_timer.h (core/include/hal) and C stdlib headers.
+ * Only includes: hal_timer.h (core/include/hal) and C stdlib headers
+ * (<stdatomic.h> is C11 libc — the HAL layer takes no embediq_*.h).
  * R-02: no malloc in this file.
  *
  * @author  Ritesh Anand
@@ -19,6 +20,7 @@
 #include "hal_timer.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <time.h>
 #include <string.h>
 #include <stdint.h>
@@ -31,8 +33,9 @@ static hal_timer_isr_t      s_cb        = NULL;
 static void                *s_ctx       = NULL;
 static uint32_t             s_period_us = 0u;
 static pthread_t            s_thread;
-static volatile int         s_running   = 0;
+static _Atomic int          s_running   = 0;  /* written by stop(), read by the timer thread */
 static int                  s_inited    = 0;
+static int                  s_thread_started = 0;  /* deinit joins only a started thread */
 
 /* ---------------------------------------------------------------------------
  * Timer thread — drift-corrected periodic callback
@@ -45,7 +48,7 @@ static void *timer_thread(void *arg)
     struct timespec next_fire;
     clock_gettime(CLOCK_MONOTONIC, &next_fire);
 
-    while (s_running) {
+    while (atomic_load(&s_running)) {
         /* Advance absolute next-fire by period_us. */
         long add_ns = (long)s_period_us * 1000L;
         next_fire.tv_nsec += add_ns;
@@ -66,7 +69,7 @@ static void *timer_thread(void *arg)
             nanosleep(&sleep_dur, NULL);
         }
 
-        if (s_running && s_cb) {
+        if (atomic_load(&s_running) && s_cb) {
             s_cb(s_ctx);
         }
     }
@@ -97,12 +100,13 @@ int hal_timer_start(void)
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
-    s_running = 1;
+    atomic_store(&s_running, 1);
     if (pthread_create(&s_thread, NULL, timer_thread, NULL) != 0) {
-        s_running = 0;
+        atomic_store(&s_running, 0);
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_IO);
         return HAL_ERR_IO;
     }
+    s_thread_started = 1;
     return HAL_OK;
 }
 
@@ -112,7 +116,7 @@ int hal_timer_stop(void)
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
-    s_running = 0;
+    atomic_store(&s_running, 0);
     return HAL_OK;
 }
 
@@ -121,8 +125,10 @@ void hal_timer_deinit(void)
     if (!s_inited) {
         return;
     }
-    s_running = 0;
-    pthread_join(s_thread, NULL);
+    atomic_store(&s_running, 0);
+    if (s_thread_started && pthread_join(s_thread, NULL) == 0) {
+        s_thread_started = 0;   /* joining an unstarted or already-joined thread is UB */
+    }
     s_cb        = NULL;
     s_ctx       = NULL;
     s_period_us = 0u;

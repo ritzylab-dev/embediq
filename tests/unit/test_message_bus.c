@@ -44,14 +44,6 @@ extern uint32_t message_bus__drop_count(void);
 
 extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 
-/* Weak fallbacks so this file links before message_bus.c implements the async
- * post API (TDD-first commit); the strong definitions replace them. */
-__attribute__((weak)) embediq_bus_token_t *embediq_bus_token_for(EmbedIQ_FB_Handle_t fb)
-{ (void)fb; return NULL; }
-__attribute__((weak)) int32_t embediq_bus_post_async(embediq_bus_token_t *token,
-                                                     const EmbedIQ_Msg_t *msg)
-{ (void)token; (void)msg; return EMBEDIQ_ERR; }
-
 /* F4 named constants */
 #define F4_PUB_THREADS      4u
 #define F4_OVERFLOW_EXTRA   3u

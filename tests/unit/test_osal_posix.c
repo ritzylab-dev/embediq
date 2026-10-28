@@ -55,16 +55,6 @@
 #define F4_REPLACE_ITEMS   50000u
 #define F4_RECV_POLL_MS    1u
 
-/* Weak fallback so this file links before the OSAL implements the call
- * (TDD-first commit); the OSAL's strong definition replaces it. */
-__attribute__((weak)) embediq_err_t
-embediq_osal_queue_send_replace_oldest(EmbedIQ_Queue_t *q, const void *item, bool *out_dropped)
-{
-    (void)q; (void)item;
-    if (out_dropped) *out_dropped = false;
-    return EMBEDIQ_ERR;
-}
-
 /* ---------------------------------------------------------------------------
  * Minimal test harness — one ASSERT per test function
  * ------------------------------------------------------------------------- */
