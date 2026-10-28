@@ -14,7 +14,9 @@
  *                                cycle/missing-dep detection, init_fn dispatch
  *   3. embediq_fb_report_fault() — FAULT state + Observatory event + fault_fn,
  *                                delivered as MSG_FB_FAULT on the FB's own
- *                                dispatch thread when it has one (T1-2)
+ *                                dispatch thread when it has one (T1-2);
+ *                                every application under the FB's
+ *                                framework-owned fault lock (R4)
  *   4. embediq_subfn_register() — stored sorted by init_order (I-10 enforced)
  * R-02: no malloc/free. All storage is static.
  * I-10: sub-fn registration is gated by the registering flag, which is true
@@ -62,6 +64,14 @@ struct EmbedIQ_FB_s {
     /* Sub-fns kept sorted by init_order via insertion sort at registration. */
     EmbedIQ_SubFn_Config_t subfns[EMBEDIQ_MAX_SUBFNS_PER_FB];
     bool                   registering;   /* I-10: true only during init_fn */
+    /* Fault ownership (review R4): every fault application for this FB runs
+     * under fault_mutex, so fault_fn never runs concurrently with itself.
+     * Created by embediq_engine_boot() before any init_fn; destroyed by
+     * fb_engine__reset(). fault_pending / fault_pending_reason are touched
+     * only by the thread holding fault_mutex. */
+    EmbedIQ_Mutex_t       *fault_mutex;
+    bool                   fault_pending;
+    uint32_t               fault_pending_reason;
 };
 
 /* ---------------------------------------------------------------------------
@@ -105,6 +115,11 @@ static embediq_osal_atomic32_t  g_dispatch_shutdown = EMBEDIQ_OSAL_ATOMIC32_INIT
  * storage (e.g. FreeRTOS thread-local storage pointers). */
 static _Thread_local EmbedIQ_FB_t *tl_dispatch_fb = NULL;
 
+/* tl_fault_held[ep]: this thread holds that FB's fault_mutex (it is inside
+ * that FB's fault application). A fault reported for such an FB from inside
+ * its own fault_fn is deferred, not re-locked (no self-deadlock). */
+static _Thread_local bool tl_fault_held[EMBEDIQ_MAX_ENDPOINTS];
+
 static void fb_state_set(EmbedIQ_FB_t *fb, EmbedIQ_FB_State_t st)
 {
     embediq_osal_atomic32_store(&fb->state, (uint32_t)st);
@@ -146,15 +161,41 @@ EmbedIQ_FB_State_t embediq_fb_get_state(EmbedIQ_FB_Handle_t handle)
  * ------------------------------------------------------------------------- */
 
 /* Apply a fault: state, Observatory LIFECYCLE event, fault_fn. Runs on the
- * FB's own dispatch thread, or inline when the FB has no dispatch thread. */
+ * FB's own dispatch thread, or inline on the reporting thread when the FB
+ * has no dispatch thread (or dispatch has not started). Always under the
+ * FB's fault_mutex: one owner at a time, on every path (review R4).
+ * A fault reported from inside this FB's own fault_fn (same thread, lock
+ * already held) is recorded and applied after that fault_fn returns. */
 static void apply_fault(EmbedIQ_FB_t *fb, uint32_t reason)
 {
-    fb_state_set(fb, EMBEDIQ_FB_STATE_FAULT);
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
-                     (uint8_t)EMBEDIQ_FB_STATE_FAULT, 0u);
+    uint8_t ep = fb->ep_idx;
+    if (tl_fault_held[ep]) {
+        fb->fault_pending        = true;
+        fb->fault_pending_reason = reason;
+        return;
+    }
 
-    if (fb->config.fault_fn) {
-        fb->config.fault_fn((EmbedIQ_FB_Handle_t)fb, fb->config.fb_data, reason);
+    if (fb->fault_mutex) {
+        (void)embediq_osal_mutex_lock(fb->fault_mutex, UINT32_MAX);
+    }
+    tl_fault_held[ep] = true;
+
+    for (;;) {
+        fb_state_set(fb, EMBEDIQ_FB_STATE_FAULT);
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, ep, 0xFFu,
+                         (uint8_t)EMBEDIQ_FB_STATE_FAULT, 0u);
+
+        if (fb->config.fault_fn) {
+            fb->config.fault_fn((EmbedIQ_FB_Handle_t)fb, fb->config.fb_data, reason);
+        }
+        if (!fb->fault_pending) break;
+        fb->fault_pending = false;
+        reason = fb->fault_pending_reason;
+    }
+
+    tl_fault_held[ep] = false;
+    if (fb->fault_mutex) {
+        embediq_osal_mutex_unlock(fb->fault_mutex);
     }
 }
 
@@ -188,8 +229,9 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
         /* Queue unusable — fall through and apply inline rather than lose it. */
     }
 
-    /* No dispatch thread (no concurrent context), before dispatch_boot, or
-     * already on the FB's own dispatch thread. */
+    /* No dispatch thread, before dispatch_boot, or already on the FB's own
+     * dispatch thread: apply here, serialised by the FB's fault_mutex —
+     * concurrent reporters wait their turn (R4). */
     apply_fault(fb, reason);
 }
 
@@ -358,6 +400,14 @@ int embediq_engine_boot(void)
      * notify pointer and the target's semaphore already in place (TSan-found
      * boot-order race). embediq_engine_dispatch_boot() starts the threads that
      * block on these semaphores. Only subscribing FBs get one. */
+    /* Per-FB fault locks — before any init_fn: a platform thread started in
+     * init_fn may report a fault immediately (R4). Every FB gets one. */
+    for (uint8_t i = 0u; i < g_reg_count; i++) {
+        if (!g_registry[i].fault_mutex) {   /* boot may be retried after a FAULT return */
+            g_registry[i].fault_mutex = embediq_osal_mutex_create();
+        }
+    }
+
     for (uint8_t i = 0u; i < g_reg_count; i++) {
         if (g_registry[i].config.subscription_count == 0u) continue;
         g_dispatch_args[i].fb    = &g_registry[i];
@@ -637,6 +687,7 @@ void fb_engine__reset(void)
         if (g_dispatch_args[i].sem) {
             embediq_sem_destroy(g_dispatch_args[i].sem);
         }
+        embediq_osal_mutex_destroy(g_registry[i].fault_mutex);   /* NULL-safe */
     }
     memset(g_registry,      0, sizeof(g_registry));
     memset(g_boot_order,    0, sizeof(g_boot_order));

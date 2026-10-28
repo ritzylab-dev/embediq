@@ -31,6 +31,13 @@
  *   uint32_t sequence — monotonic, increments on every event that enters the
  *   ring.  Wraps are acceptable; use unsigned subtraction for gap detection.
  *   This is the canonical ordering source (Invariant I-13).
+ *   Single linearization point (review R3): a sequence is assigned only
+ *   when a record enters the main ring, inside the OSAL critical section —
+ *   thread-path events at emit, ISR-path records at drain, in ISR-slot
+ *   reservation order, ahead of the draining event. Every transport write
+ *   happens under s_transport_mutex in that same order, so transport order
+ *   == sequence order for all records. ISR records carry sequence 0 until
+ *   drained; their timestamp_us is production time.
  *   NOTE: obs__reset() resets the counter for test isolation (host builds
  *   only).  In production firmware the counter never resets.
  *
@@ -66,6 +73,8 @@
  *   obs__ring_read()    — read event at ring index (0 = oldest)
  *   obs__set_level()    — override runtime level (test use only)
  *   obs__force_overflow() — inject overflow count (test use only)
+ *   obs__isr_ring_peek()  — inspect a pending ISR record (test use only)
+ *   obs__sequence_outside_critical() — R3 guard counter (test use only)
  *   obs__format_event() — format event to string (test use only)
  *
  * R-02: no malloc/free in this file.
@@ -330,9 +339,31 @@ static void transport_set(EmbedIQ_Obs_Transport_t t)
     embediq_osal_atomic32_store(&g_transport, (uint32_t)t);
 }
 
-/* Next canonical sequence number — shared by both paths, lock-free. */
+/* Set while this module holds the OSAL critical section. Lets
+ * next_sequence() verify the single-linearization-point rule (R3): a
+ * sequence taken outside the section is counted for the tests. */
+static embediq_osal_atomic32_t g_in_critical        = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_seq_outside_crit   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void obs_critical_enter(void)
+{
+    embediq_osal_critical_enter();
+    embediq_osal_atomic32_store(&g_in_critical, 1u);
+}
+
+static void obs_critical_exit(void)
+{
+    embediq_osal_atomic32_store(&g_in_critical, 0u);
+    embediq_osal_critical_exit();
+}
+
+/* Next canonical sequence number. Called only inside the critical section
+ * (the one linearization point for both paths). */
 static uint32_t next_sequence(void)
 {
+    if (embediq_osal_atomic32_load(&g_in_critical) == 0u) {
+        (void)embediq_osal_atomic32_add(&g_seq_outside_crit, 1u);
+    }
     return embediq_osal_atomic32_add(&g_sequence, 1u) - 1u;
 }
 
@@ -351,6 +382,9 @@ static void transport_unlock(void)
 /**
  * Move every published ISR-ring record into the main ring (oldest first) and
  * fold pending ISR drops into g_overflow. Caller holds the critical section.
+ * Each record takes its sequence here, in slot-reservation order; the drain
+ * stops at the first reserved-but-unpublished slot, so a later slot can never
+ * be sequenced ahead of an earlier one (R3).
  * Copies up to cap drained records into out (out may be NULL). Bounded to one
  * ring's worth per call so a producer storm cannot extend the hold time.
  * Returns the number of records copied to out.
@@ -367,6 +401,7 @@ static uint32_t drain_isr_ring_locked(EmbedIQ_Event_t *out, uint32_t cap)
         embediq_osal_atomic32_store(&g_isr_ready[slot], 0u);
         tail++;
         embediq_osal_atomic32_store(&g_isr_tail, tail);
+        e.sequence = next_sequence();   /* R3: sequence at ring entry, drain order */
         ring_push(&e, true);
         g_total++;
         if (out && copied < cap) out[copied++] = e;
@@ -458,7 +493,7 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
     transport_lock();
 
     /* ---- critical section: ring + counters + sequence only ---- */
-    embediq_osal_critical_enter();
+    obs_critical_enter();
 
     n_drained = drain_isr_ring_locked(drained, EMBEDIQ_OBS_ISR_RING_DEPTH);
 
@@ -492,7 +527,7 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
     ring_push(&evt, true);   /* may increment g_overflow if ring full */
     g_total++;
 
-    embediq_osal_critical_exit();
+    obs_critical_exit();
     /* ---- end critical section ---- */
 
     /* Transport I/O — outside the critical section, under the transport
@@ -630,9 +665,9 @@ int embediq_obs_capture_end(void)
 
     /* Flush pending ISR-path events into the ring and the capture first. */
     EmbedIQ_Event_t drained[EMBEDIQ_OBS_ISR_RING_DEPTH];
-    embediq_osal_critical_enter();
+    obs_critical_enter();
     uint32_t n_drained = drain_isr_ring_locked(drained, EMBEDIQ_OBS_ISR_RING_DEPTH);
-    embediq_osal_critical_exit();
+    obs_critical_exit();
     for (uint32_t i = 0u; i < n_drained; i++) {
         transport_write_locked(&drained[i]);
     }
@@ -665,15 +700,16 @@ void obs__reset(void)
     transport_lock();
     if (s_stream_ops && s_stream_ops->close) s_stream_ops->close();
 
-    embediq_osal_critical_enter();
+    obs_critical_enter();
     memset(g_ring, 0, sizeof(g_ring));
     g_ring_head  = 0u;
     g_ring_count = 0u;
     g_total      = 0u;
     g_overflow   = 0u;
-    embediq_osal_critical_exit();
+    obs_critical_exit();
 
     embediq_osal_atomic32_store(&g_sequence, 0u);
+    embediq_osal_atomic32_store(&g_seq_outside_crit, 0u);
     for (uint32_t i = 0u; i < EMBEDIQ_OBS_ISR_RING_DEPTH; i++) {
         embediq_osal_atomic32_store(&g_isr_ready[i], 0u);
     }
@@ -691,20 +727,20 @@ void obs__reset(void)
 /** Total events written to the ring since last reset. */
 uint32_t obs__event_count(void)
 {
-    embediq_osal_critical_enter();
+    obs_critical_enter();
     (void)drain_isr_ring_locked(NULL, 0u);
     uint32_t n = g_total;
-    embediq_osal_critical_exit();
+    obs_critical_exit();
     return n;
 }
 
 /** Number of events currently held in the ring buffer. */
 uint32_t obs__ring_count(void)
 {
-    embediq_osal_critical_enter();
+    obs_critical_enter();
     (void)drain_isr_ring_locked(NULL, 0u);
     uint32_t n = g_ring_count;
-    embediq_osal_critical_exit();
+    obs_critical_exit();
     return n;
 }
 
@@ -715,11 +751,11 @@ uint32_t obs__ring_count(void)
 bool obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out)
 {
     if (!out) return false;
-    embediq_osal_critical_enter();
+    obs_critical_enter();
     (void)drain_isr_ring_locked(NULL, 0u);
     bool ok = idx < g_ring_count;
     if (ok) *out = g_ring[(g_ring_head + idx) & RING_MASK];
-    embediq_osal_critical_exit();
+    obs_critical_exit();
     return ok;
 }
 
@@ -736,15 +772,38 @@ void obs__set_level(uint8_t level)
  */
 void obs__force_overflow(uint32_t count)
 {
-    embediq_osal_critical_enter();
+    obs_critical_enter();
     g_overflow = count;
-    embediq_osal_critical_exit();
+    obs_critical_exit();
 }
 
 /** Cumulative ISR-ring drops since the last obs__reset() (test use only). */
 uint32_t obs__isr_dropped_total(void)
 {
     return embediq_osal_atomic32_load(&g_isr_dropped_total);
+}
+
+/**
+ * Copy the idx-th pending ISR-ring record (0 = next to drain) without
+ * draining it. Returns false if idx is beyond the published records.
+ * Test use only: call with no concurrent ISR producer or drainer.
+ */
+bool obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out)
+{
+    if (!out) return false;
+    uint32_t tail = embediq_osal_atomic32_load(&g_isr_tail);
+    uint32_t head = embediq_osal_atomic32_load(&g_isr_head);
+    if (idx >= head - tail) return false;
+    uint32_t slot = (tail + idx) & ISR_MASK;
+    if (embediq_osal_atomic32_load(&g_isr_ready[slot]) == 0u) return false;
+    *out = g_isr_ring[slot];
+    return true;
+}
+
+/** Sequences taken outside the critical section since reset (must be 0). */
+uint32_t obs__sequence_outside_critical(void)
+{
+    return embediq_osal_atomic32_load(&g_seq_outside_crit);
 }
 
 /**
@@ -762,7 +821,8 @@ void obs__format_event(const EmbedIQ_Event_t *evt, char *buf, size_t n)
  *
  * Lock-free multi-producer push into g_isr_ring: reserve a slot by CAS on
  * g_isr_head, write the record, publish it through g_isr_ready[slot]. No
- * mutex, no critical section, no transport, no printf. A full ring counts
+ * mutex, no critical section, no transport, no printf, and no sequence: the
+ * record is sequenced when it is drained into the main ring (R3). A full ring counts
  * the drop and returns; the drop is reported in the next OVERFLOW event.
  * Drained by the next thread-path emit, capture_end(), or a test reader.
  * ------------------------------------------------------------------------- */
@@ -792,8 +852,8 @@ void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
         .target_fb_id  = target,
         .state_or_flag = state,
         .msg_id        = msg_id,
-        .timestamp_us  = obs_timestamp_us(),
-        .sequence      = next_sequence(),
+        .timestamp_us  = obs_timestamp_us(),   /* production (physical) time */
+        .sequence      = 0u,                   /* assigned at drain (R3) */
     };
     embediq_osal_atomic32_store(&g_isr_ready[slot], 1u);
 }
