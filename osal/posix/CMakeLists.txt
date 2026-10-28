@@ -16,7 +16,8 @@ target_compile_options(embediq_osal_posix PRIVATE
     -Werror
 )
 
-# XOBS-1: OSAL observation macros call embediq_obs_emit() — link against
+# XOBS-1: OSAL observation macros record via the Observatory ISR ring
+# (embediq_obs_emit_from_isr(), never the thread-path emit) — link against
 # fb_engine (which contains obs.c). CMake resolves the bidirectional static
 # library dependency at link time via the linker's archive rescanning.
 target_link_libraries(embediq_osal_posix PUBLIC pthread embediq_fb_engine)

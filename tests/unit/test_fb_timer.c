@@ -16,7 +16,7 @@
  * Note: tests 1 and 2 involve real time (≈ 1 second each).
  *
  * Run:      ./build/tests/unit/test_fb_timer
- * Expected: "All 10 tests passed. (0 failed)"
+ * Expected: "All 11 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -149,12 +149,13 @@ static void test_timer_no_publish_without_subscriber(void)
  * HAL timer tests (Arch-4a)
  * ------------------------------------------------------------------------- */
 
-static volatile int g_hal_cb_count = 0;
+/* Written by the HAL timer thread, read by the test: atomic (TSan). */
+static embediq_osal_atomic32_t g_hal_cb_count = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 
 static void hal_test_cb(void *ctx)
 {
     (void)ctx;
-    g_hal_cb_count++;
+    (void)embediq_osal_atomic32_add(&g_hal_cb_count, 1u);
 }
 
 /*
@@ -185,7 +186,7 @@ static void test_hal_timer_init_valid_returns_ok(void)
  */
 static void test_hal_timer_fires_callback(void)
 {
-    g_hal_cb_count = 0;
+    embediq_osal_atomic32_store(&g_hal_cb_count, 0u);
     int ret = hal_timer_init(20000u, hal_test_cb, NULL);   /* 20 ms = 20 000 µs */
     ASSERT(ret == HAL_OK, "hal_timer_fires_callback: init ok");
     hal_timer_start();
@@ -193,7 +194,7 @@ static void test_hal_timer_fires_callback(void)
     hal_timer_stop();
     embediq_osal_delay_ms(25u);    /* drain any in-flight callback */
     hal_timer_deinit();
-    ASSERT(g_hal_cb_count >= 3,
+    ASSERT(embediq_osal_atomic32_load(&g_hal_cb_count) >= 3u,
            "HAL timer fires >= 3 times in 90 ms at 20 ms period");
 }
 
@@ -203,16 +204,16 @@ static void test_hal_timer_fires_callback(void)
  */
 static void test_hal_timer_stop_halts_callback(void)
 {
-    g_hal_cb_count = 0;
+    embediq_osal_atomic32_store(&g_hal_cb_count, 0u);
     hal_timer_init(5000u, hal_test_cb, NULL);   /* 5 ms = 5 000 µs */
     hal_timer_start();
     embediq_osal_delay_ms(30u);
     hal_timer_stop();
     embediq_osal_delay_ms(20u);    /* drain any in-flight callback */
-    int count_after_stop = g_hal_cb_count;
+    uint32_t count_after_stop = embediq_osal_atomic32_load(&g_hal_cb_count);
     embediq_osal_delay_ms(30u);    /* confirm count frozen */
     hal_timer_deinit();
-    ASSERT(g_hal_cb_count == count_after_stop,
+    ASSERT(embediq_osal_atomic32_load(&g_hal_cb_count) == count_after_stop,
            "hal_timer_stop halts callbacks");
 }
 
@@ -229,6 +230,26 @@ static void test_hal_timer_deinit_allows_reinit(void)
     hal_timer_deinit();
 }
 
+/*
+ * test_timer_deinit_without_start_and_double_deinit (F4)
+ * deinit on a timer that was never started must not join a thread that does
+ * not exist; a second deinit is a no-op. Under TSan: no report on s_running
+ * and no runtime abort in pthread_join.
+ */
+static void test_timer_deinit_without_start_and_double_deinit(void)
+{
+    hal_timer_init(1000u, hal_test_cb, NULL);
+    hal_timer_deinit();                     /* never started */
+
+    hal_timer_init(5000u, hal_test_cb, NULL);
+    hal_timer_start();
+    embediq_osal_delay_ms(15u);
+    hal_timer_stop();
+    hal_timer_deinit();
+    hal_timer_deinit();                     /* double deinit */
+    ASSERT(true, "deinit without start and double deinit must not crash");
+}
+
 /* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
@@ -243,6 +264,7 @@ int main(void)
     test_hal_timer_fires_callback();
     test_hal_timer_stop_halts_callback();
     test_hal_timer_deinit_allows_reinit();
+    test_timer_deinit_without_start_and_double_deinit();
 
     printf("\n");
     if (g_tests_failed == 0) {

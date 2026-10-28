@@ -7,7 +7,7 @@
  * stdlib only. Each test exercises one behaviour with one assertion.
  *
  * Run:      ./build/tests/test_osal_posix
- * Expected: "All 18 tests passed. (0 failed)"
+ * Expected: "All 21 tests passed. (0 failed)"
  *
  * ASAN:
  *   cmake -B build_asan -DEMBEDIQ_PLATFORM=host \
@@ -49,6 +49,15 @@
 /* test_signal_post_wakes_waiter — post delay and wake deadline. */
 #define F1_POST_DELAY_MS   10u
 #define F1_WAKE_DEADLINE_MS 200u
+
+/* F4 replace-oldest tests. */
+#define F4_Q_DEPTH         4u
+#define F4_REPLACE_ITEMS   50000u
+#define F4_RECV_POLL_MS    1u
+
+/* F4b (review R1) OSAL obligation path test. */
+#define F4B_REC_CAP        48u     /* event records kept by the stub */
+#define F4B_SIG_WAIT_MS    1u
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness — one ASSERT per test function
@@ -492,6 +501,173 @@ static void test_destroy_functions_do_not_crash(void)
     ASSERT(true, "mutex_destroy and signal_destroy must complete without crash");
 }
 
+/* ===========================================================================
+ * F4 — atomic send-or-replace-oldest
+ * ======================================================================== */
+
+/* ---------------------------------------------------------------------------
+ * test_queue_send_replace_oldest_keeps_newest
+ * Full depth-4 queue holding 1..4: replace_oldest(5) drops 1 → 2,3,4,5.
+ * ------------------------------------------------------------------------- */
+
+static void test_queue_send_replace_oldest_keeps_newest(void)
+{
+    EmbedIQ_Queue_t *q = embediq_osal_queue_create(F4_Q_DEPTH, sizeof(uint32_t));
+    for (uint32_t v = 1u; v <= F4_Q_DEPTH; v++) {
+        (void)embediq_osal_queue_send(q, &v, 0u);
+    }
+    uint32_t five = F4_Q_DEPTH + 1u;
+    bool dropped = false;
+    embediq_err_t rc = embediq_osal_queue_send_replace_oldest(q, &five, &dropped);
+
+    bool ok = rc == EMBEDIQ_OK && dropped;
+    for (uint32_t want = 2u; ok && want <= F4_Q_DEPTH + 1u; want++) {
+        uint32_t got = 0u;
+        ok = embediq_osal_queue_recv(q, &got, 0u) == EMBEDIQ_OK && got == want;
+    }
+    embediq_osal_queue_destroy(q);
+    ASSERT(ok, "replace_oldest on a full queue must drop the oldest and keep 2,3,4,5");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_queue_send_replace_oldest_concurrent_with_recv
+ * A producer replace_oldest()s 1..50,000 while a consumer receives. Every
+ * received value was sent, values arrive strictly increasing, and
+ * received + dropped == sent.
+ * ------------------------------------------------------------------------- */
+
+static EmbedIQ_Queue_t        *g_f4_q;
+static embediq_osal_atomic32_t g_f4_done    = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static uint32_t                g_f4_dropped = 0u;   /* producer-only until joined */
+static uint32_t                g_f4_received = 0u;  /* consumer-only until joined */
+static bool                    g_f4_order_ok = true;
+
+static void *f4_producer(void *arg)
+{
+    (void)arg;
+    for (uint32_t v = 1u; v <= F4_REPLACE_ITEMS; v++) {
+        bool dropped = false;
+        if (embediq_osal_queue_send_replace_oldest(g_f4_q, &v, &dropped) != EMBEDIQ_OK) {
+            g_f4_dropped++;            /* treat a failed enqueue as lost */
+        } else if (dropped) {
+            g_f4_dropped++;
+        }
+    }
+    embediq_osal_atomic32_store(&g_f4_done, 1u);
+    return NULL;
+}
+
+static void *f4_consumer(void *arg)
+{
+    (void)arg;
+    uint32_t last = 0u;
+    for (;;) {
+        uint32_t v = 0u;
+        if (embediq_osal_queue_recv(g_f4_q, &v, F4_RECV_POLL_MS) == EMBEDIQ_OK) {
+            if (v == 0u || v > F4_REPLACE_ITEMS || v <= last) g_f4_order_ok = false;
+            last = v;
+            g_f4_received++;
+        } else if (embediq_osal_atomic32_load(&g_f4_done) != 0u) {
+            break;   /* producer finished and the queue is drained */
+        }
+    }
+    return NULL;
+}
+
+static void test_queue_send_replace_oldest_concurrent_with_recv(void)
+{
+    g_f4_q = embediq_osal_queue_create(F4_Q_DEPTH, sizeof(uint32_t));
+    embediq_osal_atomic32_store(&g_f4_done, 0u);
+    g_f4_dropped = 0u; g_f4_received = 0u; g_f4_order_ok = true;
+
+    pthread_t prod, cons;
+    pthread_create(&cons, NULL, f4_consumer, NULL);
+    pthread_create(&prod, NULL, f4_producer, NULL);
+    pthread_join(prod, NULL);
+    pthread_join(cons, NULL);
+
+    printf("      sent=%u received=%u dropped=%u\n", (unsigned)F4_REPLACE_ITEMS,
+           (unsigned)g_f4_received, (unsigned)g_f4_dropped);
+    bool ok = g_f4_order_ok && g_f4_received > 0u
+              && g_f4_received + g_f4_dropped == F4_REPLACE_ITEMS;
+    embediq_osal_queue_destroy(g_f4_q);
+    ASSERT(ok, "concurrent replace_oldest: received + dropped == sent, in order");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_osal_obs_macros_use_isr_path (review R1)
+ * A queue-full (timeout 0) and a signal timeout raise OSAL_FAULT through the
+ * lock-free ISR ring: nothing reaches the transport during the failing OSAL
+ * calls; both records reach it on the next thread-path emit.
+ * ------------------------------------------------------------------------- */
+
+static embediq_osal_atomic32_t g_f4b_writes = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static EmbedIQ_Event_t         g_f4b_recs[F4B_REC_CAP];
+static uint32_t                g_f4b_rec_n  = 0u;
+
+static int f4b_open(const char *p)  { (void)p; return 0; }
+static int f4b_flush(void)          { return 0; }
+static int f4b_close(void)          { return 0; }
+static int f4b_write(const void *p, uint16_t n)
+{
+    (void)embediq_osal_atomic32_add(&g_f4b_writes, 1u);
+    if (n == (uint16_t)sizeof(EmbedIQ_Event_t) && g_f4b_rec_n < F4B_REC_CAP) {
+        memcpy(&g_f4b_recs[g_f4b_rec_n++], p, sizeof(EmbedIQ_Event_t));
+    }
+    return 0;
+}
+static const embediq_obs_stream_ops_t k_f4b_ops = {
+    .open = f4b_open, .write = f4b_write, .flush = f4b_flush, .close = f4b_close,
+};
+
+static uint32_t f4b_count_osal(uint32_t from, uint8_t src, uint8_t sub)
+{
+    uint32_t n = 0u;
+    for (uint32_t i = from; i < g_f4b_rec_n; i++) {
+        if (g_f4b_recs[i].event_type == EMBEDIQ_OBS_EVT_OSAL_FAULT
+            && g_f4b_recs[i].source_fb_id == src
+            && g_f4b_recs[i].state_or_flag == sub) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void test_osal_obs_macros_use_isr_path(void)
+{
+    EmbedIQ_Obs_Session_t s;
+    memset(&s, 0, sizeof(s));
+    embediq_obs_session_begin(&s);
+    embediq_obs_set_stream_ops(&k_f4b_ops);
+    int cap = embediq_obs_capture_begin("unused");
+    /* Drain anything earlier tests left pending, then take the baseline. */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFEu, 0xFFu, 0u, 0u);
+
+    EmbedIQ_Queue_t  *q   = embediq_osal_queue_create(1u, sizeof(uint32_t));
+    EmbedIQ_Signal_t *sig = embediq_osal_signal_create();
+    uint32_t item = 1u;
+    uint32_t w0 = embediq_osal_atomic32_load(&g_f4b_writes);
+    embediq_err_t rq0 = embediq_osal_queue_send(q, &item, 0u);
+    embediq_err_t rq1 = embediq_osal_queue_send(q, &item, 0u);      /* full */
+    embediq_err_t rs  = embediq_osal_signal_wait_timeout(sig, F4B_SIG_WAIT_MS);
+    uint32_t during = embediq_osal_atomic32_load(&g_f4b_writes) - w0;
+
+    uint32_t mark = g_f4b_rec_n;
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFEu, 0xFFu, 0u, 0u);   /* drains */
+    uint32_t q_full = f4b_count_osal(mark, EMBEDIQ_OSAL_SRC_QUEUES,  2u);
+    uint32_t s_tmo  = f4b_count_osal(mark, EMBEDIQ_OSAL_SRC_SIGNALS, 3u);
+    (void)embediq_obs_capture_end();
+    embediq_osal_queue_destroy(q);
+    embediq_osal_signal_destroy(sig);
+
+    printf("      capture=%d writes_during_faults=%u drained queue_full=%u signal_timeout=%u\n",
+           cap, (unsigned)during, (unsigned)q_full, (unsigned)s_tmo);
+    ASSERT(cap == 0 && rq0 == EMBEDIQ_OK && rq1 == EMBEDIQ_ERR_TIMEOUT
+           && rs == EMBEDIQ_ERR_TIMEOUT && during == 0u
+           && q_full == 1u && s_tmo == 1u,
+           "OSAL obligation macros: ISR ring only, delivered by the next thread-path emit");
+}
+
 /* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
@@ -516,6 +692,9 @@ int main(void)
     test_atomic32_lock_free();
     test_signal_post_wakes_waiter();
     test_destroy_functions_do_not_crash();
+    test_queue_send_replace_oldest_keeps_newest();
+    test_queue_send_replace_oldest_concurrent_with_recv();
+    test_osal_obs_macros_use_isr_path();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);

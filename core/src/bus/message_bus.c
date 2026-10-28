@@ -96,27 +96,54 @@ static ep_queues_t g_ep[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t     g_ep_count   = 0;
 static bool        g_bus_booted = false;
 
-/* Drop event counter (host/test builds only). */
+/* Drop event counter (host/test builds only). Atomic: incremented from
+ * every publishing thread. */
 #ifdef EMBEDIQ_PLATFORM_HOST
-static uint32_t g_drop_count = 0;
+static embediq_osal_atomic32_t g_drop_count = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 #endif
+
+/* Async-post tokens — one static slot per endpoint (R-02: no allocation).
+ * Opaque to callers; the token is the only thing a callback may hold.
+ * Ownership: written by message_bus_boot() only (boot thread, before any
+ * dispatch or platform thread exists; message_bus__reset() refills it in
+ * host tests); read-only after boot. embediq_bus_token_for() and
+ * embediq_bus_post_async() only read it (review R2). */
+struct embediq_bus_token {
+    uint8_t source_ep;
+};
+static struct embediq_bus_token g_tokens[EMBEDIQ_MAX_ENDPOINTS];
+
+static void tokens_fill(void)
+{
+    for (uint8_t i = 0u; i < (uint8_t)EMBEDIQ_MAX_ENDPOINTS; i++) {
+        g_tokens[i].source_ep = i;
+    }
+}
 
 /* ---------------------------------------------------------------------------
  * Queue depth warning helper — XOBS-3
  *
  * Emits EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH when fill % >= EMBEDIQ_QUEUE_WARN_THRESHOLD.
- * Gated by EMBEDIQ_OBS_EMIT_RESOURCE (EMBEDIQ_TRACE_RESOURCE must be enabled).
+ * Gated like EMBEDIQ_OBS_EMIT_RESOURCE (EMBEDIQ_TRACE_RESOURCE must be enabled).
+ * async_ selects the emit path (bus_obs_emit): the async post path records
+ * through the lock-free ISR ring, never the thread-path emit (review R1).
  * Division-by-zero safe: guard on cap > 0.
  * ------------------------------------------------------------------------- */
-#define BUS_QUEUE_DEPTH_CHECK(q_, cap_, src_ep_, dst_ep_, prio_, msg_id_)       \
+#if EMBEDIQ_TRACE_RESOURCE
+#  define BUS_OBS_EMIT_RESOURCE(async_, evt_, src_, dst_, state_, msg_id_) \
+     bus_obs_emit((async_), (evt_), (src_), (dst_), (state_), (msg_id_))
+#else
+#  define BUS_OBS_EMIT_RESOURCE(async_, evt_, src_, dst_, state_, msg_id_) ((void)0)
+#endif
+
+#define BUS_QUEUE_DEPTH_CHECK(async_, q_, cap_, src_ep_, dst_ep_, prio_, msg_id_) \
     do {                                                                          \
         if ((cap_) > 0u) {                                                        \
             uint8_t _pct = (uint8_t)(((uint32_t)embediq_osal_queue_count(q_)    \
                                       * 100u) / (uint32_t)(cap_));               \
             if (_pct >= (uint8_t)EMBEDIQ_QUEUE_WARN_THRESHOLD) {                 \
-                EMBEDIQ_OBS_EMIT_RESOURCE(EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH,       \
-                                          (src_ep_), (dst_ep_),                  \
-                                          _pct, (msg_id_));                       \
+                BUS_OBS_EMIT_RESOURCE((async_), EMBEDIQ_OBS_EVT_BUS_QUEUE_DEPTH, \
+                                      (src_ep_), (dst_ep_), _pct, (msg_id_));    \
             }                                                                     \
         }                                                                         \
     } while (0)
@@ -200,6 +227,7 @@ void message_bus_boot(void)
     }
 
     sub_sort();
+    tokens_fill();   /* the only writer of g_tokens (R2) */
 
     g_bus_booted = true;
 }
@@ -226,17 +254,43 @@ const char *embediq_bus_resolve_id(uint8_t endpoint_id)
  * ------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
- * route_message() — private routing helper
+ * route_message_ex() — private routing helper
  *
  * Contains all subscription lookup, queue enqueue, and overflow policy logic.
  * msg must have source_endpoint_id already stamped by the caller.
- * Used by both embediq_publish() and bus_inject().
+ *
+ * async == false — embediq_publish() / bus_inject() / bridge route:
+ *   HIGH blocks until space; Observatory via embediq_obs_emit().
+ * async == true  — embediq_bus_post_async() (HAL/ops-table callbacks):
+ *   no send waits for capacity: HIGH full = not delivered + drop observed +
+ *   EMBEDIQ_ERR; every Observatory record (MSG_TX, QUEUE_DROP, XOBS-3 depth,
+ *   and the OSAL obligation macros reached through the queue sends) goes
+ *   through embediq_obs_emit_from_isr() (lock-free ISR ring); no printf;
+ *   no transport I/O.
+ * Both: NORMAL full drops the oldest atomically (one queue-lock operation);
+ *       LOW full drops the incoming message; drops are counted atomically.
+ * Returns EMBEDIQ_OK, or EMBEDIQ_ERR if any async HIGH delivery failed.
  * ------------------------------------------------------------------------- */
 
-static void route_message(EmbedIQ_Msg_t *msg)
+static void bus_obs_emit(bool async, uint8_t evt, uint8_t src, uint8_t dst,
+                         uint8_t prio, uint16_t msg_id)
+{
+    if (async) embediq_obs_emit_from_isr(evt, src, dst, prio, msg_id);
+    else       embediq_obs_emit(evt, src, dst, prio, msg_id);
+}
+
+static void count_drop(void)
+{
+#ifdef EMBEDIQ_PLATFORM_HOST
+    (void)embediq_osal_atomic32_add(&g_drop_count, 1u);
+#endif
+}
+
+static int32_t route_message_ex(EmbedIQ_Msg_t *msg, bool async)
 {
     uint16_t msg_id = msg->msg_id;
     uint8_t  prio   = msg->priority;
+    int32_t  result = EMBEDIQ_OK;
 
     /* Clamp invalid priority to NORMAL. */
     if (prio > (uint8_t)EMBEDIQ_MSG_PRIORITY_LOW) {
@@ -245,7 +299,7 @@ static void route_message(EmbedIQ_Msg_t *msg)
 
     /* Namespace warning: 0x0000–0x03FF is core-system reserved. */
 #ifdef EMBEDIQ_PLATFORM_HOST
-    if (msg_id <= 0x03FFu) {
+    if (!async && msg_id <= 0x03FFu) {
         printf("[BUS] warn: msg_id 0x%04x is in core-reserved range "
                "(0x0000-0x03FF); publishing anyway per v1 policy\n", msg_id);
     }
@@ -253,13 +307,13 @@ static void route_message(EmbedIQ_Msg_t *msg)
 
     /* MSG_TX tap — level-3 (trace) event, once per routed message (T2-6). */
     if (embediq_obs_level_at_least(3u)) {
-        embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_TX, msg->source_endpoint_id,
-                         0xFFu, prio, msg_id);
+        bus_obs_emit(async, EMBEDIQ_OBS_EVT_MSG_TX, msg->source_endpoint_id,
+                     0xFFu, prio, msg_id);
     }
 
     /* Find first subscriber entry via binary search. */
     int first = sub_first(msg_id);
-    if (first < 0) return;   /* no subscribers — silent drop, no event */
+    if (first < 0) return EMBEDIQ_OK;   /* no subscribers — silent drop, no event */
 
     /* Deliver to each subscriber endpoint. */
     for (int i = first;
@@ -276,45 +330,56 @@ static void route_message(EmbedIQ_Msg_t *msg)
         EmbedIQ_Msg_t copy = *msg;
 
         if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH) {
-            /* ---- HIGH: block until space is available ---- */
-            embediq_osal_queue_send(q, &copy, UINT32_MAX);
-            BUS_QUEUE_DEPTH_CHECK(q, g_ep[ep].cap[prio],
-                                  msg->source_endpoint_id, ep, prio, msg_id);
-            if (g_notify_fn) g_notify_fn(ep);
+            if (!async) {
+                /* ---- HIGH: block until space is available ---- */
+                embediq_osal_queue_send(q, &copy, UINT32_MAX);
+                BUS_QUEUE_DEPTH_CHECK(false, q, g_ep[ep].cap[prio],
+                                      msg->source_endpoint_id, ep, prio, msg_id);
+                if (g_notify_fn) g_notify_fn(ep);
+            } else if (embediq_osal_queue_send(q, &copy, 0u) == EMBEDIQ_OK) {
+                /* ---- HIGH, async: never wait for capacity ---- */
+                BUS_QUEUE_DEPTH_CHECK(true, q, g_ep[ep].cap[prio],
+                                      msg->source_endpoint_id, ep, prio, msg_id);
+                if (g_notify_fn) g_notify_fn(ep);
+            } else {
+                bus_obs_emit(true, EMBEDIQ_OBS_EVT_QUEUE_DROP,
+                             msg->source_endpoint_id, ep, prio, msg_id);
+                count_drop();
+                result = EMBEDIQ_ERR;
+            }
 
         } else if (prio == (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL) {
-            /* ---- NORMAL: drop OLDEST on overflow ---- */
-            if (embediq_osal_queue_send(q, &copy, 0u) != EMBEDIQ_OK) {
-                EmbedIQ_Msg_t oldest;
-                embediq_osal_queue_recv(q, &oldest, 0u);  /* discard oldest */
-                embediq_osal_queue_send(q, &copy,   0u);  /* enqueue new */
-                embediq_obs_emit(EMBEDIQ_OBS_EVT_QUEUE_DROP,
-                                 msg->source_endpoint_id, ep,
-                                 prio, msg_id);
-#ifdef EMBEDIQ_PLATFORM_HOST
-                g_drop_count++;
-#endif
+            /* ---- NORMAL: drop OLDEST on overflow — one atomic queue op ---- */
+            bool dropped = false;
+            (void)embediq_osal_queue_send_replace_oldest(q, &copy, &dropped);  /* q != NULL: cannot fail */
+            if (dropped) {
+                bus_obs_emit(async, EMBEDIQ_OBS_EVT_QUEUE_DROP,
+                             msg->source_endpoint_id, ep, prio, msg_id);
+                count_drop();
             }
-            BUS_QUEUE_DEPTH_CHECK(q, g_ep[ep].cap[prio],
+            BUS_QUEUE_DEPTH_CHECK(async, q, g_ep[ep].cap[prio],
                                   msg->source_endpoint_id, ep, prio, msg_id);
             if (g_notify_fn) g_notify_fn(ep);
 
         } else {
             /* ---- LOW: drop INCOMING on overflow ---- */
             if (embediq_osal_queue_send(q, &copy, 0u) == EMBEDIQ_OK) {
-                BUS_QUEUE_DEPTH_CHECK(q, g_ep[ep].cap[prio],
+                BUS_QUEUE_DEPTH_CHECK(async, q, g_ep[ep].cap[prio],
                                       msg->source_endpoint_id, ep, prio, msg_id);
                 if (g_notify_fn) g_notify_fn(ep);
             } else {
-                embediq_obs_emit(EMBEDIQ_OBS_EVT_QUEUE_DROP,
-                                 msg->source_endpoint_id, ep,
-                                 prio, msg_id);
-#ifdef EMBEDIQ_PLATFORM_HOST
-                g_drop_count++;
-#endif
+                bus_obs_emit(async, EMBEDIQ_OBS_EVT_QUEUE_DROP,
+                             msg->source_endpoint_id, ep, prio, msg_id);
+                count_drop();
             }
         }
     }
+    return result;
+}
+
+static void route_message(EmbedIQ_Msg_t *msg)
+{
+    (void)route_message_ex(msg, false);   /* blocking path returns OK by construction */
 }
 
 /* ---------------------------------------------------------------------------
@@ -347,6 +412,25 @@ void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
     if (!msg) return;
     msg->source_endpoint_id = embediq_engine_fb_ep(fb);
     route_message(msg);
+}
+
+/* ---------------------------------------------------------------------------
+ * embediq_bus_token_for() / embediq_bus_post_async() — T2-1
+ * ------------------------------------------------------------------------- */
+
+embediq_bus_token_t *embediq_bus_token_for(EmbedIQ_FB_Handle_t fb)
+{
+    uint8_t ep = embediq_engine_fb_ep(fb);
+    if (ep >= EMBEDIQ_MAX_ENDPOINTS) return NULL;   /* NULL handle → 0xFF */
+    return &g_tokens[ep];   /* read-only lookup: filled by message_bus_boot() */
+}
+
+int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *msg)
+{
+    if (!token || !msg) return EMBEDIQ_ERR;
+    EmbedIQ_Msg_t copy = *msg;
+    copy.source_endpoint_id = token->source_ep;
+    return route_message_ex(&copy, true);
 }
 
 /* ---------------------------------------------------------------------------
@@ -422,7 +506,8 @@ void message_bus__reset(void)
     g_sub_count   = 0u;
     g_ep_count    = 0u;
     g_bus_booted  = false;
-    g_drop_count  = 0u;
+    embediq_osal_atomic32_store(&g_drop_count, 0u);
+    tokens_fill();
     g_notify_fn   = NULL;
 }
 
@@ -448,7 +533,7 @@ bool message_bus__test_recv(uint8_t ep_id, uint8_t prio, EmbedIQ_Msg_t *out)
 /** Return the total number of drop events emitted since last reset. */
 uint32_t message_bus__drop_count(void)
 {
-    return g_drop_count;
+    return embediq_osal_atomic32_load(&g_drop_count);
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */
