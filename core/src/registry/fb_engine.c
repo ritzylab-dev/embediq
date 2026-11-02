@@ -16,7 +16,10 @@
  *                                delivered as MSG_FB_FAULT on the FB's own
  *                                dispatch thread when it has one (T1-2);
  *                                every application under the FB's
- *                                framework-owned fault lock (R4)
+ *                                execution lock (R4)
+ *   5. Per-FB execution lock (exec_lock) — held by whichever thread runs an
+ *      FB's code: init_fn, each run_fn dispatch, each fault application
+ *      (review #182 N1–N3)
  *   4. embediq_subfn_register() — stored sorted by init_order (I-10 enforced)
  * R-02: no malloc/free. All storage is static.
  * I-10: sub-fn registration is gated by the registering flag, which is true
@@ -64,14 +67,18 @@ struct EmbedIQ_FB_s {
     /* Sub-fns kept sorted by init_order via insertion sort at registration. */
     EmbedIQ_SubFn_Config_t subfns[EMBEDIQ_MAX_SUBFNS_PER_FB];
     bool                   registering;   /* I-10: true only during init_fn */
-    /* Fault ownership (review R4): every fault application for this FB runs
-     * under fault_mutex, so fault_fn never runs concurrently with itself.
-     * Created by embediq_engine_boot() before any init_fn; destroyed by
-     * fb_engine__reset(). fault_pending / fault_pending_reason are touched
-     * only by the thread holding fault_mutex. */
-    EmbedIQ_Mutex_t       *fault_mutex;
-    bool                   fault_pending;
-    uint32_t               fault_pending_reason;
+    /* Execution ownership (review R4, #182 N1): exec_lock is held by
+     * whichever thread runs this FB's code — init_fn (boot thread), each
+     * run_fn dispatch and each fault application — so no two of them ever
+     * overlap. A required boot resource (N2): created first in
+     * embediq_engine_boot(), boot fails if it cannot be. Destroyed by
+     * fb_engine__reset(). The pending ring holds fault reports made while
+     * the FB's own code holds exec_lock (N3); touched only by the holder. */
+    EmbedIQ_Mutex_t       *exec_lock;
+    uint32_t               pending[EMBEDIQ_FB_FAULT_PENDING_DEPTH];
+    uint8_t                pending_head;
+    uint8_t                pending_count;
+    uint8_t                pending_dropped;
 };
 
 /* ---------------------------------------------------------------------------
@@ -115,10 +122,11 @@ static embediq_osal_atomic32_t  g_dispatch_shutdown = EMBEDIQ_OSAL_ATOMIC32_INIT
  * storage (e.g. FreeRTOS thread-local storage pointers). */
 static _Thread_local EmbedIQ_FB_t *tl_dispatch_fb = NULL;
 
-/* tl_fault_held[ep]: this thread holds that FB's fault_mutex (it is inside
- * that FB's fault application). A fault reported for such an FB from inside
- * its own fault_fn is deferred, not re-locked (no self-deadlock). */
-static _Thread_local bool tl_fault_held[EMBEDIQ_MAX_ENDPOINTS];
+/* tl_exec_held[ep]: this thread holds that FB's exec_lock (it is running
+ * that FB's code). A fault reported for such an FB from inside its own code
+ * is queued, not re-locked (no self-deadlock), and applied when that code
+ * returns. */
+static _Thread_local bool tl_exec_held[EMBEDIQ_MAX_ENDPOINTS];
 
 static void fb_state_set(EmbedIQ_FB_t *fb, EmbedIQ_FB_State_t st)
 {
@@ -160,43 +168,90 @@ EmbedIQ_FB_State_t embediq_fb_get_state(EmbedIQ_FB_Handle_t handle)
  * Public: embediq_fb_report_fault()
  * ------------------------------------------------------------------------- */
 
-/* Apply a fault: state, Observatory LIFECYCLE event, fault_fn. Runs on the
- * FB's own dispatch thread, or inline on the reporting thread when the FB
- * has no dispatch thread (or dispatch has not started). Always under the
- * FB's fault_mutex: one owner at a time, on every path (review R4).
- * A fault reported from inside this FB's own fault_fn (same thread, lock
- * already held) is recorded and applied after that fault_fn returns. */
+/* ---------------------------------------------------------------------------
+ * Per-FB execution lock — one owner of an FB's code at a time (R4, #182 N1)
+ * ------------------------------------------------------------------------- */
+
+/* Apply one fault: state, Observatory LIFECYCLE event, fault_fn.
+ * Caller holds fb->exec_lock. */
+static void fault_apply_one_locked(EmbedIQ_FB_t *fb, uint32_t reason)
+{
+    fb_state_set(fb, EMBEDIQ_FB_STATE_FAULT);
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
+                     (uint8_t)EMBEDIQ_FB_STATE_FAULT, 0u);
+    if (fb->config.fault_fn) {
+        fb->config.fault_fn((EmbedIQ_FB_Handle_t)fb, fb->config.fb_data, reason);
+    }
+}
+
+/* Queue a fault reported while this thread runs the FB's own code (N3).
+ * Beyond EMBEDIQ_FB_FAULT_PENDING_DEPTH the report is counted, not lost
+ * silently. Caller holds fb->exec_lock. */
+static void fault_enqueue_locked(EmbedIQ_FB_t *fb, uint32_t reason)
+{
+    if (fb->pending_count < (uint8_t)EMBEDIQ_FB_FAULT_PENDING_DEPTH) {
+        uint8_t slot = (uint8_t)((fb->pending_head + fb->pending_count)
+                                 % EMBEDIQ_FB_FAULT_PENDING_DEPTH);
+        fb->pending[slot] = reason;
+        fb->pending_count++;
+    } else if (fb->pending_dropped < UINT8_MAX) {
+        fb->pending_dropped++;
+    }
+}
+
+/* Apply queued faults in report order; each may queue more (loop until
+ * empty). Then report any overflow once. Caller holds fb->exec_lock. */
+static void fault_drain_pending_locked(EmbedIQ_FB_t *fb)
+{
+    while (fb->pending_count > 0u) {
+        uint32_t reason  = fb->pending[fb->pending_head];
+        fb->pending_head = (uint8_t)((fb->pending_head + 1u) % EMBEDIQ_FB_FAULT_PENDING_DEPTH);
+        fb->pending_count--;
+        fault_apply_one_locked(fb, reason);
+    }
+    if (fb->pending_dropped > 0u) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, fb->ep_idx,
+                         (uint8_t)EMBEDIQ_FAULT_PENDING_OVERFLOW,
+                         (uint16_t)fb->pending_dropped);
+        fb->pending_dropped = 0u;
+    }
+}
+
+/* Take fb's execution lock. Returns false — and runs nothing — if the lock
+ * does not exist: boot guarantees it does, so that is a programming error
+ * (N2: FB code never runs unlocked). */
+static bool exec_enter(EmbedIQ_FB_t *fb)
+{
+    if (!fb->exec_lock) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, fb->ep_idx,
+                         (uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE, 0u);
+        return false;
+    }
+    (void)embediq_osal_mutex_lock(fb->exec_lock, UINT32_MAX);
+    tl_exec_held[fb->ep_idx] = true;
+    return true;
+}
+
+/* Apply faults queued by the code that just ran, then release the lock. */
+static void exec_exit(EmbedIQ_FB_t *fb)
+{
+    fault_drain_pending_locked(fb);
+    tl_exec_held[fb->ep_idx] = false;
+    embediq_osal_mutex_unlock(fb->exec_lock);
+}
+
+/* Apply a fault under fb's execution lock. If this thread is already running
+ * fb's code (fault_fn, init_fn or run_fn of the same FB), the fault is
+ * queued and applied, in order, when that code returns. */
 static void apply_fault(EmbedIQ_FB_t *fb, uint32_t reason)
 {
-    uint8_t ep = fb->ep_idx;
-    if (tl_fault_held[ep]) {
-        fb->fault_pending        = true;
-        fb->fault_pending_reason = reason;
+    if (tl_exec_held[fb->ep_idx]) {
+        fault_enqueue_locked(fb, reason);
         return;
     }
-
-    if (fb->fault_mutex) {
-        (void)embediq_osal_mutex_lock(fb->fault_mutex, UINT32_MAX);
-    }
-    tl_fault_held[ep] = true;
-
-    for (;;) {
-        fb_state_set(fb, EMBEDIQ_FB_STATE_FAULT);
-        embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, ep, 0xFFu,
-                         (uint8_t)EMBEDIQ_FB_STATE_FAULT, 0u);
-
-        if (fb->config.fault_fn) {
-            fb->config.fault_fn((EmbedIQ_FB_Handle_t)fb, fb->config.fb_data, reason);
-        }
-        if (!fb->fault_pending) break;
-        fb->fault_pending = false;
-        reason = fb->fault_pending_reason;
-    }
-
-    tl_fault_held[ep] = false;
-    if (fb->fault_mutex) {
-        embediq_osal_mutex_unlock(fb->fault_mutex);
-    }
+    if (!exec_enter(fb)) return;
+    fault_apply_one_locked(fb, reason);
+    exec_exit(fb);
 }
 
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
@@ -230,8 +285,8 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
     }
 
     /* No dispatch thread, before dispatch_boot, or already on the FB's own
-     * dispatch thread: apply here, serialised by the FB's fault_mutex —
-     * concurrent reporters wait their turn (R4). */
+     * dispatch thread: apply here under the FB's execution lock — it waits
+     * for any init_fn, run_fn or fault_fn of this FB in progress (R4, N1). */
     apply_fault(fb, reason);
 }
 
@@ -365,6 +420,23 @@ int embediq_engine_boot(void)
     /* Observatory transport mutex — before any init_fn can emit. */
     embediq_obs_init();
 
+    /* Per-FB execution locks FIRST — a required boot resource (N2). Before
+     * platform libs, queues, semaphores, notify_fn and any init_fn: if one
+     * cannot be allocated, nothing has run and boot fails cleanly. */
+    for (uint8_t i = 0u; i < g_reg_count; i++) {
+        if (g_registry[i].exec_lock) continue;   /* boot may be retried */
+        g_registry[i].exec_lock = embediq_osal_mutex_create();
+        if (!g_registry[i].exec_lock) {
+            embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, g_registry[i].ep_idx,
+                             (uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE, 0u);
+            for (uint8_t k = 0u; k < g_reg_count; k++) {
+                embediq_osal_mutex_destroy(g_registry[k].exec_lock);   /* NULL-safe */
+                g_registry[k].exec_lock = NULL;
+            }
+            return -1;
+        }
+    }
+
     g_boot_count = 0;
 
     /* Initialise all declared platform libraries (e.g. HAL ops tables) before
@@ -400,14 +472,6 @@ int embediq_engine_boot(void)
      * notify pointer and the target's semaphore already in place (TSan-found
      * boot-order race). embediq_engine_dispatch_boot() starts the threads that
      * block on these semaphores. Only subscribing FBs get one. */
-    /* Per-FB fault locks — before any init_fn: a platform thread started in
-     * init_fn may report a fault immediately (R4). Every FB gets one. */
-    for (uint8_t i = 0u; i < g_reg_count; i++) {
-        if (!g_registry[i].fault_mutex) {   /* boot may be retried after a FAULT return */
-            g_registry[i].fault_mutex = embediq_osal_mutex_create();
-        }
-    }
-
     for (uint8_t i = 0u; i < g_reg_count; i++) {
         if (g_registry[i].config.subscription_count == 0u) continue;
         g_dispatch_args[i].fb    = &g_registry[i];
@@ -466,10 +530,19 @@ int embediq_engine_boot(void)
             uint8_t       idx = sorted[j];
             EmbedIQ_FB_t *fb  = &g_registry[idx];
 
-            /* Transition IDLE → INITIALISING */
-            fb_state_set(fb, EMBEDIQ_FB_STATE_INITIALISING);
-            embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
-                             (uint8_t)EMBEDIQ_FB_STATE_INITIALISING, 0u);
+            /* init_fn runs under the FB's execution lock (N1): a fault
+             * reported meanwhile — by a platform thread started in init_fn —
+             * waits until init_fn returns; one the FB reports on itself is
+             * queued and applied before the lock is released. */
+            (void)exec_enter(fb);   /* exists: created at the top of boot */
+
+            /* Transition IDLE → INITIALISING (a fault applied before init —
+             * FAULT state — is kept). */
+            if (embediq_osal_atomic32_cas(&fb->state, (uint32_t)EMBEDIQ_FB_STATE_IDLE,
+                                          (uint32_t)EMBEDIQ_FB_STATE_INITIALISING)) {
+                embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
+                                 (uint8_t)EMBEDIQ_FB_STATE_INITIALISING, 0u);
+            }
 
             /* Call init_fn — sub-fn registration is allowed during this call. */
             if (fb->config.init_fn) {
@@ -477,11 +550,16 @@ int embediq_engine_boot(void)
                 fb->config.init_fn((EmbedIQ_FB_Handle_t)fb, fb->config.fb_data);
                 fb->registering = false;
             }
+            fault_drain_pending_locked(fb);
 
-            /* Transition INITIALISING → RUNNING */
-            fb_state_set(fb, EMBEDIQ_FB_STATE_RUNNING);
-            embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
-                             (uint8_t)EMBEDIQ_FB_STATE_RUNNING, 0u);
+            /* Transition INITIALISING → RUNNING, only if no fault was applied
+             * during init (FAULT is never overwritten), before the unlock. */
+            if (embediq_osal_atomic32_cas(&fb->state, (uint32_t)EMBEDIQ_FB_STATE_INITIALISING,
+                                          (uint32_t)EMBEDIQ_FB_STATE_RUNNING)) {
+                embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
+                                 (uint8_t)EMBEDIQ_FB_STATE_RUNNING, 0u);
+            }
+            exec_exit(fb);
 
             g_boot_order[g_boot_count++] = idx;
         }
@@ -570,19 +648,26 @@ static void fb_dispatch_loop(void *arg)
                     embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_RX, msg.source_endpoint_id,
                                      ep, rx_prio, msg.msg_id);
                 }
+                /* One message under the FB's execution lock (N1); released
+                 * between messages so inline reporters can interleave. */
+                if (!exec_enter(fb)) continue;
                 /* Framework-posted fault for this FB: apply here, on its own
                  * thread, and do not dispatch to sub-functions. A MSG_FB_FAULT
                  * published by an FB through the bus is unaffected. */
+                bool is_own_fault = false;
                 if (msg.msg_id == MSG_FB_FAULT &&
                     msg.source_endpoint_id == EMBEDIQ_EP_FRAMEWORK) {
                     MSG_FB_FAULT_Payload_t p;
                     memcpy(&p, msg.payload, sizeof(p));
                     if (p.fb_id == ep) {
-                        apply_fault(fb, p.fault_code);
-                        continue;
+                        fault_apply_one_locked(fb, p.fault_code);
+                        is_own_fault = true;
                     }
                 }
-                dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
+                if (!is_own_fault) {
+                    dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
+                }
+                exec_exit(fb);   /* applies faults the FB queued on itself */
             }
         } while (got);
     }
@@ -687,7 +772,7 @@ void fb_engine__reset(void)
         if (g_dispatch_args[i].sem) {
             embediq_sem_destroy(g_dispatch_args[i].sem);
         }
-        embediq_osal_mutex_destroy(g_registry[i].fault_mutex);   /* NULL-safe */
+        embediq_osal_mutex_destroy(g_registry[i].exec_lock);   /* NULL-safe */
     }
     memset(g_registry,      0, sizeof(g_registry));
     memset(g_boot_order,    0, sizeof(g_boot_order));
@@ -713,7 +798,20 @@ void fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle, uint16_t msg_id,
 {
     EmbedIQ_FB_t *fb = (EmbedIQ_FB_t *)handle;
     if (!fb) return;
+    if (tl_exec_held[fb->ep_idx]) {          /* already running this FB's code */
+        dispatch_msg_to_fb(fb, msg_id, msg);
+        return;
+    }
+    if (!exec_enter(fb)) return;             /* same rule as the dispatch loop */
     dispatch_msg_to_fb(fb, msg_id, msg);
+    exec_exit(fb);
+}
+
+/** True when the calling thread holds ep's execution lock (test use only). */
+bool fb_engine__exec_lock_held(uint8_t ep)
+{
+    if (ep >= EMBEDIQ_MAX_ENDPOINTS) return false;
+    return tl_exec_held[ep];
 }
 
 /** Return the dispatch semaphore for ep_id, or NULL if none (no subscriptions). */
