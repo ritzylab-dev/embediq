@@ -7,7 +7,7 @@
  * stdlib only. Each test exercises one behaviour with one assertion.
  *
  * Run:      ./build/tests/test_osal_posix
- * Expected: "All 22 tests passed. (0 failed)"
+ * Expected: "All 23 tests passed. (0 failed)"
  *
  * ASAN:
  *   cmake -B build_asan -DEMBEDIQ_PLATFORM=host \
@@ -693,6 +693,60 @@ static void test_mutex_create_failure_injection(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_mutex_try_refusal_is_not_a_fault
+ * embediq_osal_mutex_try() takes a free mutex (true) and refuses a mutex
+ * held by another thread (false) without waiting. Neither outcome raises an
+ * OSAL_FAULT record: a refusal is an expected outcome, not a timeout.
+ * ------------------------------------------------------------------------- */
+
+/* Weak fallback so this file links before the OSAL provides mutex_try: the
+ * only non-waiting acquisition the OSAL offered until then. */
+__attribute__((weak)) bool embediq_osal_mutex_try(EmbedIQ_Mutex_t *m)
+{
+    return embediq_osal_mutex_lock(m, 0u) == EMBEDIQ_OK;
+}
+extern bool obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out);
+
+static uint32_t osal_fault_records_pending(void)
+{
+    uint32_t n = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__isr_ring_peek(i, &e); i++) {
+        if (e.event_type == EMBEDIQ_OBS_EVT_OSAL_FAULT) n++;
+    }
+    return n;
+}
+
+static bool g_try_result = true;
+
+static void *try_from_other_thread(void *m)
+{
+    g_try_result = embediq_osal_mutex_try((EmbedIQ_Mutex_t *)m);
+    return NULL;
+}
+
+static void test_mutex_try_refusal_is_not_a_fault(void)
+{
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only: records are kept */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFEu, 0xFFu, 0u, 0u);   /* drains the ISR ring */
+    uint32_t before = osal_fault_records_pending();
+
+    EmbedIQ_Mutex_t *m = embediq_osal_mutex_create();
+    bool free_taken = embediq_osal_mutex_try(m);        /* free → taken */
+    pthread_t th;
+    pthread_create(&th, NULL, try_from_other_thread, m); /* held → refused */
+    pthread_join(th, NULL);
+    embediq_osal_mutex_unlock(m);
+    embediq_osal_mutex_destroy(m);
+
+    uint32_t records = osal_fault_records_pending() - before;
+    printf("      free=%d held=%d osal_fault_records=%u\n",
+           (int)free_taken, (int)g_try_result, (unsigned)records);
+    ASSERT(free_taken && !g_try_result && records == 0u,
+           "mutex_try: takes a free mutex, refuses a held one, observes neither");
+}
+
+/* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 
@@ -720,6 +774,7 @@ int main(void)
     test_queue_send_replace_oldest_concurrent_with_recv();
     test_osal_obs_macros_use_isr_path();
     test_mutex_create_failure_injection();
+    test_mutex_try_refusal_is_not_a_fault();
 
     printf("\nAll %d tests passed. (%d failed)\n",
            g_tests_run - g_tests_failed, g_tests_failed);
