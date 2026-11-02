@@ -19,8 +19,10 @@
  *   4. embediq_subfn_register() — stored sorted by init_order (I-10 enforced)
  *   5. Per-FB execution lock (exec_lock) — held by whichever thread runs an
  *      FB's code: init_fn, each run_fn dispatch, each fault execution
- *   6. embediq_engine_dispatch_shutdown() — bounded; latched faults are
- *      executed, queued messages discarded and reported
+ *   6. embediq_engine_dispatch_shutdown() — joins the dispatch threads, then
+ *      drains each FB's inbox by trylock with the same release-then-check
+ *      loop as any executor; never waits for an execution lock; discards
+ *      other queued messages and reports the count
  *
  * Fault delivery. No deadlock: the only blocking acquisition of an execution
  * lock is by a thread that holds none; a thread that holds one takes others
