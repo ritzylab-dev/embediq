@@ -15,6 +15,10 @@
  * Context safety: INSTANCE-SAFE — each ops table slot represents one
  * independent TLS connection context. Concurrent use of distinct slots
  * is safe. Concurrent use of the same slot requires external serialisation.
+ * While a connect_async() on a slot is in flight, every other op on that
+ * slot — configure, a second connect_async, disconnect, send, recv —
+ * returns EMBEDIQ_TLS_ERR_BUSY without blocking. The slot accepts ops again
+ * once the connect has completed (no later than on_complete being invoked).
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -57,6 +61,7 @@ typedef int32_t embediq_tls_err_t;
 #define EMBEDIQ_TLS_ERR_NO_RESOURCES      ((embediq_tls_err_t) -9)  /**< slot index out of range */
 #define EMBEDIQ_TLS_ERR_SEND              ((embediq_tls_err_t)-10)  /**< send() underlying write failed */
 #define EMBEDIQ_TLS_ERR_RECV              ((embediq_tls_err_t)-11)  /**< recv() underlying read failed */
+#define EMBEDIQ_TLS_ERR_BUSY              ((embediq_tls_err_t)-12)  /**< slot has a connect_async() in flight */
 
 /* ---------------------------------------------------------------------------
  * Async connect callback

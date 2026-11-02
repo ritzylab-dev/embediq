@@ -33,6 +33,7 @@
  * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
  *   nvm__init_state()   — clear cache + create mutex
  *   nvm__load_state()   — trigger nvm_load() (simulates power-on reload)
+ *   nvm__set_persist_delay_ms() — slow every persist (concurrency tests)
  *
  * Zero POSIX headers.  R-02: no malloc in this file.
  *
@@ -130,6 +131,12 @@ static struct {
     nvm_entry_t       entries[NVM_MAX_KEYS];
 } s_persist_buf;
 
+#ifdef EMBEDIQ_PLATFORM_HOST
+/* Test-only: delay applied to every persist immediately before the flash
+ * write, to widen the window in which other callers overlap a persist. */
+static uint32_t s_persist_delay_ms = 0u;
+#endif
+
 /* ---------------------------------------------------------------------------
  * Internal helpers
  * ------------------------------------------------------------------------- */
@@ -177,6 +184,12 @@ static void nvm_persist(void)
     memcpy(s_persist_buf.entries, g_nvm, sizeof(g_nvm));
     s_persist_buf.hdr.crc32 = embediq_crc32(s_persist_buf.entries,
                                               sizeof(s_persist_buf.entries));
+
+#ifdef EMBEDIQ_PLATFORM_HOST
+    if (s_persist_delay_ms > 0u) {
+        embediq_osal_delay_ms(s_persist_delay_ms);
+    }
+#endif
 
     /* Single atomic write — HAL atomicity contract (PR-A: hal_flash.h) ensures
      * either the full blob lands or nothing changes. */
@@ -453,6 +466,15 @@ void nvm__init_state(void)
 void nvm__load_state(void)
 {
     nvm_load();
+}
+
+/**
+ * Delay every subsequent persist by ms milliseconds before the flash write
+ * (0 = no delay). Set it before starting concurrent callers.
+ */
+void nvm__set_persist_delay_ms(uint32_t ms)
+{
+    s_persist_delay_ms = ms;
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */

@@ -32,6 +32,7 @@
  *   wdg__init_state()    — reset slots and counters (does not start task)
  *   wdg__trigger_check() — run one monitor scan synchronously
  *   wdg__fault_count()   — total missed-checkin faults since last init
+ *   wdg__stop_monitor()  — stop the monitor task and wait for it to exit
  *
  * Zero POSIX headers.  R-02: no malloc in this file.
  *
@@ -80,7 +81,7 @@ static uint8_t             g_slot_count  = 0u;
 static EmbedIQ_Mutex_t    *g_mutex       = NULL;
 static EmbedIQ_Task_t     *g_task        = NULL;
 static EmbedIQ_FB_Handle_t g_wdg_fb      = NULL;
-static volatile bool       g_running     = false;
+static embediq_osal_atomic32_t g_running = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static uint32_t            g_kick_seq    = 0u;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
@@ -169,9 +170,9 @@ static void monitor_scan(void)
 static void monitor_task(void *arg)
 {
     (void)arg;
-    while (g_running) {
+    while (embediq_osal_atomic32_load(&g_running) != 0u) {
         embediq_osal_delay_ms(100u);
-        if (g_running) {
+        if (embediq_osal_atomic32_load(&g_running) != 0u) {
             monitor_scan();
         }
     }
@@ -204,7 +205,7 @@ static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     embediq_publish(g_wdg_fb, &m);
 
     /* Start background monitor. */
-    g_running = true;
+    embediq_osal_atomic32_store(&g_running, 1u);
     g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL,
                                      EMBEDIQ_WDG_TASK_PRIORITY,
                                      EMBEDIQ_WDG_TASK_STACK_SIZE);
@@ -213,7 +214,7 @@ static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 static void wdg_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
-    g_running = false;
+    embediq_osal_atomic32_store(&g_running, 0u);
     hal_wdg_deinit();
 }
 
@@ -332,7 +333,7 @@ void embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb)
  */
 void wdg__init_state(void)
 {
-    g_running     = false;
+    embediq_osal_atomic32_store(&g_running, 0u);
     g_slot_count  = 0u;
     g_kick_seq    = 0u;
     g_fault_count = 0u;
@@ -354,6 +355,17 @@ void wdg__trigger_check(void)
 uint32_t wdg__fault_count(void)
 {
     return g_fault_count;
+}
+
+/** Stop the monitor task started by wdg_init() and wait for it to exit.
+ *  Call from the thread that booted the engine. */
+void wdg__stop_monitor(void)
+{
+    embediq_osal_atomic32_store(&g_running, 0u);
+    if (g_task != NULL) {
+        embediq_osal_task_join(g_task);
+        g_task = NULL;
+    }
 }
 
 #endif /* EMBEDIQ_PLATFORM_HOST */

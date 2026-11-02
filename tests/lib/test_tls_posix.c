@@ -26,6 +26,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <unistd.h>         /* close, alarm */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "ops/embediq_tls.h"
 #include "embediq_config.h"
 
@@ -346,6 +350,143 @@ static void test_slot_isolation(void)
 #endif
 
 /* ---------------------------------------------------------------------------
+ * test_async_connect_mutex_ownership
+ *
+ * The peer accepts TCP but never answers the TLS handshake, so the connect
+ * stays in flight until the test closes the socket. While it is in flight,
+ * every other op on the slot returns EMBEDIQ_TLS_ERR_BUSY without blocking.
+ * Closing the socket fails the handshake: on_complete fires exactly once with
+ * an error and the slot is usable again. Under ThreadSanitizer the slot mutex
+ * is only ever unlocked by the thread that locked it (the HAL exposes no
+ * error-checking mutex hook, so TSan is the ownership check).
+ * ------------------------------------------------------------------------- */
+
+#define BUSY_OPS_WAIT_MS         200u   /* ops on a connecting slot must not block */
+#define CONNECT_RESULT_WAIT_MS   2000u
+#define SECOND_CALLBACK_WAIT_NS  100000000L   /* 100 ms: no second on_complete */
+#define HANG_GUARD_S             30u
+
+typedef struct {
+    cb_state_t st;
+    int        calls;
+} counted_cb_t;
+
+static void counted_connect_cb(embediq_tls_err_t result, void *user_ctx)
+{
+    counted_cb_t *c = (counted_cb_t *)user_ctx;
+    pthread_mutex_lock(&c->st.mu);
+    c->calls++;
+    c->st.result = result;
+    c->st.fired  = true;
+    pthread_cond_signal(&c->st.cv);
+    pthread_mutex_unlock(&c->st.mu);
+}
+
+typedef struct {
+    const embediq_tls_ops_t *ops;
+    const char              *ca;
+    embediq_tls_err_t        rc_send, rc_recv, rc_connect, rc_configure, rc_disconnect;
+    cb_state_t               done;     /* fired once every op has returned */
+    cb_state_t               second;   /* target of the second connect_async */
+} busy_ops_t;
+
+static void *busy_ops_caller(void *arg)
+{
+    busy_ops_t *b = (busy_ops_t *)arg;
+    const uint8_t byte = 0u;
+    uint8_t       rx   = 0u;
+    b->rc_send       = b->ops->send(&byte, 1u);
+    b->rc_recv       = (embediq_tls_err_t)b->ops->recv(&rx, 1u, 0u);
+    b->rc_connect    = b->ops->connect_async("127.0.0.1", 1u, "localhost",
+                                             connect_cb, &b->second);
+    b->rc_configure  = b->ops->configure(b->ca, NULL, NULL);
+    b->rc_disconnect = b->ops->disconnect();
+    connect_cb(EMBEDIQ_TLS_OK, &b->done);
+    return NULL;
+}
+
+/* Listening socket on 127.0.0.1 with an ephemeral port; returns fd or -1. */
+static int open_silent_listener(uint16_t *port)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family      = AF_INET;
+    a.sin_port        = 0;
+    socklen_t alen = sizeof(a);
+    if (inet_pton(AF_INET, "127.0.0.1", &a.sin_addr) != 1
+        || bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(fd, 1) != 0
+        || getsockname(fd, (struct sockaddr *)&a, &alen) != 0) {
+        close(fd);
+        return -1;
+    }
+    *port = ntohs(a.sin_port);
+    return fd;
+}
+
+static void test_async_connect_mutex_ownership(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    uint16_t port = 0u;
+    int listener  = open_silent_listener(&port);
+
+    /* Static: a callback that fires late (a defect) must not hit a dead frame. */
+    static counted_cb_t cc;
+    cb_state_init(&cc.st);
+    cc.calls = 0;
+    embediq_tls_err_t rc = ops->connect_async("127.0.0.1", port, "localhost",
+                                              counted_connect_cb, &cc);
+    int conn = (listener >= 0 && rc == EMBEDIQ_TLS_OK) ? accept(listener, NULL, NULL) : -1;
+
+    static busy_ops_t b;
+    memset(&b, 0, sizeof(b));
+    b.ops = ops;
+    b.ca  = ca;
+    cb_state_init(&b.done);
+    cb_state_init(&b.second);
+    pthread_t th;
+    pthread_create(&th, NULL, busy_ops_caller, &b);
+    bool ops_returned = wait_for_connect(&b.done, BUSY_OPS_WAIT_MS) == EMBEDIQ_TLS_OK;
+
+    /* Fail the handshake: the peer goes away without answering. */
+    if (conn >= 0) close(conn);
+    if (listener >= 0) close(listener);
+    embediq_tls_err_t result = wait_for_connect(&cc.st, CONNECT_RESULT_WAIT_MS);
+    struct timespec ts_wait = { .tv_sec = 0, .tv_nsec = SECOND_CALLBACK_WAIT_NS };
+    nanosleep(&ts_wait, NULL);
+    pthread_mutex_lock(&cc.st.mu);
+    int calls = cc.calls;
+    pthread_mutex_unlock(&cc.st.mu);
+    pthread_join(th, NULL);
+
+    bool all_busy = b.rc_send == EMBEDIQ_TLS_ERR_BUSY && b.rc_recv == EMBEDIQ_TLS_ERR_BUSY
+                    && b.rc_connect == EMBEDIQ_TLS_ERR_BUSY
+                    && b.rc_configure == EMBEDIQ_TLS_ERR_BUSY
+                    && b.rc_disconnect == EMBEDIQ_TLS_ERR_BUSY;
+    bool usable = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+    alarm(0u);
+
+    printf("      initiated=%d ops_returned=%d busy(send=%d recv=%d connect=%d "
+           "configure=%d disconnect=%d) result=%d calls=%d usable=%d\n",
+           (int)(rc == EMBEDIQ_TLS_OK), (int)ops_returned, (int)b.rc_send, (int)b.rc_recv,
+           (int)b.rc_connect, (int)b.rc_configure, (int)b.rc_disconnect, (int)result,
+           calls, (int)usable);
+    ASSERT(configured && listener >= 0 && rc == EMBEDIQ_TLS_OK && conn >= 0
+           && ops_returned && all_busy
+           && result != EMBEDIQ_TLS_OK && calls == 1 && usable,
+           "connect in flight: ops return BUSY, one failing on_complete, slot reusable");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -368,6 +509,7 @@ int main(void)
 #if EMBEDIQ_TLS_MAX_CONNECTIONS >= 2
     test_slot_isolation();
 #endif
+    test_async_connect_mutex_ownership();
 
     printf("\n%d/%d tests passed.\n",
            g_tests_run - g_tests_failed, g_tests_run);
