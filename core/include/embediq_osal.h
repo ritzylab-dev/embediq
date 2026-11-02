@@ -174,6 +174,12 @@ EmbedIQ_Mutex_t *embediq_osal_mutex_create(void);
  *  Never negate this return value with ! (R-osal-01). */
 embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms);
 
+/** Take the mutex only if it is free; never waits. Returns true if the
+ *  lock was acquired, false if another task holds it. A refusal is an
+ *  expected outcome, not a failure: it raises no EMBEDIQ_OSAL_OBS_ record.
+ *  Calling context: any thread. */
+bool embediq_osal_mutex_try(EmbedIQ_Mutex_t *m);
+
 /** Unlock a mutex held by the calling task. */
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m);
 

@@ -1054,7 +1054,7 @@ callable only from the thread that owns the object):
 | `embediq_obs_emit()`                                                                                 | any thread                                                                                                       |
 | `embediq_obs_emit_from_isr()`                                                                        | ISR or any thread; fire-and-forget                                                                               |
 | `embediq_engine_notify_fb()`                                                                         | any thread (used by the bus)                                                                                     |
-| `embediq_fb_report_fault()`                                                                          | any thread; delivered to the target FB as a message, state change and `fault_fn` run on the FB's dispatch thread |
+| `embediq_fb_report_fault()`                                                                          | any thread; accepted into the FB's fault inbox; executed by the FB's owner under its execution lock              |
 | `embediq_nvm_*` / `embediq_cfg_*` reads                                                              | any thread, non-blocking                                                                                         |
 | `embediq_nvm_*` / `embediq_cfg_*` writes                                                             | any thread; serialised inside `fb_nvm`                                                                           |
 | ops-table callback relays declared in `core/include/ops/*.h` (e.g. `embediq_mqtt_on_receive_call()`) | any thread; the relay forwards to `embediq_publish()` — a HAL thread calls the relay, never the FB               |
@@ -1062,6 +1062,67 @@ callable only from the thread that owns the object):
 Every public function in `core/include/` carries a "Calling context:" line in its header
 comment stating one of: "FB dispatch thread only", "boot thread only", "any thread",
 "any thread or ISR".
+
+### Fault delivery
+
+`embediq_fb_report_fault()` separates accepting a fault from executing `fault_fn`.
+
+- **Inbox.** Every FB has a framework-owned fault inbox of `EMBEDIQ_FB_FAULT_INBOX_DEPTH`
+  reasons. A report is pushed in constant time inside the OSAL critical section, together
+  with a read of the FB's owner state. It never waits for queue capacity or for another
+  FB's execution lock.
+- **Owner states.** *Boot*, from registration until `init_fn` has returned: reports are
+  only latched; the boot thread executes them right after `init_fn`. *Dispatch*, while the
+  FB's dispatch thread runs: the reporter wakes that thread and returns. *None*, at every
+  other time (after init and before dispatch starts, FBs without subscriptions, after
+  shutdown): the reporting thread executes, or leaves the fault to the thread already
+  running the FB's code.
+- **Execution.** `fault_fn` always runs under the FB's execution lock, in acceptance
+  order, never concurrently with `init_fn`, `run_fn` or itself, and never before
+  `init_fn` has returned. A reporter that holds no execution lock waits for the FB's
+  current handler to finish; one that holds an execution lock (it is inside some FB's
+  handler) only tries the lock and, if it is busy, leaves the fault for the holder. The
+  holder releases, then checks the inbox, and while it is not empty takes the lock again
+  by trylock and runs another pass — repeating until a check that follows a release finds
+  the inbox empty. A push after that check finds the lock free and executes itself, or is
+  refused only because a new holder exists, which runs the same loop. Execution is
+  re-checked against the owner before every reason is taken, so no reason is taken after a
+  transition; a reason already taken completes on the thread that took it.
+- **Boot ordering.** A fault accepted before or during `init_fn` is executed before the FB
+  is marked RUNNING. A report accepted in the closing window — after that drain and before
+  the boot thread releases the lock — is executed immediately after; the trace may then
+  show RUNNING followed by FAULT for that FB. The state never returns to RUNNING.
+- **No deadlock.** A thread blocks to take an execution lock only when it holds none;
+  every thread that holds one takes others by trylock only. A cycle needs every member to
+  hold a lock and wait for another, so none can form.
+- **No lost fault.** Every push, every owner read and every owner change happens inside
+  the same critical section, and each executor drains the inbox after the change that
+  made it the executor: boot after `init_fn`, the dispatch thread when it is woken,
+  `dispatch_shutdown` after joining the thread. If boot fails, no FB code runs: each FB's
+  latched reports are discarded and counted in one `EMBEDIQ_FAULT_BOOT_ABORTED` event. A
+  reason already taken from the inbox when boot fails is executed to completion on the
+  thread that took it and is not included in the BOOT_ABORTED count; reports accepted after
+  the BOOT_ABORTED event are latched; they are counted at the next boot failure, executed
+  after init on a retried boot, or discarded by reset.
+- **Liveness.** No thread waits on a timer. Each drain pass is bounded by the number of
+  reasons latched when it starts and executes at least one of them or finds none.
+  `dispatch_shutdown` drains each FB with the same release-then-check loop as any
+  executor, acquiring only by trylock; it never waits for an execution lock, and like every
+  executor it terminates when reports on that FB stop. A pass is bounded, a storm is not: under an
+  unbounded stream of reports on one FB, its `fault_fn` keeps being invoked by whichever
+  executor holds the lock; the release-then-check loop ends when reports stop, since each
+  extra pass consumes a reason pushed during the previous one. A `fault_fn` that blocks
+  blocks the thread executing it — the reporter under *none*, the dispatch thread under
+  *dispatch* — and shutdown waits for that dispatch thread to join. The execution-lock
+  argument excludes lock cycles only: a `fault_fn` that calls `embediq_publish()` with a
+  HIGH message into a full queue waits for bus capacity and can join a cycle with dispatch
+  threads publishing HIGH into each other's full queues. Inside `fault_fn`, publish only
+  with `embediq_bus_post_async()`, which never waits for capacity (R-sub-33).
+- **Overflow.** Beyond `EMBEDIQ_FB_FAULT_INBOX_DEPTH` pending reasons on one FB, further
+  reports are counted and reported in an `EMBEDIQ_OBS_EVT_FAULT` event
+  (`EMBEDIQ_FAULT_PENDING_OVERFLOW`, `msg_id` = count, saturating at 65535), one per drain
+  pass that observed dropped reports. The FB enters FAULT when its first pending reason
+  executes.
 
 Observability guarantees, stated precisely: HASH_CHAIN proves the `.iqtrace` file was not
 altered after it was written. The monotonic `sequence` field proves ordering and
