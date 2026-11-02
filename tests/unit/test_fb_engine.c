@@ -8,7 +8,7 @@
  * Each test exercises exactly one behaviour with one ASSERT.
  *
  * Run:      ./build/tests/unit/test_fb_engine
- * Expected: "All 35 tests passed. (0 failed)"
+ * Expected: "All 37 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -137,6 +137,12 @@ extern void     embediq_osal__fail_next_mutex_create(uint32_t nth);
 #define STORM_NONE_THREADS       4u       /* lock-free reporters, and lock holders */
 #define STORM_NONE_EACH          200u
 #define STORM_NONE_REPORTS       (2u * STORM_NONE_THREADS * STORM_NONE_EACH)
+
+/* Stale owner reads */
+#define MSG_TEST_STALE_HOLD        0x143Cu  /* community range, unique to this file */
+#define MSG_TEST_STALE_PROBE       0x143Du
+#define FAULT_REASON_STALE_FIRST   0x71u
+#define FAULT_REASON_STALE_LATCHED 0x72u
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness. Every test joins the reporter and platform threads it
@@ -2467,6 +2473,247 @@ static void test_none_owner_storm_executes_everything(void)
            "NONE-owner storm: every report executed or counted; inbox empty after");
 }
 
+/* ---------------------------------------------------------------------------
+ * Stale owner reads. A reporter reads the owner when it accepts a reason and
+ * acts on it later; the hook parks one marked reporter in between.
+ * ------------------------------------------------------------------------- */
+
+static _Thread_local bool      tl_stale_marked = false;
+static embediq_osal_atomic32_t g_st_paused  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_st_release = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_st_go      = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_st_faults  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static EmbedIQ_FB_Handle_t     g_st_target  = NULL;
+static pthread_t               g_st_reporter;
+static pthread_t               g_st_fault_thread;
+
+static void st_reset_recorders(void)
+{
+    embediq_osal_atomic32_store(&g_st_paused, 0u);
+    embediq_osal_atomic32_store(&g_st_release, 0u);
+    embediq_osal_atomic32_store(&g_st_go, 0u);
+    embediq_osal_atomic32_store(&g_st_faults, 0u);
+}
+
+static void st_park_marked_reporter(void)
+{
+    if (!tl_stale_marked) return;
+    embediq_osal_atomic32_store(&g_st_paused, 1u);
+    (void)exec_wait(&g_st_release, GATE_MAX_MS);
+}
+
+static void st_fault_fn(EmbedIQ_FB_Handle_t h, void *d, uint32_t r)
+{
+    (void)h; (void)d; (void)r;
+    g_st_fault_thread = pthread_self();
+    (void)embediq_osal_atomic32_add(&g_st_faults, 1u);
+}
+
+static void *st_reporter(void *arg)
+{
+    (void)arg;
+    tl_stale_marked = true;
+    (void)exec_wait(&g_st_go, GATE_MAX_MS);
+    embediq_fb_report_fault(g_st_target, FAULT_REASON_STALE_FIRST);
+    return NULL;
+}
+
+/* ---------------------------------------------------------------------------
+ * test_stale_reporter_cannot_execute_after_failed_boot
+ * Phase 1: P's init_fn starts reporter R. Phase 2: A, then W (after A),
+ * whose init_fn lets R report on A — owner NONE, A is initialised — and
+ * waits until R is parked between the owner read and the lock. Phase 3 has
+ * a dependency cycle: boot fails, A's reason is counted (BOOT_ABORTED 1).
+ * A second reason is then latched under BOOT, and R resumes. A's fault_fn
+ * never runs: no FB code executes after a failed boot.
+ * ------------------------------------------------------------------------- */
+
+static void st_p_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)h; (void)d;
+    pthread_create(&g_st_reporter, NULL, st_reporter, NULL);
+}
+
+static void st_w_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)h; (void)d;
+    embediq_osal_atomic32_store(&g_st_go, 1u);
+    (void)exec_wait(&g_st_paused, GATE_MAX_MS);
+}
+
+static void test_stale_reporter_cannot_execute_after_failed_boot(void)
+{
+    fb_engine__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+    st_reset_recorders();
+
+    static const char *const k_w_dep[]   = { "st_a" };
+    static const char *const k_dep_y[]   = { "st_cycle_y" };
+    static const char *const k_dep_x[]   = { "st_cycle_x" };
+    static const EmbedIQ_FB_Config_t k_p = {
+        .name = "st_p", .boot_phase = EMBEDIQ_BOOT_PHASE_PLATFORM, .init_fn = st_p_init,
+    };
+    static const EmbedIQ_FB_Config_t k_a = {
+        .name = "st_a", .boot_phase = EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE,
+        .fault_fn = st_fault_fn,
+    };
+    static const EmbedIQ_FB_Config_t k_w = {
+        .name = "st_w", .boot_phase = EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE,
+        .init_fn = st_w_init, .depends_on = k_w_dep, .depends_count = 1,
+    };
+    static const EmbedIQ_FB_Config_t k_x = {
+        .name = "st_cycle_x", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .depends_on = k_dep_y, .depends_count = 1,
+    };
+    static const EmbedIQ_FB_Config_t k_y = {
+        .name = "st_cycle_y", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .depends_on = k_dep_x, .depends_count = 1,
+    };
+    (void)embediq_fb_register(&k_p);
+    g_st_target = embediq_fb_register(&k_a);
+    (void)embediq_fb_register(&k_w);
+    (void)embediq_fb_register(&k_x);
+    (void)embediq_fb_register(&k_y);
+
+    fb_engine__set_report_delay_hook(st_park_marked_reporter);
+    int rc = embediq_engine_boot();
+    bool parked = embediq_osal_atomic32_load(&g_st_paused) != 0u;
+    uint8_t ep  = embediq_engine_fb_ep(g_st_target);
+
+    embediq_fb_report_fault(g_st_target, FAULT_REASON_STALE_LATCHED);   /* owner BOOT */
+    uint32_t before_resume = embediq_osal_atomic32_load(&g_st_faults);
+    embediq_osal_atomic32_store(&g_st_release, 1u);
+    pthread_join(g_st_reporter, NULL);
+    fb_engine__set_report_delay_hook(NULL);
+    uint32_t faults = embediq_osal_atomic32_load(&g_st_faults);
+
+    uint32_t events = 0u, counted = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__ring_read(i, &e); i++) {
+        if (e.event_type == EMBEDIQ_OBS_EVT_FAULT && e.target_fb_id == ep
+            && e.state_or_flag == (uint8_t)EMBEDIQ_FAULT_BOOT_ABORTED) {
+            events++;
+            counted = e.msg_id;
+        }
+    }
+    printf("      boot=%d reporter_parked_before_lock=%d boot_aborted_events=%u counted=%u "
+           "fault_fn_before_resume=%u fault_fn_after_resume=%u\n", rc, (int)parked,
+           (unsigned)events, (unsigned)counted, (unsigned)before_resume, (unsigned)faults);
+    ASSERT(rc != 0 && parked && events == 1u && counted == 1u && faults == 0u,
+           "stale reporter after a failed boot: no fault_fn runs");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_stale_reporter_yields_to_new_dispatch_owner
+ * A subscribes. After boot (owner NONE) a helper thread H holds A's lock in
+ * a handler; reporter R reads NONE and parks; dispatch_boot makes A's
+ * dispatch thread the owner (it then waits for A's lock). R and H resume —
+ * both took or wait for the lock under the old owner. A's fault_fn runs
+ * exactly once, on the dispatch thread (identified by a later dispatch),
+ * never on R or H.
+ * ------------------------------------------------------------------------- */
+
+static embediq_osal_atomic32_t g_sy_in_hold  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sy_gate     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sy_probe    = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static pthread_t               g_sy_dispatch_thread;
+
+static void sy_hold_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *d, void *s)
+{
+    (void)fb; (void)msg; (void)d; (void)s;
+    embediq_osal_atomic32_store(&g_sy_in_hold, 1u);
+    (void)exec_wait(&g_sy_gate, GATE_MAX_MS);
+}
+
+static void sy_probe_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *d, void *s)
+{
+    (void)fb; (void)msg; (void)d; (void)s;
+    g_sy_dispatch_thread = pthread_self();
+    embediq_osal_atomic32_store(&g_sy_probe, 1u);
+}
+
+EMBEDIQ_SUBS(g_sy_hold_subs,  MSG_TEST_STALE_HOLD);
+EMBEDIQ_SUBS(g_sy_probe_subs, MSG_TEST_STALE_PROBE);
+EMBEDIQ_SUBS(g_sy_all_subs,   MSG_TEST_STALE_HOLD, MSG_TEST_STALE_PROBE);
+
+static const EmbedIQ_SubFn_Config_t g_sy_hold_subfn = {
+    .name = "sy_hold", .init_order = 0,
+    .subscriptions = g_sy_hold_subs, .subscription_count = 1,
+    .run_fn = sy_hold_run_fn,
+};
+static const EmbedIQ_SubFn_Config_t g_sy_probe_subfn = {
+    .name = "sy_probe", .init_order = 1,
+    .subscriptions = g_sy_probe_subs, .subscription_count = 1,
+    .run_fn = sy_probe_run_fn,
+};
+
+static void sy_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)d;
+    embediq_subfn_register(h, &g_sy_hold_subfn);
+    embediq_subfn_register(h, &g_sy_probe_subfn);
+}
+
+static void *sy_holder(void *h)
+{
+    uint8_t payload[EMBEDIQ_MSG_MAX_PAYLOAD];
+    memset(payload, 0, sizeof(payload));
+    fb_engine__deliver_msg((EmbedIQ_FB_Handle_t)h, MSG_TEST_STALE_HOLD, payload);
+    return NULL;
+}
+
+static void test_stale_reporter_yields_to_new_dispatch_owner(void)
+{
+    alarm(SHUTDOWN_HANG_GUARD_S * 4u);
+    fb_engine__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+    st_reset_recorders();
+    embediq_osal_atomic32_store(&g_sy_in_hold, 0u);
+    embediq_osal_atomic32_store(&g_sy_gate, 0u);
+    embediq_osal_atomic32_store(&g_sy_probe, 0u);
+
+    static const EmbedIQ_FB_Config_t k_a = {
+        .name = "sy_a", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+        .init_fn = sy_init, .fault_fn = st_fault_fn,
+        .subscriptions = g_sy_all_subs, .subscription_count = 2,
+    };
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&k_sd_src);
+    g_st_target = embediq_fb_register(&k_a);
+    embediq_engine_boot();
+
+    pthread_t holder;
+    pthread_create(&holder, NULL, sy_holder, g_st_target);
+    bool held = exec_wait(&g_sy_in_hold, GATE_MAX_MS);
+
+    fb_engine__set_report_delay_hook(st_park_marked_reporter);
+    pthread_create(&g_st_reporter, NULL, st_reporter, NULL);
+    embediq_osal_atomic32_store(&g_st_go, 1u);
+    bool parked = exec_wait(&g_st_paused, GATE_MAX_MS);   /* read owner NONE */
+
+    embediq_engine_dispatch_boot();                         /* owner DISPATCH */
+    embediq_osal_atomic32_store(&g_st_release, 1u);
+    embediq_osal_atomic32_store(&g_sy_gate, 1u);
+    pthread_join(g_st_reporter, NULL);
+    pthread_join(holder, NULL);
+    fb_engine__set_report_delay_hook(NULL);
+
+    bool ran = cx_wait_count(&g_st_faults, 1u, GATE_MAX_MS);
+    sd_publish(src, MSG_TEST_STALE_PROBE, (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL);
+    bool probed = exec_wait(&g_sy_probe, GATE_MAX_MS);
+    (void)embediq_engine_dispatch_shutdown();
+    alarm(0u);
+
+    uint32_t faults  = embediq_osal_atomic32_load(&g_st_faults);
+    bool on_dispatch = ran && probed && pthread_equal(g_st_fault_thread, g_sy_dispatch_thread);
+    bool on_reporter = ran && pthread_equal(g_st_fault_thread, g_st_reporter);
+    bool on_holder   = ran && pthread_equal(g_st_fault_thread, holder);
+    printf("      held=%d reporter_parked=%d fault_fn_runs=%u on_dispatch_thread=%d "
+           "on_stale_reporter=%d on_stale_holder=%d\n", (int)held, (int)parked,
+           (unsigned)faults, (int)on_dispatch, (int)on_reporter, (int)on_holder);
+    ASSERT(held && parked && faults == 1u && on_dispatch,
+           "stale reporter across dispatch_boot: the dispatch thread executes");
+}
+
 int main(void)
 {
     test_fb_register_stores_config();
@@ -2501,6 +2748,8 @@ int main(void)
     test_self_report_chain_executes_to_the_end();
     test_reason_refused_during_recheck_pass_is_executed();
     test_none_owner_storm_executes_everything();
+    test_stale_reporter_cannot_execute_after_failed_boot();
+    test_stale_reporter_yields_to_new_dispatch_owner();
     test_delayed_reporter_fault_is_executed_before_shutdown_returns();
     test_dispatch_shutdown_returns_under_reporter_storm();   /* alarm-bounded */
     test_cross_faults_between_dispatch_fbs_with_full_queues_complete();   /* last: alarm-bounded */
