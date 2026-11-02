@@ -11,10 +11,15 @@
  * Trampoline pattern: each slot has its own set of static function wrappers
  * because ops table function pointers carry no context/slot parameter.
  *
- * Thread safety: one pthread_mutex_t per slot. All public functions
- * lock the slot mutex. connect_async() spawns a detached pthread that
- * holds the mutex during the handshake and releases it before calling
- * the callback.
+ * Thread safety: one pthread_mutex_t per slot, only ever unlocked by the
+ * thread that locked it. All public functions lock the slot mutex.
+ * connect_async() sets `connecting` under the mutex, releases it and spawns a
+ * detached connect thread. While `connecting` is true the connect thread owns
+ * the slot's mbedTLS and socket state exclusively, without holding the mutex;
+ * every other op checks `connecting` under the mutex and returns
+ * EMBEDIQ_TLS_ERR_BUSY. The connect thread publishes its result and clears
+ * `connecting` under the mutex, unlocks, then calls on_complete (mutex not
+ * held).
  *
  * Phase 3 note: FreeRTOS implementation uses mbedTLS with OSAL primitives
  * instead of pthreads. The ops table contract is identical.
@@ -67,6 +72,7 @@ typedef struct {
     bool                     configured;
     bool                     connected;
     bool                     has_client_cert;
+    bool                     connecting;   /* connect_async in flight; under mutex */
 } tls_slot_t;
 
 static tls_slot_t g_slots[EMBEDIQ_TLS_MAX_CONNECTIONS];
@@ -115,8 +121,19 @@ static embediq_tls_err_t map_mbedtls_handshake_err(tls_slot_t *s, int rc)
 
 /* ---------------------------------------------------------------------------
  * Connect thread — spawned by connect_async()
- * Holds slot mutex during handshake, releases before calling callback.
+ * Owns the slot exclusively while s->connecting is true and does its work
+ * WITHOUT the slot mutex. At the end it takes the mutex, publishes the result
+ * and clears `connecting`, unlocks, then calls on_complete (mutex not held).
  * ------------------------------------------------------------------------- */
+
+static void connect_finish(tls_slot_t *s, const connect_args_t *a, embediq_tls_err_t result)
+{
+    pthread_mutex_lock(&s->mutex);
+    s->connected  = (result == EMBEDIQ_TLS_OK);
+    s->connecting = false;
+    pthread_mutex_unlock(&s->mutex);
+    a->on_complete(result, a->user_ctx);
+}
 
 static void *connect_thread(void *arg)
 {
@@ -134,8 +151,7 @@ static void *connect_thread(void *arg)
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_IO);
         result = (rc == MBEDTLS_ERR_NET_UNKNOWN_HOST) ?
                  EMBEDIQ_TLS_ERR_DNS : EMBEDIQ_TLS_ERR_TCP;
-        pthread_mutex_unlock(&s->mutex);
-        a->on_complete(result, a->user_ctx);
+        connect_finish(s, a, result);
         return NULL;
     }
 
@@ -145,8 +161,7 @@ static void *connect_thread(void *arg)
     if (rc != 0) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_IO);
         mbedtls_net_free(&s->net);
-        pthread_mutex_unlock(&s->mutex);
-        a->on_complete(EMBEDIQ_TLS_ERR_HANDSHAKE, a->user_ctx);
+        connect_finish(s, a, EMBEDIQ_TLS_ERR_HANDSHAKE);
         return NULL;
     }
 
@@ -156,8 +171,7 @@ static void *connect_thread(void *arg)
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
         mbedtls_ssl_free(&s->ssl);
         mbedtls_net_free(&s->net);
-        pthread_mutex_unlock(&s->mutex);
-        a->on_complete(EMBEDIQ_TLS_ERR_HANDSHAKE, a->user_ctx);
+        connect_finish(s, a, EMBEDIQ_TLS_ERR_HANDSHAKE);
         return NULL;
     }
 
@@ -176,14 +190,11 @@ static void *connect_thread(void *arg)
         result = map_mbedtls_handshake_err(s, rc);
         mbedtls_ssl_free(&s->ssl);
         mbedtls_net_free(&s->net);
-        pthread_mutex_unlock(&s->mutex);
-        a->on_complete(result, a->user_ctx);
+        connect_finish(s, a, result);
         return NULL;
     }
 
-    s->connected = true;
-    pthread_mutex_unlock(&s->mutex);
-    a->on_complete(EMBEDIQ_TLS_OK, a->user_ctx);
+    connect_finish(s, a, EMBEDIQ_TLS_OK);
     return NULL;
 }
 
@@ -200,6 +211,11 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
     int         rc;
 
     pthread_mutex_lock(&s->mutex);
+
+    if (s->connecting) {
+        pthread_mutex_unlock(&s->mutex);
+        return EMBEDIQ_TLS_ERR_BUSY;   /* connect thread owns the slot */
+    }
 
     /* Free any previous configuration */
     slot_free_certs(s);
@@ -300,13 +316,19 @@ static embediq_tls_err_t slot_connect_async(uint8_t                   idx,
 
     pthread_mutex_lock(&s->mutex);
 
+    if (s->connecting) {
+        pthread_mutex_unlock(&s->mutex);
+        return EMBEDIQ_TLS_ERR_BUSY;
+    }
     if (!s->configured) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
         pthread_mutex_unlock(&s->mutex);
         return EMBEDIQ_TLS_ERR_NOT_CONFIGURED;
     }
 
-    /* Prepare connect args — mutex stays LOCKED until connect_thread releases it */
+    /* Take ownership of the slot for the connect thread, then release the
+     * mutex: it is only ever unlocked by the thread that locked it. */
+    s->connecting = true;
     connect_args_t *a = &g_connect_args[idx];
     a->slot_idx   = idx;
     a->port       = port;
@@ -319,17 +341,18 @@ static embediq_tls_err_t slot_connect_async(uint8_t                   idx,
 
     /* Re-init net context for new connection */
     mbedtls_net_init(&s->net);
+    pthread_mutex_unlock(&s->mutex);
 
     pthread_t tid;
     int rc = pthread_create(&tid, NULL, connect_thread, a);
     if (rc != 0) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_IO);
+        pthread_mutex_lock(&s->mutex);
+        s->connecting = false;
         pthread_mutex_unlock(&s->mutex);
         return EMBEDIQ_TLS_ERR_NO_RESOURCES;
     }
     pthread_detach(tid);
-
-    /* Mutex is now held by connect_thread — it releases before calling callback */
     return EMBEDIQ_TLS_OK;
 }
 
@@ -338,6 +361,10 @@ static embediq_tls_err_t slot_disconnect(uint8_t idx)
     tls_slot_t *s = &g_slots[idx];
     pthread_mutex_lock(&s->mutex);
 
+    if (s->connecting) {
+        pthread_mutex_unlock(&s->mutex);
+        return EMBEDIQ_TLS_ERR_BUSY;
+    }
     if (s->connected) {
         mbedtls_ssl_close_notify(&s->ssl);  /* best-effort — ignore error */
         mbedtls_ssl_free(&s->ssl);
@@ -354,6 +381,10 @@ static embediq_tls_err_t slot_send(uint8_t idx, const uint8_t *data, uint16_t le
     tls_slot_t *s = &g_slots[idx];
     pthread_mutex_lock(&s->mutex);
 
+    if (s->connecting) {
+        pthread_mutex_unlock(&s->mutex);
+        return EMBEDIQ_TLS_ERR_BUSY;
+    }
     if (!s->connected) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
         pthread_mutex_unlock(&s->mutex);
@@ -384,6 +415,10 @@ static int32_t slot_recv(uint8_t idx, uint8_t *buf, uint16_t len, uint32_t timeo
     tls_slot_t *s = &g_slots[idx];
     pthread_mutex_lock(&s->mutex);
 
+    if (s->connecting) {
+        pthread_mutex_unlock(&s->mutex);
+        return (int32_t)EMBEDIQ_TLS_ERR_BUSY;
+    }
     if (!s->connected) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
         pthread_mutex_unlock(&s->mutex);
@@ -498,6 +533,7 @@ static void pool_init(void)
         g_slots[i].configured      = false;
         g_slots[i].connected       = false;
         g_slots[i].has_client_cert = false;
+        g_slots[i].connecting      = false;
     }
     g_pool_initialised = true;
 }

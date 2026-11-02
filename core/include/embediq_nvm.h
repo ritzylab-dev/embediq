@@ -8,6 +8,20 @@
  * All operations are synchronous from the caller's perspective.
  * fb_nvm owns internal write buffering and flush scheduling.
  *
+ * Concurrency — every function is callable from any thread. fb_nvm uses two
+ * locks with one fixed order (persist lock, then table lock):
+ *   - The table lock guards the key table. It is held only for the table
+ *     access itself and, during a persist, for one memcpy of the table into
+ *     the persist snapshot — microseconds, never across flash I/O or an
+ *     Observatory emit.
+ *   - The persist lock serialises flash writes. Writers take it after
+ *     releasing the table lock; a writer whose change is already on flash
+ *     (a later writer persisted a newer table) skips its write, so an older
+ *     table never overwrites a newer one.
+ * embediq_nvm_get() takes only the table lock: it never waits for a persist
+ * in flight. Writes return once their change (or a newer table) is on flash
+ * and may wait for another writer's persist.
+ *
  * Constraints (v1):
  *   - Keys are NUL-terminated strings up to EMBEDIQ_NVM_KEY_MAX bytes.
  *   - Values are raw byte arrays up to EMBEDIQ_NVM_VAL_MAX bytes.
@@ -58,6 +72,8 @@ extern "C" {
  * @param val   Pointer to value bytes.
  * @param len   Number of bytes in val; must be <= EMBEDIQ_NVM_VAL_MAX.
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR on invalid args or store error.
+ *
+ * Calling context: any thread. May wait for a persist in flight.
  */
 embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len);
 
@@ -68,12 +84,17 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len);
  * @param val   Output buffer of at least *len bytes.
  * @param len   In: capacity of val buffer. Out: actual bytes written.
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if key not found or buffer too small.
+ *
+ * Calling context: any thread. Never waits for flash I/O or a persist in
+ * flight; may wait for the microsecond-scale table lock.
  */
 embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len);
 
 /**
  * Remove the entry for the given key.
  * If the key does not exist, returns EMBEDIQ_OK (idempotent).
+ *
+ * Calling context: any thread. May wait for a persist in flight.
  */
 embediq_err_t embediq_nvm_delete(const char *key);
 
@@ -84,6 +105,8 @@ embediq_err_t embediq_nvm_delete(const char *key);
  * This is the ONLY authorized write path for CFG_MUT_FACTORY keys at runtime.
  * IEC 62443 commissioning immutability: operator cannot overwrite after provisioning.
  * fb_provisioning calls this at UNMANUFACTURED -> MANUFACTURED transition only.
+ *
+ * Calling context: any thread. May wait for a persist in flight.
  */
 embediq_err_t embediq_nvm_provision(const char *key, const char *value);
 
@@ -93,6 +116,9 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value);
  * (see docs/architecture/lifecycle.md — OTA shutdown contract).
  *
  * @return EMBEDIQ_OK if all data is safely persisted, EMBEDIQ_ERR on I/O error.
+ *
+ * Calling context: any thread. Always writes the current table; may wait for
+ * a persist in flight.
  */
 embediq_err_t embediq_nvm_flush(void);
 
@@ -101,6 +127,8 @@ embediq_err_t embediq_nvm_flush(void);
  * Typically called during factory reset only.
  *
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR on store error.
+ *
+ * Calling context: any thread. May wait for a persist in flight.
  */
 embediq_err_t embediq_nvm_reset(void);
 

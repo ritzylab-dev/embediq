@@ -11,14 +11,16 @@
  *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_OVERFLOW, ...) if ring buffer full
  *   If ANY missed:
  *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, ...)
- *     -> embediq_fb_report_fault(g_wdg_fb, WDG_REASON_MISSED_CHECKIN)
+ *     -> embediq_fb_report_fault(<missed FB>, WDG_REASON_MISSED_CHECKIN)
+ *        — the missed check-in is the monitored FB's fault, not the watchdog's
  *     -> publish MSG_WDG_MISSED_CHECKIN with the missed FB's endpoint index
  *
  * On startup the FB publishes MSG_WDG_RESET_REASON.  On a host build the
  * reset reason is always RESET_NORMAL (0).
  *
  * Slot capacity: EMBEDIQ_MAX_ENDPOINTS entries (static, R-02).
- * All slot access is protected by a single mutex.
+ * All slot access is protected by a single mutex. The monitor scan decides
+ * under the mutex and acts (emit, fault report, publish) after releasing it.
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE (2)
  *
@@ -72,6 +74,12 @@ typedef struct {
     bool                active;
 } wdg_slot_t;
 
+/* One missed check-in, found under the mutex and acted on after unlock. */
+typedef struct {
+    EmbedIQ_FB_Handle_t handle;
+    uint32_t            timeout_ms;
+} wdg_miss_t;
+
 /* ---------------------------------------------------------------------------
  * Module state (static, R-02)
  * ------------------------------------------------------------------------- */
@@ -91,14 +99,29 @@ static uint32_t            g_fault_count = 0u;
 /* ---------------------------------------------------------------------------
  * Internal: one monitor scan cycle
  * Called by the background task every 100 ms, and by wdg__trigger_check().
+ *
+ * Calling context: the monitor task (a platform thread), or the test thread
+ * via wdg__trigger_check(). Two phases:
+ *   1. Under g_mutex: find every slot past its deadline and copy it into a
+ *      stack array (WDG_MAX_SLOTS entries).
+ *   2. After unlocking: emit, report each miss as the monitored FB's fault and
+ *      publish MSG_WDG_MISSED_CHECKIN.
+ * Nothing in phase 2 runs with g_mutex held. A HIGH publish into a full queue
+ * blocks only this scan, never a check-in, and a monitored FB whose fault_fn
+ * calls embediq_wdg_checkin() cannot deadlock against the monitor. The fault
+ * report runs the monitored FB's fault_fn under its execution lock: on its
+ * dispatch thread when it has one (a HIGH message), otherwise inline here
+ * after any in-flight init_fn/run_fn/fault_fn of that FB.
  * ------------------------------------------------------------------------- */
 
 static void monitor_scan(void)
 {
-    uint32_t now_us = embediq_osal_time_us();
-    bool     all_ok = true;
+    wdg_miss_t misses[WDG_MAX_SLOTS];
+    uint8_t    n_miss = 0u;
+    uint32_t   now_us = embediq_osal_time_us();
 
-    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);   /* block forever */
+    /* Phase 1 — decide under the lock. */
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return;
 
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (!g_slots[i].active) continue;
@@ -109,41 +132,47 @@ static void monitor_scan(void)
         uint32_t timeout_us = g_slots[i].timeout_ms * 1000u;
 
         if (elapsed_us > timeout_us) {
-            all_ok = false;
-            uint8_t ep = embediq_engine_fb_ep(g_slots[i].handle);
-
-            /* Observatory fault event */
-            embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,
-                             ep, 0xFFu, 0u, MSG_WDG_MISSED_CHECKIN);
-
-            /* Report fault on watchdog FB (if fully initialised) */
-            if (g_wdg_fb) {
-                embediq_fb_report_fault(g_wdg_fb, WDG_REASON_MISSED_CHECKIN);
-            }
-
-            /* Publish MSG_WDG_MISSED_CHECKIN (payload byte 0 = missed ep).
-             * F5: HIGH publish while holding g_mutex — move after unlock. */
-            if (g_wdg_fb) {
-                EmbedIQ_Msg_t m;
-                memset(&m, 0, sizeof(m));
-                m.msg_id      = MSG_WDG_MISSED_CHECKIN;
-                m.priority    = EMBEDIQ_MSG_PRIORITY_HIGH;
-                m.payload[0]  = ep;
-                m.payload_len = 1u;
-                embediq_publish(g_wdg_fb, &m);
-            }
-
+            misses[n_miss].handle     = g_slots[i].handle;
+            misses[n_miss].timeout_ms = g_slots[i].timeout_ms;
+            n_miss++;
 #ifdef EMBEDIQ_PLATFORM_HOST
             g_fault_count++;
-            embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,
-                             ep, 0xFFu, g_slots[i].timeout_ms,
-                             MSG_WDG_MISSED_CHECKIN);
 #endif
         }
     }
 
     embediq_osal_mutex_unlock(g_mutex);
 
+    /* Phase 2 — act after unlock. */
+    for (uint8_t i = 0u; i < n_miss; i++) {
+        uint8_t ep = embediq_engine_fb_ep(misses[i].handle);
+
+        /* Observatory fault event */
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,
+                         ep, 0xFFu, 0u, MSG_WDG_MISSED_CHECKIN);
+
+        /* The missed check-in is the monitored FB's fault. */
+        embediq_fb_report_fault(misses[i].handle, WDG_REASON_MISSED_CHECKIN);
+
+        /* Publish MSG_WDG_MISSED_CHECKIN (payload byte 0 = missed ep). */
+        if (g_wdg_fb) {
+            EmbedIQ_Msg_t m;
+            memset(&m, 0, sizeof(m));
+            m.msg_id      = MSG_WDG_MISSED_CHECKIN;
+            m.priority    = EMBEDIQ_MSG_PRIORITY_HIGH;
+            m.payload[0]  = ep;
+            m.payload_len = 1u;
+            embediq_publish(g_wdg_fb, &m);
+        }
+
+#ifdef EMBEDIQ_PLATFORM_HOST
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT,
+                         ep, 0xFFu, misses[i].timeout_ms,
+                         MSG_WDG_MISSED_CHECKIN);
+#endif
+    }
+
+    bool all_ok = n_miss == 0u;
     if (all_ok) {
         hal_wdg_kick();
         g_kick_seq++;
@@ -165,6 +194,9 @@ static void monitor_scan(void)
 
 /* ---------------------------------------------------------------------------
  * Background monitor task
+ *
+ * Calling context: platform thread created by wdg_init(). Runs one two-phase
+ * monitor_scan() every 100 ms until g_running is cleared.
  * ------------------------------------------------------------------------- */
 
 static void monitor_task(void *arg)

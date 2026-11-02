@@ -47,7 +47,10 @@ extern "C" {
 /* ---------------------------------------------------------------------------
  * Typed getters — return stored value, or default_val if the key is absent,
  * the stored length doesn't match the expected width, or NVM returned an
- * error. Never block. Never allocate.
+ * error. Never block on I/O or on a persist in flight. May wait for a
+ * microsecond-scale table lock. Never allocate.
+ *
+ * Calling context: any thread.
  * ------------------------------------------------------------------------- */
 
 float    embediq_cfg_get_float(const char *key, float    default_val);
@@ -69,6 +72,9 @@ size_t   embediq_cfg_get_str  (const char *key, char *buf,
 /* ---------------------------------------------------------------------------
  * Typed setters — persist the value under `key`. Return true on success,
  * false on NVM error, over-long key, or store full.
+ *
+ * Calling context: any thread. A setter writes to flash and may wait for
+ * another writer's persist in flight (see embediq_nvm.h).
  * ------------------------------------------------------------------------- */
 
 bool     embediq_cfg_set_float(const char *key, float    value);
@@ -80,6 +86,8 @@ bool     embediq_cfg_set_str  (const char *key, const char *value);
 /**
  * Remove the entry for the given key. Returns true on success or if the
  * key was already absent (fb_nvm makes delete idempotent).
+ *
+ * Calling context: any thread. May wait for a persist in flight.
  */
 bool     embediq_cfg_delete   (const char *key);
 

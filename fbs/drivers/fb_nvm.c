@@ -20,6 +20,18 @@
  *     Single-call write — HAL atomicity contract (PR-A) guarantees all-or-nothing.
  *   The HAL owns where it's stored.  The FB owns the blob format and schema.
  *
+ * Locking — two locks, one fixed order (persist lock, then table lock):
+ *   g_mutex          table lock: g_nvm[] and g_generation. Held only for
+ *                    table access and, inside a persist, for the memcpy of the
+ *                    table into the snapshot. Never held across flash I/O or
+ *                    an Observatory emit, and never held while taking the
+ *                    persist lock — so readers never wait for a persist.
+ *   g_persist_mutex  persist lock: s_persist_buf, g_persisted_gen and the
+ *                    hal_flash_* calls. Taken by writers and by nvm_load().
+ *   Every mutation bumps g_generation under the table lock. A writer whose
+ *   generation is already on flash (a later writer persisted a newer table)
+ *   skips its flash write, so an older table never overwrites a newer one.
+ *
  * Boot phase: EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE (2)
  *
  * Public API (matches embediq_nvm.h contract exactly):
@@ -31,7 +43,7 @@
  *   embediq_nvm_reset()            — wipe all entries
  *
  * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
- *   nvm__init_state()   — clear cache + create mutex
+ *   nvm__init_state()   — clear cache + create both locks
  *   nvm__load_state()   — trigger nvm_load() (simulates power-on reload)
  *   nvm__set_persist_delay_ms() — slow every persist (concurrency tests)
  *
@@ -116,12 +128,18 @@ typedef struct {
  * ------------------------------------------------------------------------- */
 
 static nvm_entry_t      g_nvm[NVM_MAX_KEYS];
-static EmbedIQ_Mutex_t *g_mutex       = NULL;
-static EmbedIQ_FB_Handle_t g_nvm_fb   = NULL;
+static EmbedIQ_Mutex_t *g_mutex         = NULL;   /* table lock (see header) */
+static EmbedIQ_Mutex_t *g_persist_mutex = NULL;   /* persist lock (see header) */
+static EmbedIQ_FB_Handle_t g_nvm_fb     = NULL;
+
+/* Generation of the table: bumped by every mutation. Under g_mutex. */
+static uint32_t g_generation    = 0u;
+/* Generation of the table last written to flash. Under g_persist_mutex. */
+static uint32_t g_persisted_gen = 0u;
 
 /**
  * Composite persist buffer — header + payload in one allocation.
- * Static (R-02: no malloc). Sized at compile time.
+ * Static (R-02: no malloc). Sized at compile time. Owned by g_persist_mutex.
  * Used by both nvm_persist() (write) and nvm_load() (read) to ensure
  * a single hal_flash_write() call — the HAL's atomicity guarantee covers
  * the whole blob as one unit.
@@ -165,8 +183,35 @@ static uint8_t find_free_slot(void)
  * Persistence: binary layout via HAL flash
  * ------------------------------------------------------------------------- */
 
-static void nvm_persist(void)
+/* Load-path outcomes, emitted as EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID state. */
+#define NVM_LOAD_OK          0xFFu   /* no event */
+#define NVM_LOAD_MAGIC_FAIL  0u
+#define NVM_LOAD_CRC_FAIL    1u
+
+/**
+ * Write the table to flash unless a table at least as new as `gen` is already
+ * there (`force` writes regardless — used by embediq_nvm_flush()).
+ * Calling context: any thread; the caller holds neither lock. Takes the
+ * persist lock, then the table lock only for the snapshot memcpy.
+ */
+static void nvm_persist(uint32_t gen, bool force)
 {
+    if (embediq_osal_mutex_lock(g_persist_mutex, UINT32_MAX) != EMBEDIQ_OK) return;
+
+    if (!force && (int32_t)(gen - g_persisted_gen) <= 0) {
+        embediq_osal_mutex_unlock(g_persist_mutex);   /* newer table already on flash */
+        return;
+    }
+
+    /* Snapshot the live table — the only work done under the table lock. */
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) {
+        embediq_osal_mutex_unlock(g_persist_mutex);
+        return;
+    }
+    memcpy(s_persist_buf.entries, g_nvm, sizeof(g_nvm));
+    uint32_t snap_gen = g_generation;
+    embediq_osal_mutex_unlock(g_mutex);
+
     /* Build header. */
     s_persist_buf.hdr.magic[0]       = k_nvm_blob_magic[0];
     s_persist_buf.hdr.magic[1]       = k_nvm_blob_magic[1];
@@ -180,8 +225,7 @@ static void nvm_persist(void)
     s_persist_buf.hdr.reserved[2]    = 0u;
     s_persist_buf.hdr.reserved[3]    = 0u;
 
-    /* Copy live cache into payload and compute CRC over payload only. */
-    memcpy(s_persist_buf.entries, g_nvm, sizeof(g_nvm));
+    /* CRC over payload only. */
     s_persist_buf.hdr.crc32 = embediq_crc32(s_persist_buf.entries,
                                               sizeof(s_persist_buf.entries));
 
@@ -192,41 +236,58 @@ static void nvm_persist(void)
 #endif
 
     /* Single atomic write — HAL atomicity contract (PR-A: hal_flash.h) ensures
-     * either the full blob lands or nothing changes. */
-    hal_flash_write(0u, &s_persist_buf, sizeof(s_persist_buf));
-}
-
-static void nvm_load(void)
-{
-    /* Read the full blob (header + payload) in a single call. */
-    int rc = hal_flash_read(0u, &s_persist_buf, sizeof(s_persist_buf));
-    if (rc != HAL_OK) {
-        /* Flash unreadable — start with defaults (empty store). */
-        memset(g_nvm, 0, sizeof(g_nvm));
-        return;
+     * either the full blob lands or nothing changes. On failure the generation
+     * stays behind, so the next write retries. */
+    if (hal_flash_write(0u, &s_persist_buf, sizeof(s_persist_buf)) == HAL_OK) {
+        g_persisted_gen = snap_gen;
     }
 
+    embediq_osal_mutex_unlock(g_persist_mutex);
+}
+
+/**
+ * Load the table from flash (boot, or a simulated power-on in tests).
+ * Calling context: any thread; takes the persist lock, then the table lock.
+ * Observatory events are emitted after both locks are released.
+ */
+static void nvm_load(void)
+{
+    if (!g_mutex || !g_persist_mutex) return;   /* APIs report EMBEDIQ_ERR */
+    if (embediq_osal_mutex_lock(g_persist_mutex, UINT32_MAX) != EMBEDIQ_OK) return;
+
+    /* Read the full blob (header + payload) in a single call. */
+    uint8_t outcome = NVM_LOAD_OK;
+    bool    valid   = hal_flash_read(0u, &s_persist_buf, sizeof(s_persist_buf)) == HAL_OK;
+
     /* Verify magic — catches erased flash, pre-PR-D blobs, and corrupt files. */
-    if (memcmp(s_persist_buf.hdr.magic, k_nvm_blob_magic,
-               sizeof(k_nvm_blob_magic)) != 0) {
-        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
-                               0u, 0u, 0u, 0u);   /* state 0 = magic_fail */
-        memset(g_nvm, 0, sizeof(g_nvm));
-        return;
+    if (valid && memcmp(s_persist_buf.hdr.magic, k_nvm_blob_magic,
+                        sizeof(k_nvm_blob_magic)) != 0) {
+        outcome = NVM_LOAD_MAGIC_FAIL;
+        valid   = false;
     }
 
     /* Verify CRC-32/ISO-HDLC over the payload. */
-    uint32_t computed = embediq_crc32(s_persist_buf.entries,
-                                       sizeof(s_persist_buf.entries));
-    if (computed != s_persist_buf.hdr.crc32) {
-        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
-                               0u, 0u, 1u, 0u);   /* state 1 = crc_fail */
-        memset(g_nvm, 0, sizeof(g_nvm));
-        return;
+    if (valid && embediq_crc32(s_persist_buf.entries, sizeof(s_persist_buf.entries))
+                 != s_persist_buf.hdr.crc32) {
+        outcome = NVM_LOAD_CRC_FAIL;
+        valid   = false;
     }
 
-    /* Blob valid — copy payload to live cache. */
-    memcpy(g_nvm, s_persist_buf.entries, sizeof(g_nvm));
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) == EMBEDIQ_OK) {
+        if (valid) {
+            memcpy(g_nvm, s_persist_buf.entries, sizeof(g_nvm));   /* blob valid */
+        } else {
+            memset(g_nvm, 0, sizeof(g_nvm));   /* start with defaults (empty store) */
+        }
+        g_persisted_gen = g_generation;   /* the table now matches what boot saw */
+        embediq_osal_mutex_unlock(g_mutex);
+    }
+    embediq_osal_mutex_unlock(g_persist_mutex);
+
+    if (outcome != NVM_LOAD_OK) {
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
+                               0u, 0u, outcome, 0u);   /* 0 = magic_fail, 1 = crc_fail */
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -240,6 +301,9 @@ static void nvm_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 
     if (!g_mutex) {
         g_mutex = embediq_osal_mutex_create();
+    }
+    if (!g_persist_mutex) {
+        g_persist_mutex = embediq_osal_mutex_create();
     }
 
     nvm_load();
@@ -276,13 +340,12 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
     if (!key || !val)                return EMBEDIQ_ERR;
     if (len > NVM_VAL_SIZE)          return EMBEDIQ_ERR;
     if (strlen(key) >= NVM_KEY_SIZE) return EMBEDIQ_ERR;
-    if (!g_mutex)                    return EMBEDIQ_ERR;
-
-    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
+    if (!g_mutex || !g_persist_mutex) return EMBEDIQ_ERR;
 
     /* Mutability guard — factory-class keys are immutable at runtime.
      * IEC 62443 commissioning: fleet push cannot overwrite factory provisioning.
-     * Silently reject — emit Observatory event for audit trail. */
+     * Silently reject — emit Observatory event for audit trail. The schema is
+     * static, so the check and the emit need no lock. */
     {
         const cfg_schema_entry_t *schema = cfg_schema_lookup(key);
         if (schema != NULL && schema->mutability == CFG_MUT_FACTORY) {
@@ -291,10 +354,11 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
                                    0u, 0u,
                                    (uint8_t)CFG_MUT_FACTORY,
                                    key_crc);
-            embediq_osal_mutex_unlock(g_mutex);
             return EMBEDIQ_ERR;
         }
     }
+
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
@@ -311,10 +375,10 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
     memcpy(g_nvm[slot].val, val, (size_t)len);
     g_nvm[slot].val_len   = (uint16_t)len;
     g_nvm[slot].schema_id = 0u;
-
-    nvm_persist();
+    uint32_t gen = ++g_generation;
 
     embediq_osal_mutex_unlock(g_mutex);
+    nvm_persist(gen, false);
     return EMBEDIQ_OK;
 }
 
@@ -335,7 +399,7 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value)
         EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 1u, 0u);
         return EMBEDIQ_ERR;
     }
-    if (!g_mutex) {
+    if (!g_mutex || !g_persist_mutex) {
         EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 2u, 0u);
         return EMBEDIQ_ERR;
     }
@@ -354,8 +418,8 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value)
     if (slot == NVM_MAX_KEYS) {
         slot = find_free_slot();
         if (slot == NVM_MAX_KEYS) {
-            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 4u, 0u);
             embediq_osal_mutex_unlock(g_mutex);
+            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 4u, 0u);
             return EMBEDIQ_ERR;   /* store full */
         }
         strncpy(g_nvm[slot].key, key, NVM_KEY_SIZE - 1u);
@@ -366,10 +430,10 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value)
     memcpy(g_nvm[slot].val, value, vlen);
     g_nvm[slot].val_len   = (uint16_t)vlen;
     g_nvm[slot].schema_id = 0u;
-
-    nvm_persist();
+    uint32_t gen = ++g_generation;
 
     embediq_osal_mutex_unlock(g_mutex);
+    nvm_persist(gen, false);
     return EMBEDIQ_OK;
 }
 
@@ -399,8 +463,8 @@ embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len)
 
 embediq_err_t embediq_nvm_delete(const char *key)
 {
-    if (!key)     return EMBEDIQ_ERR;
-    if (!g_mutex) return EMBEDIQ_ERR;
+    if (!key)                         return EMBEDIQ_ERR;
+    if (!g_mutex || !g_persist_mutex) return EMBEDIQ_ERR;
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
@@ -411,30 +475,31 @@ embediq_err_t embediq_nvm_delete(const char *key)
     }
 
     memset(&g_nvm[slot], 0, sizeof(nvm_entry_t));
-    nvm_persist();
+    uint32_t gen = ++g_generation;
 
     embediq_osal_mutex_unlock(g_mutex);
+    nvm_persist(gen, false);
     return EMBEDIQ_OK;
 }
 
 embediq_err_t embediq_nvm_flush(void)
 {
-    if (!g_mutex) return EMBEDIQ_ERR;
+    if (!g_mutex || !g_persist_mutex) return EMBEDIQ_ERR;
 
-    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
-    nvm_persist();
-    embediq_osal_mutex_unlock(g_mutex);
+    nvm_persist(0u, true);
     return EMBEDIQ_OK;
 }
 
 embediq_err_t embediq_nvm_reset(void)
 {
-    if (!g_mutex) return EMBEDIQ_ERR;
+    if (!g_mutex || !g_persist_mutex) return EMBEDIQ_ERR;
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
     memset(g_nvm, 0, sizeof(g_nvm));
-    nvm_persist();
+    uint32_t gen = ++g_generation;
     embediq_osal_mutex_unlock(g_mutex);
+
+    nvm_persist(gen, false);
     return EMBEDIQ_OK;
 }
 
@@ -445,7 +510,7 @@ embediq_err_t embediq_nvm_reset(void)
 #ifdef EMBEDIQ_PLATFORM_HOST
 
 /**
- * Reset all NVM state: clear in-memory cache, create mutex.
+ * Reset all NVM state: clear in-memory cache, create both locks.
  * Path management is now the HAL's concern (via EMBEDIQ_NVM_PATH env var).
  * Does NOT call fb_engine_boot or register an FB.
  */
@@ -456,6 +521,9 @@ void nvm__init_state(void)
 
     if (!g_mutex) {
         g_mutex = embediq_osal_mutex_create();
+    }
+    if (!g_persist_mutex) {
+        g_persist_mutex = embediq_osal_mutex_create();
     }
 }
 
