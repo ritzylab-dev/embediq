@@ -75,12 +75,14 @@ typedef enum {
 #define EMBEDIQ_FAULT_BOOT_RESOURCE     0x80u
 
 /** Fault reports on one FB exceeded EMBEDIQ_FB_FAULT_INBOX_DEPTH pending
- *  reasons; msg_id = number of reports counted and not executed. */
+ *  reasons; msg_id = number of reports counted and not executed, saturating
+ *  at 65535. One event per drain pass that observed dropped reports. */
 #define EMBEDIQ_FAULT_PENDING_OVERFLOW  0x81u
 
 /** Boot failed with fault reports latched on this FB; they are not executed
  *  (no FB code runs after a failed boot). source_fb_id = 0xFF,
- *  target_fb_id = the FB's endpoint, msg_id = number of reports discarded. */
+ *  target_fb_id = the FB's endpoint, msg_id = number of reports discarded,
+ *  saturating at 65535. */
 #define EMBEDIQ_FAULT_BOOT_ABORTED      0x82u
 
 /* ---------------------------------------------------------------------------
@@ -121,8 +123,10 @@ typedef void (*embediq_fb_exit_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data);
  * execution lock (see "Execution ownership" below); never concurrently with
  * init_fn, run_fn or itself; never before init_fn has returned. Reasons
  * execute in report order, including reports the FB makes on itself from
- * inside its own fault_fn, init_fn or run_fn. A fault_fn that publishes HIGH
- * to a full queue blocks only its own FB's code.
+ * inside its own fault_fn, init_fn or run_fn. Runs on the executing thread
+ * (dispatch thread, boot thread, or the reporter); a blocking call inside it
+ * blocks that thread. Publish from fault_fn with embediq_bus_post_async()
+ * (R-sub-33).
  */
 typedef void (*embediq_fb_fault_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data,
                                     uint32_t reason);
@@ -175,9 +179,10 @@ EmbedIQ_FB_Handle_t embediq_fb_register(const EmbedIQ_FB_Config_t *config);
  * executes on exit) if it does. The FB's fault_fn then runs on the calling
  * thread; a fault_fn that blocks on the bus blocks that thread. Order among
  * reporters is acceptance order per FB; beyond EMBEDIQ_FB_FAULT_INBOX_DEPTH
- * pending reasons the report is counted and reported as one
- * EMBEDIQ_FAULT_PENDING_OVERFLOW event; the FB enters FAULT when its first
- * pending reason executes.
+ * pending reasons the report is counted, and one
+ * EMBEDIQ_FAULT_PENDING_OVERFLOW event is emitted per drain pass that
+ * observed dropped reports; the FB enters FAULT when its first pending
+ * reason executes.
  */
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t fb, uint32_t reason);
 
@@ -219,8 +224,13 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
  * runs that FB's code; the FB author never sees it:
  *   init      — embediq_engine_boot() holds it around IDLE → INITIALISING,
  *               init_fn, execution of the faults latched until then, and the
- *               conditional INITIALISING → RUNNING; an FB with a latched
- *               fault goes to FAULT and never shows RUNNING.
+ *               conditional INITIALISING → RUNNING. A fault accepted before
+ *               or during init_fn is executed before the FB is marked
+ *               RUNNING. A report accepted in the closing window — after
+ *               that drain and before the boot thread releases the lock —
+ *               is executed immediately after; the trace may then show
+ *               RUNNING followed by FAULT for that FB. The state never
+ *               returns to RUNNING.
  *   pre-dispatch — a fault reported before embediq_engine_dispatch_boot()
  *               (or for an FB without subscriptions) is executed on the
  *               reporting thread under the lock.
@@ -249,7 +259,11 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
  * dependency cycle or missing dependency is detected, or if a per-FB
  * execution lock cannot be allocated (EMBEDIQ_FAULT_BOOT_RESOURCE; no init_fn
  * has run). On failure, latched fault reports are not executed; one
- * EMBEDIQ_FAULT_BOOT_ABORTED event per FB carries the count.
+ * EMBEDIQ_FAULT_BOOT_ABORTED event per FB carries the count. A fault_fn
+ * already executing when boot fails runs to completion. Reports accepted
+ * after the BOOT_ABORTED event are latched; they are counted at the next
+ * boot failure, executed after init on a retried boot, or discarded by
+ * reset.
  * Calling context: boot thread only.
  */
 int embediq_engine_boot(void);

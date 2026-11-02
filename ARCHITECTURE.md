@@ -1081,8 +1081,15 @@ comment stating one of: "FB dispatch thread only", "boot thread only", "any thre
   order, never concurrently with `init_fn`, `run_fn` or itself, and never before
   `init_fn` has returned. A reporter that holds no execution lock waits for the FB's
   current handler to finish; one that holds an execution lock (it is inside some FB's
-  handler) only tries the lock and, if it is busy, leaves the fault for the holder, which
-  executes it on release and checks the inbox once more after unlocking.
+  handler) only tries the lock and, if it is busy, leaves the fault for the holder. The
+  holder releases, then checks the inbox, and while it is not empty takes the lock again
+  by trylock and runs another pass — repeating until a check that follows a release finds
+  the inbox empty. A push after that check finds the lock free and executes itself, or is
+  refused only because a new holder exists, which runs the same loop.
+- **Boot ordering.** A fault accepted before or during `init_fn` is executed before the FB
+  is marked RUNNING. A report accepted in the closing window — after that drain and before
+  the boot thread releases the lock — is executed immediately after; the trace may then
+  show RUNNING followed by FAULT for that FB. The state never returns to RUNNING.
 - **No deadlock.** A thread blocks to take an execution lock only when it holds none;
   every thread that holds one takes others by trylock only. A cycle needs every member to
   hold a lock and wait for another, so none can form.
@@ -1090,21 +1097,28 @@ comment stating one of: "FB dispatch thread only", "boot thread only", "any thre
   the same critical section, and each executor drains the inbox after the change that
   made it the executor: boot after `init_fn`, the dispatch thread when it is woken,
   `dispatch_shutdown` after joining the thread. If boot fails, no FB code runs: each FB's
-  latched reports are discarded and counted in one `EMBEDIQ_FAULT_BOOT_ABORTED` event.
+  latched reports are discarded and counted in one `EMBEDIQ_FAULT_BOOT_ABORTED` event. A
+  `fault_fn` already executing when boot fails runs to completion. Reports accepted after
+  the BOOT_ABORTED event are latched; they are counted at the next boot failure, executed
+  after init on a retried boot, or discarded by reset.
 - **Liveness.** No thread waits on a timer. Each drain pass is bounded by the number of
   reasons latched when it starts and executes at least one of them or finds none.
   `dispatch_shutdown`'s own work is bounded (one pass per FB, by trylock), so it returns
   once the dispatch threads have joined. A pass is bounded, a storm is not: under an
   unbounded stream of reports on one FB, its `fault_fn` keeps being invoked by whichever
-  executor holds the lock. A holder rechecks the inbox once after releasing the lock, so a
-  report whose trylock is refused during that last pass stays latched until the FB's next
-  report or handler. A `fault_fn` that blocks (for example, publishing HIGH into a full
-  queue) blocks the thread executing it — the reporter under *none*, the dispatch thread
-  under *dispatch* — and shutdown waits for that dispatch thread to join.
+  executor holds the lock; the release-then-check loop ends when reports stop, since each
+  extra pass consumes a reason pushed during the previous one. A `fault_fn` that blocks
+  blocks the thread executing it — the reporter under *none*, the dispatch thread under
+  *dispatch* — and shutdown waits for that dispatch thread to join. The execution-lock
+  argument excludes lock cycles only: a `fault_fn` that calls `embediq_publish()` with a
+  HIGH message into a full queue waits for bus capacity and can join a cycle with dispatch
+  threads publishing HIGH into each other's full queues. Inside `fault_fn`, publish only
+  with `embediq_bus_post_async()`, which never waits for capacity (R-sub-33).
 - **Overflow.** Beyond `EMBEDIQ_FB_FAULT_INBOX_DEPTH` pending reasons on one FB, further
-  reports are counted and reported as one `EMBEDIQ_OBS_EVT_FAULT` event
-  (`EMBEDIQ_FAULT_PENDING_OVERFLOW`, `msg_id` = count) after the next drain pass. The FB
-  enters FAULT when its first pending reason executes.
+  reports are counted and reported in an `EMBEDIQ_OBS_EVT_FAULT` event
+  (`EMBEDIQ_FAULT_PENDING_OVERFLOW`, `msg_id` = count, saturating at 65535), one per drain
+  pass that observed dropped reports. The FB enters FAULT when its first pending reason
+  executes.
 
 Observability guarantees, stated precisely: HASH_CHAIN proves the `.iqtrace` file was not
 altered after it was written. The monotonic `sequence` field proves ordering and

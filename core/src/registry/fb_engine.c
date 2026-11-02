@@ -29,12 +29,21 @@
  * owner change is inside the OSAL critical section, and each owner drains
  * after the change that made it the owner. Nothing runs before init_fn: the
  * owner stays BOOT until the boot thread, holding the lock, flips it after.
+ * Nothing is stranded: every release of an execution lock is followed by a
+ * check of the inbox. A push that lands before the check is seen by it; a
+ * push after the check finds the lock free and executes itself, or is
+ * refused only because a new holder exists — which runs the same
+ * release-then-check loop. Each extra iteration consumes a reason pushed
+ * during the previous pass, so the loop ends when reports stop.
  * Liveness: no thread waits on a timer; each drain pass is bounded by the
  * count latched when it starts and executes one or finds none; shutdown's
  * own work is one pass per FB, by trylock. A pass is bounded, a storm is
  * not: under unbounded reports on one FB its fault_fn keeps being invoked by
  * whichever executor holds the lock, and a fault_fn that blocks holds up the
  * thread executing it (shutdown waits for that dispatch thread to join).
+ * The execution-lock argument excludes lock cycles only. A blocking HIGH
+ * publish from FB code is a bus-capacity wait, governed by R-sub-33 and the
+ * Message System's HIGH-queue rules, not by this protocol.
  * R-02: no malloc/free. All storage is static.
  * I-10: sub-fn registration is gated by the registering flag, which is true
  *       only during the parent FB's init_fn call.
@@ -303,28 +312,29 @@ static void exec_release(EmbedIQ_FB_t *fb)
     embediq_osal_mutex_unlock(fb->exec_lock);
 }
 
-/* One drain pass, then release the lock, then recheck once. A reporter that
- * latched a reason while this thread held the lock, and whose trylock was
- * refused, relies on the holder: under NONE the recheck takes the lock again
- * (trylock only) for one more pass; under DISPATCH it wakes the dispatch
- * thread, which carries the remainder. Anything still left under NONE is
- * executed by the next reporter or holder. */
+/* Drain pass, release, check — repeated until a check that follows a
+ * release finds the inbox empty. A reporter whose trylock was refused while
+ * this thread held the lock relies on that check: under NONE this thread
+ * takes the lock again (trylock only) and runs another pass; refused, a new
+ * holder exists and runs this same loop. Under DISPATCH it wakes the
+ * dispatch thread; under BOOT the boot thread drains after init_fn. */
 static void exec_exit(EmbedIQ_FB_t *fb)
 {
-    fault_drain_pass_locked(fb);
-    exec_release(fb);
-
-    embediq_osal_critical_enter();
-    bool    pending = fb->inbox_count > 0u;
-    uint8_t owner   = fb->fault_owner;
-    embediq_osal_critical_exit();
-    if (!pending) return;
-
-    if (owner == (uint8_t)FAULT_OWNER_DISPATCH) {
-        embediq_sem_post(g_dispatch_args[fb->ep_idx].sem);
-    } else if (owner == (uint8_t)FAULT_OWNER_NONE && exec_try(fb)) {
+    for (;;) {
         fault_drain_pass_locked(fb);
         exec_release(fb);
+
+        embediq_osal_critical_enter();
+        bool    pending = fb->inbox_count > 0u;
+        uint8_t owner   = fb->fault_owner;
+        embediq_osal_critical_exit();
+        if (!pending) return;
+
+        if (owner == (uint8_t)FAULT_OWNER_DISPATCH) {
+            embediq_sem_post(g_dispatch_args[fb->ep_idx].sem);
+            return;
+        }
+        if (owner != (uint8_t)FAULT_OWNER_NONE || !exec_try(fb)) return;
     }
 }
 
@@ -513,9 +523,12 @@ static bool topo_dfs(uint8_t idx, topo_color_t *colors, const bool *phase_set,
     return true;
 }
 
-/* Boot failed: no FB code runs from here. Every FB returns to BOOT (latch
+/* Boot failed: no FB code starts from here. Every FB returns to BOOT (latch
  * only); its latched reports are discarded and counted in one BOOT_ABORTED
- * event. */
+ * event. A fault_fn already executing when boot fails runs to completion.
+ * Reports accepted after the BOOT_ABORTED event are latched; they are
+ * counted at the next boot failure, executed after init on a retried boot,
+ * or discarded by reset. */
 static int boot_abort(void)
 {
     for (uint8_t i = 0u; i < g_reg_count; i++) {
@@ -680,8 +693,12 @@ int embediq_engine_boot(void)
 
             /* Owner BOOT → NONE first, then execute what was latched: a
              * report after the flip finds this thread holding the lock and
-             * is executed by exec_exit below. Draining before the RUNNING
-             * transition means an FB with a latched fault never shows RUNNING. */
+             * is executed by exec_exit below. A fault accepted before or
+             * during init_fn is executed before the FB is marked RUNNING. A
+             * report accepted in the closing window — after that drain and
+             * before the boot thread releases the lock — is executed
+             * immediately after; the trace may then show RUNNING followed by
+             * FAULT for that FB. The state never returns to RUNNING. */
             fault_owner_change(fb, FAULT_OWNER_BOOT, FAULT_OWNER_NONE);
             fault_drain_pass_locked(fb);
 

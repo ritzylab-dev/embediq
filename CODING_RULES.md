@@ -417,6 +417,20 @@ rejected; `boundary_checker.py` already rejects `hal/` includes in `fbs/services
 
 ---
 
+### R-sub-33 · Inside fault_fn, publish only with embediq_bus_post_async()
+
+**R-sub-33 — Inside fault_fn, publish only with embediq_bus_post_async() (never waits for
+capacity).** `embediq_publish()` with a HIGH message can block the executing thread on a full
+queue and join a bus-capacity cycle.
+Rationale: `fault_fn` runs on whichever thread executes the fault — the FB's dispatch thread,
+the boot thread, or the reporter. The execution-lock protocol excludes lock cycles only; a HIGH
+publish into a full queue is a bus-capacity wait, and two dispatch threads publishing HIGH into
+each other's full queues plus a thread waiting for that executor's lock form a cycle no lock rule
+breaks. `embediq_bus_post_async()` never waits: a full HIGH queue is a dropped, observed delivery.
+Enforcement: code review — any `embediq_publish()` reachable from a `fault_fn` is rejected.
+
+---
+
 ## 4. C11 Style Guide
 
 ### Naming
