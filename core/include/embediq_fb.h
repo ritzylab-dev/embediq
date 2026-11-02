@@ -117,10 +117,13 @@ typedef void (*embediq_fb_exit_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data);
 
 /**
  * Called when the FB enters FAULT state. reason is a caller-defined code.
- * Executes only by the FB's owner: the boot thread after init_fn has
- * returned, the dispatch thread when one runs, otherwise the reporting
- * thread (or the thread that last ran this FB's code); always under the FB's
- * execution lock (see "Execution ownership" below); never concurrently with
+ * Executes under the FB's execution lock on the thread that took the reason
+ * from the FB's inbox: the dispatch thread when one runs; the boot thread
+ * after init_fn; otherwise the reporting thread, the thread that last ran
+ * this FB's code, or the thread calling embediq_engine_dispatch_shutdown. A
+ * thread takes reasons only while the FB's owner authorises it; a reason
+ * already taken when the owner changes completes on that thread (see
+ * "Execution ownership" below). Never concurrently with
  * init_fn, run_fn or itself; never before init_fn has returned. Reasons
  * execute in report order, including reports the FB makes on itself from
  * inside its own fault_fn, init_fn or run_fn. Runs on the executing thread
@@ -172,12 +175,16 @@ EmbedIQ_FB_Handle_t embediq_fb_register(const EmbedIQ_FB_Config_t *config);
  *
  * Calling context: any thread except an ISR, including from inside another
  * FB's handlers. The report is accepted in constant time and never waits for
- * queue capacity. Execution: by the dispatch thread when one runs; by the
- * boot thread after init_fn when reported before or during init; otherwise
- * on the calling thread — which waits for the FB's current handler to finish
- * if it holds no execution lock, and does not wait at all (the holder
- * executes on exit) if it does. The FB's fault_fn then runs on the calling
- * thread; a fault_fn that blocks on the bus blocks that thread. Order among
+ * queue capacity. Execution: under the FB's execution lock on the thread
+ * that took the reason from the FB's inbox: the dispatch thread when one
+ * runs; the boot thread after init_fn; otherwise the reporting thread, the
+ * thread that last ran this FB's code, or the thread calling
+ * embediq_engine_dispatch_shutdown. A thread takes reasons only while the
+ * FB's owner authorises it; a reason already taken when the owner changes
+ * completes on that thread. A calling thread that executes waits for the
+ * FB's current handler to finish if it holds no execution lock, and does not
+ * wait at all (the holder executes on exit) if it does; a fault_fn that
+ * blocks on the bus blocks the thread executing it. Order among
  * reporters is acceptance order per FB; beyond EMBEDIQ_FB_FAULT_INBOX_DEPTH
  * pending reasons the report is counted, and one
  * EMBEDIQ_FAULT_PENDING_OVERFLOW event is emitted per drain pass that
@@ -259,9 +266,10 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
  * dependency cycle or missing dependency is detected, or if a per-FB
  * execution lock cannot be allocated (EMBEDIQ_FAULT_BOOT_RESOURCE; no init_fn
  * has run). On failure, latched fault reports are not executed; one
- * EMBEDIQ_FAULT_BOOT_ABORTED event per FB carries the count. A fault_fn
- * already executing when boot fails runs to completion. Reports accepted
- * after the BOOT_ABORTED event are latched; they are counted at the next
+ * EMBEDIQ_FAULT_BOOT_ABORTED event per FB carries the count. A reason
+ * already taken from the inbox when boot fails is executed to completion on
+ * the thread that took it and is not included in the BOOT_ABORTED count;
+ * reports accepted after the BOOT_ABORTED event are latched; they are counted at the next
  * boot failure, executed after init on a retried boot, or discarded by
  * reset.
  * Calling context: boot thread only.

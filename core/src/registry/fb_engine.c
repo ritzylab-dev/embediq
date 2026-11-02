@@ -44,8 +44,11 @@
  * release-then-check loop. Each extra iteration consumes a reason pushed
  * during the previous pass, so the loop ends when reports stop.
  * Liveness: no thread waits on a timer; each drain pass is bounded by the
- * count latched when it starts and executes one or finds none; shutdown's
- * own work is one pass per FB, by trylock. A pass is bounded, a storm is
+ * count latched when it starts and executes one or finds none;
+ * dispatch_shutdown drains each FB with the same release-then-check loop as
+ * any executor, acquiring only by trylock; it never waits for an execution
+ * lock, and like every executor it terminates when reports on that FB stop.
+ * A pass is bounded, a storm is
  * not: under unbounded reports on one FB its fault_fn keeps being invoked by
  * whichever executor holds the lock, and a fault_fn that blocks holds up the
  * thread executing it (shutdown waits for that dispatch thread to join).
@@ -560,8 +563,10 @@ static bool topo_dfs(uint8_t idx, topo_color_t *colors, const bool *phase_set,
 
 /* Boot failed: no FB code starts from here. Every FB returns to BOOT (latch
  * only); its latched reports are discarded and counted in one BOOT_ABORTED
- * event. A fault_fn already executing when boot fails runs to completion.
- * Reports accepted after the BOOT_ABORTED event are latched; they are
+ * event. A reason already taken from the inbox when boot fails is executed
+ * to completion on the thread that took it and is not included in the
+ * BOOT_ABORTED count; reports accepted after the BOOT_ABORTED event are
+ * latched; they are
  * counted at the next boot failure, executed after init on a retried boot,
  * or discarded by reset. */
 static int boot_abort(void)

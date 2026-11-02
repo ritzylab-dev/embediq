@@ -1086,8 +1086,8 @@ comment stating one of: "FB dispatch thread only", "boot thread only", "any thre
   by trylock and runs another pass — repeating until a check that follows a release finds
   the inbox empty. A push after that check finds the lock free and executes itself, or is
   refused only because a new holder exists, which runs the same loop. Execution is
-  re-checked against the owner before every reason, so a thread that observed a previous
-  owner cannot execute after a transition.
+  re-checked against the owner before every reason is taken, so no reason is taken after a
+  transition; a reason already taken completes on the thread that took it.
 - **Boot ordering.** A fault accepted before or during `init_fn` is executed before the FB
   is marked RUNNING. A report accepted in the closing window — after that drain and before
   the boot thread releases the lock — is executed immediately after; the trace may then
@@ -1100,13 +1100,15 @@ comment stating one of: "FB dispatch thread only", "boot thread only", "any thre
   made it the executor: boot after `init_fn`, the dispatch thread when it is woken,
   `dispatch_shutdown` after joining the thread. If boot fails, no FB code runs: each FB's
   latched reports are discarded and counted in one `EMBEDIQ_FAULT_BOOT_ABORTED` event. A
-  `fault_fn` already executing when boot fails runs to completion. Reports accepted after
+  reason already taken from the inbox when boot fails is executed to completion on the
+  thread that took it and is not included in the BOOT_ABORTED count; reports accepted after
   the BOOT_ABORTED event are latched; they are counted at the next boot failure, executed
   after init on a retried boot, or discarded by reset.
 - **Liveness.** No thread waits on a timer. Each drain pass is bounded by the number of
   reasons latched when it starts and executes at least one of them or finds none.
-  `dispatch_shutdown`'s own work is bounded (one pass per FB, by trylock), so it returns
-  once the dispatch threads have joined. A pass is bounded, a storm is not: under an
+  `dispatch_shutdown` drains each FB with the same release-then-check loop as any
+  executor, acquiring only by trylock; it never waits for an execution lock, and like every
+  executor it terminates when reports on that FB stop. A pass is bounded, a storm is not: under an
   unbounded stream of reports on one FB, its `fault_fn` keeps being invoked by whichever
   executor holds the lock; the release-then-check loop ends when reports stop, since each
   extra pass consumes a reason pushed during the previous one. A `fault_fn` that blocks
