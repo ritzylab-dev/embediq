@@ -149,6 +149,8 @@ Agents: never add an include that skips a layer.
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+**Faults:** `embediq_fb_report_fault()` is safe from anywhere, including the `fault_fn` of another FB. It never blocks on that FB.
+
 ---
 
 ## 3A. Streaming Data Plane — Agent Must Know
