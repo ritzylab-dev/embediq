@@ -78,6 +78,14 @@ extern "C" {
 #  define EMBEDIQ_FB_FAULT_PENDING_DEPTH  4u
 #endif
 
+/** Upper bound (ms) embediq_engine_dispatch_shutdown() waits for fault posts
+ *  already in flight before its final drain. Posts never wait for queue
+ *  capacity, so in-flight time is microseconds; the bound only guarantees
+ *  that shutdown terminates. Reaching it emits EMBEDIQ_FAULT_SHUTDOWN_INFLIGHT. */
+#ifndef EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS
+#  define EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS  100u
+#endif
+
 /* ---------------------------------------------------------------------------
  * Observatory ring buffer
  * ------------------------------------------------------------------------- */

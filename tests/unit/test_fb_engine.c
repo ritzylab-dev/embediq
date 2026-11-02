@@ -8,7 +8,7 @@
  * Each test exercises exactly one behaviour with one ASSERT.
  *
  * Run:      ./build/tests/unit/test_fb_engine
- * Expected: "All 22 tests passed. (0 failed)"
+ * Expected: "All 25 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -24,6 +24,7 @@
 #include "embediq_config.h"
 
 #include <pthread.h>
+#include <unistd.h>     /* alarm */
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -38,6 +39,7 @@ extern uint32_t fb_engine__obs_event_count(void);
 extern void     fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle,
                                        uint16_t msg_id, const void *msg);
 extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
+extern bool     obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out);
 /* Weak fallback so this file links before fb_engine.c provides the hook
  * (TDD-first commit); the engine's strong definition replaces it. */
 __attribute__((weak)) bool fb_engine__exec_lock_held(uint8_t ep) { (void)ep; return false; }
@@ -78,6 +80,24 @@ extern void     embediq_osal__fail_next_mutex_create(uint32_t nth);
 #define NESTED_OVERFLOW_EXTRA  2u       /* reports beyond the pending depth */
 #define DISPATCH_COST_MSGS     100000u
 #define DISPATCH_COST_MAX_NS   2000u    /* < 2 us per dispatch over baseline */
+
+/* Dispatch shutdown constants */
+#define MSG_TEST_GATED           0x1434u  /* community range, unique to this file */
+#define MSG_TEST_FILL            0x1435u
+#define MSG_TEST_IDLE            0x1436u
+#define FAULT_REASON_QUEUED      0x61u
+#define FAULT_REASON_DURING      0x62u
+#define FAULT_REASON_FULL_QUEUE  0x63u
+#define FAULT_REASON_STORM       0x64u
+#define SHUTDOWN_START_SETTLE_MS 50u      /* shutdown flag set before the late report */
+#define REFUSAL_WAIT_MS          500u     /* bound on observing the refused post */
+#define REPORT_RETURN_MAX_US     50000u   /* reporter returns within 50 ms of the gate */
+#define STORM_REPORTERS          4u
+#define STORM_RUN_MS             20u
+#define STORM_NORMAL_MSGS        20u      /* below the NORMAL depth: none drop-oldest */
+#define SHUTDOWN_MAX_MS          500u
+#define SHUTDOWN_HANG_GUARD_S    2u       /* alarm(): a hang fails the binary */
+#define QUEUE_FULL_FLAG          2u       /* EMBEDIQ_OSAL_OBS_QUEUE_FULL state */
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -1219,6 +1239,343 @@ static void test_run_fn_cost_under_exec_lock(void)
            "run_fn under the exec lock: every dispatch locked, overhead < 2 us/msg");
 }
 
+/* ===========================================================================
+ * Faults across dispatch shutdown; report_fault never waits for capacity
+ * ======================================================================== */
+
+/* Gated FB: run_fn for MSG_TEST_GATED blocks until g_sd_gate; MSG_TEST_FILL
+ * is counted; fault_fn counts calls and records the first call's thread. */
+static embediq_osal_atomic32_t g_sd_in_run       = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sd_gate         = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sd_fill_rx      = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sd_fault_calls  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sd_fault_reason = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sd_idle_faults  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static pthread_t               g_sd_fault_thread;
+
+static void sd_reset_recorders(void)
+{
+    embediq_osal_atomic32_store(&g_sd_in_run, 0u);
+    embediq_osal_atomic32_store(&g_sd_gate, 0u);
+    embediq_osal_atomic32_store(&g_sd_fill_rx, 0u);
+    embediq_osal_atomic32_store(&g_sd_fault_calls, 0u);
+    embediq_osal_atomic32_store(&g_sd_fault_reason, 0u);
+    embediq_osal_atomic32_store(&g_sd_idle_faults, 0u);
+}
+
+static void sd_gated_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *d, void *s)
+{
+    (void)fb; (void)msg; (void)d; (void)s;
+    embediq_osal_atomic32_store(&g_sd_in_run, 1u);
+    (void)exec_wait(&g_sd_gate, GATE_MAX_MS);
+}
+
+static void sd_fill_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *d, void *s)
+{
+    (void)fb; (void)msg; (void)d; (void)s;
+    (void)embediq_osal_atomic32_add(&g_sd_fill_rx, 1u);
+}
+
+/* Runs under the FB's execution lock: never concurrently with itself. */
+static void sd_fault_fn(EmbedIQ_FB_Handle_t fb, void *d, uint32_t reason)
+{
+    (void)fb; (void)d;
+    if (embediq_osal_atomic32_load(&g_sd_fault_calls) == 0u) {
+        g_sd_fault_thread = pthread_self();
+        embediq_osal_atomic32_store(&g_sd_fault_reason, reason);
+    }
+    (void)embediq_osal_atomic32_add(&g_sd_fault_calls, 1u);
+}
+
+static void sd_idle_fault_fn(EmbedIQ_FB_Handle_t fb, void *d, uint32_t reason)
+{
+    (void)fb; (void)d; (void)reason;
+    (void)embediq_osal_atomic32_add(&g_sd_idle_faults, 1u);
+}
+
+EMBEDIQ_SUBS(g_sd_gated_subs, MSG_TEST_GATED);
+EMBEDIQ_SUBS(g_sd_fill_subs,  MSG_TEST_FILL);
+EMBEDIQ_SUBS(g_sd_all_subs,   MSG_TEST_GATED, MSG_TEST_FILL);
+EMBEDIQ_SUBS(g_sd_idle_subs,  MSG_TEST_IDLE);
+
+static const EmbedIQ_SubFn_Config_t g_sd_gated_subfn = {
+    .name = "sd_gated", .init_order = 0,
+    .subscriptions = g_sd_gated_subs, .subscription_count = 1,
+    .run_fn = sd_gated_run_fn,
+};
+static const EmbedIQ_SubFn_Config_t g_sd_fill_subfn = {
+    .name = "sd_fill", .init_order = 1,
+    .subscriptions = g_sd_fill_subs, .subscription_count = 1,
+    .run_fn = sd_fill_run_fn,
+};
+
+static void sd_gated_init(EmbedIQ_FB_Handle_t h, void *d)
+{
+    (void)d;
+    embediq_subfn_register(h, &g_sd_gated_subfn);
+    embediq_subfn_register(h, &g_sd_fill_subfn);
+}
+
+static const EmbedIQ_FB_Config_t k_sd_gated = {
+    .name = "sd_gated", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    .init_fn = sd_gated_init, .fault_fn = sd_fault_fn,
+    .subscriptions = g_sd_all_subs, .subscription_count = 2,
+};
+static const EmbedIQ_FB_Config_t k_sd_idle = {
+    .name = "sd_idle", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+    .fault_fn = sd_idle_fault_fn,
+    .subscriptions = g_sd_idle_subs, .subscription_count = 1,
+};
+static const EmbedIQ_FB_Config_t k_sd_src = {
+    .name = "sd_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
+};
+
+static void sd_publish(EmbedIQ_FB_Handle_t src, uint16_t id, uint8_t prio)
+{
+    EmbedIQ_Msg_t m;
+    memset(&m, 0, sizeof(m));
+    m.msg_id   = id;
+    m.priority = prio;
+    embediq_publish(src, &m);
+}
+
+typedef struct { EmbedIQ_FB_Handle_t h; uint32_t reason; } sd_report_t;
+
+static void *sd_reporter(void *arg)
+{
+    const sd_report_t *r = (const sd_report_t *)arg;
+    embediq_fb_report_fault(r->h, r->reason);
+    return NULL;
+}
+
+static void *sd_shutdowner(void *arg)
+{
+    (void)arg;
+    (void)embediq_engine_dispatch_shutdown();
+    return NULL;
+}
+
+/* ---------------------------------------------------------------------------
+ * test_fault_queued_before_shutdown_is_applied
+ * (1) A fault queued while the FB's run_fn is busy, followed at once by
+ *     dispatch_shutdown, is applied before shutdown returns.
+ * (2) A fault reported on another FB while that shutdown is in progress
+ *     (its dispatch thread has already stopped) is applied, not left queued.
+ * The settle delay only orders the scenario (shutdown flag set before the
+ * second report); the assertions hold in every interleaving.
+ * ------------------------------------------------------------------------- */
+
+static void test_fault_queued_before_shutdown_is_applied(void)
+{
+    alarm(SHUTDOWN_HANG_GUARD_S);
+    fb_engine__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+    sd_reset_recorders();
+
+    EmbedIQ_FB_Handle_t gated = embediq_fb_register(&k_sd_gated);
+    EmbedIQ_FB_Handle_t idle  = embediq_fb_register(&k_sd_idle);
+    EmbedIQ_FB_Handle_t src   = embediq_fb_register(&k_sd_src);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+
+    sd_publish(src, MSG_TEST_GATED, (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL);
+    bool in_run = exec_wait(&g_sd_in_run, GATE_MAX_MS);
+
+    /* (1) queued while run_fn is busy */
+    pthread_t th;
+    sd_report_t queued = { gated, FAULT_REASON_QUEUED };
+    pthread_create(&th, NULL, sd_reporter, &queued);
+    pthread_join(th, NULL);
+
+    /* (2) shutdown starts; run_fn still gated keeps it in progress */
+    pthread_t sd;
+    pthread_create(&sd, NULL, sd_shutdowner, NULL);
+    embediq_osal_delay_ms(SHUTDOWN_START_SETTLE_MS);
+    embediq_fb_report_fault(idle, FAULT_REASON_DURING);
+
+    embediq_osal_atomic32_store(&g_sd_gate, 1u);
+    pthread_join(sd, NULL);
+    alarm(0u);
+
+    uint32_t calls  = embediq_osal_atomic32_load(&g_sd_fault_calls);
+    uint32_t reason = embediq_osal_atomic32_load(&g_sd_fault_reason);
+    uint32_t idle_n = embediq_osal_atomic32_load(&g_sd_idle_faults);
+    printf("      in_run=%d queued_fault_calls=%u reason=0x%x during_shutdown_calls=%u\n",
+           (int)in_run, (unsigned)calls, (unsigned)reason, (unsigned)idle_n);
+    ASSERT(in_run && calls == 1u && reason == FAULT_REASON_QUEUED
+           && embediq_fb_get_state(gated) == EMBEDIQ_FB_STATE_FAULT
+           && idle_n == 1u && embediq_fb_get_state(idle) == EMBEDIQ_FB_STATE_FAULT,
+           "faults queued before or reported during shutdown are applied once");
+}
+
+/* Count pending queue-full records (refused zero-timeout sends) in the
+ * Observatory ISR ring. */
+static uint32_t sd_queue_full_pending(void)
+{
+    uint32_t n = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__isr_ring_peek(i, &e); i++) {
+        if (e.event_type == EMBEDIQ_OBS_EVT_OSAL_FAULT
+            && e.source_fb_id == EMBEDIQ_OSAL_SRC_QUEUES
+            && e.state_or_flag == QUEUE_FULL_FLAG) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static embediq_osal_atomic32_t g_sd_report_done = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_sd_report_ret  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *sd_timed_reporter(void *arg)
+{
+    const sd_report_t *r = (const sd_report_t *)arg;
+    embediq_fb_report_fault(r->h, r->reason);
+    embediq_osal_atomic32_store(&g_sd_report_ret, embediq_osal_time_us());
+    embediq_osal_atomic32_store(&g_sd_report_done, 1u);
+    return NULL;
+}
+
+/* ---------------------------------------------------------------------------
+ * test_report_fault_never_waits_for_queue_capacity
+ * run_fn holds the FB (gated) and its HIGH queue is at capacity. A reporter's
+ * post is refused at once (observed as a queue-full record in the ISR ring);
+ * the fault is then applied on the reporter's own thread under the execution
+ * lock as soon as run_fn returns: the reporter returns within 50 ms of the
+ * gate opening and fault_fn ran on the reporter thread.
+ * ------------------------------------------------------------------------- */
+
+static void test_report_fault_never_waits_for_queue_capacity(void)
+{
+    alarm(SHUTDOWN_HANG_GUARD_S);
+    fb_engine__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+    sd_reset_recorders();
+    embediq_osal_atomic32_store(&g_sd_report_done, 0u);
+
+    EmbedIQ_FB_Handle_t gated = embediq_fb_register(&k_sd_gated);
+    EmbedIQ_FB_Handle_t src   = embediq_fb_register(&k_sd_src);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+
+    sd_publish(src, MSG_TEST_GATED, (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL);
+    bool in_run = exec_wait(&g_sd_in_run, GATE_MAX_MS);
+    for (uint32_t i = 0u; i < EMBEDIQ_HIGH_QUEUE_DEPTH; i++) {
+        sd_publish(src, MSG_TEST_FILL, (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH);
+    }
+    uint32_t base = sd_queue_full_pending();
+
+    pthread_t th;
+    sd_report_t full = { gated, FAULT_REASON_FULL_QUEUE };
+    pthread_create(&th, NULL, sd_timed_reporter, &full);
+
+    uint32_t t0 = embediq_osal_time_ms();
+    bool refused = false;
+    while (!refused && (embediq_osal_time_ms() - t0) < REFUSAL_WAIT_MS) {
+        refused = sd_queue_full_pending() > base;
+        if (!refused) embediq_osal_delay_ms(1u);
+    }
+
+    uint32_t t_release = embediq_osal_time_us();
+    embediq_osal_atomic32_store(&g_sd_gate, 1u);
+    bool done = exec_wait(&g_sd_report_done, GATE_MAX_MS);
+    pthread_join(th, NULL);
+
+    uint32_t t_ret = embediq_osal_atomic32_load(&g_sd_report_ret);
+    uint32_t after_release_us = (int32_t)(t_ret - t_release) > 0 ? t_ret - t_release : 0u;
+    bool on_reporter = embediq_osal_atomic32_load(&g_sd_fault_calls) == 1u
+                       && pthread_equal(g_sd_fault_thread, th);
+    (void)embediq_engine_dispatch_shutdown();
+    alarm(0u);
+
+    printf("      in_run=%d refused=%d done=%d returned_after_gate=%u us on_reporter_thread=%d\n",
+           (int)in_run, (int)refused, (int)done, (unsigned)after_release_us, (int)on_reporter);
+    ASSERT(in_run && refused && done && after_release_us < REPORT_RETURN_MAX_US
+           && on_reporter && embediq_fb_get_state(gated) == EMBEDIQ_FB_STATE_FAULT,
+           "full HIGH queue: post refused, fault applied inline on the reporter");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_dispatch_shutdown_returns_under_reporter_storm
+ * Four threads report faults in a tight loop while NORMAL messages are
+ * queued; dispatch_shutdown returns within 500 ms. Every report is applied
+ * exactly once, and every NORMAL message was either delivered or counted in
+ * the one QUEUE_DROP (EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN) event.
+ * Runs last: on a hang the alarm ends the binary.
+ * ------------------------------------------------------------------------- */
+
+static embediq_osal_atomic32_t g_storm_go      = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_storm_stop    = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_storm_reports = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *storm_reporter(void *h)
+{
+    uint32_t n = 0u;
+    while (embediq_osal_atomic32_load(&g_storm_go) == 0u) { /* start together */ }
+    while (embediq_osal_atomic32_load(&g_storm_stop) == 0u) {
+        embediq_fb_report_fault((EmbedIQ_FB_Handle_t)h, FAULT_REASON_STORM);
+        n++;
+    }
+    (void)embediq_osal_atomic32_add(&g_storm_reports, n);
+    return NULL;
+}
+
+static void test_dispatch_shutdown_returns_under_reporter_storm(void)
+{
+    alarm(SHUTDOWN_HANG_GUARD_S);
+    fb_engine__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+    sd_reset_recorders();
+    embediq_osal_atomic32_store(&g_storm_go, 0u);
+    embediq_osal_atomic32_store(&g_storm_stop, 0u);
+    embediq_osal_atomic32_store(&g_storm_reports, 0u);
+
+    EmbedIQ_FB_Handle_t fb  = embediq_fb_register(&k_sd_gated);
+    EmbedIQ_FB_Handle_t src = embediq_fb_register(&k_sd_src);
+    embediq_engine_boot();
+    embediq_engine_dispatch_boot();
+    uint8_t ep = embediq_engine_fb_ep(fb);
+
+    pthread_t th[STORM_REPORTERS];
+    for (uint32_t i = 0u; i < STORM_REPORTERS; i++) {
+        pthread_create(&th[i], NULL, storm_reporter, fb);
+    }
+    embediq_osal_atomic32_store(&g_storm_go, 1u);
+    for (uint32_t i = 0u; i < STORM_NORMAL_MSGS; i++) {
+        sd_publish(src, MSG_TEST_FILL, (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL);
+    }
+    embediq_osal_delay_ms(STORM_RUN_MS);
+
+    uint32_t t0 = embediq_osal_time_ms();
+    (void)embediq_engine_dispatch_shutdown();
+    uint32_t shutdown_ms = embediq_osal_time_ms() - t0;
+
+    embediq_osal_atomic32_store(&g_storm_stop, 1u);
+    for (uint32_t i = 0u; i < STORM_REPORTERS; i++) {
+        pthread_join(th[i], NULL);
+    }
+    alarm(0u);
+
+    uint32_t drop_events = 0u, dropped = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__ring_read(i, &e); i++) {
+        if (e.event_type == EMBEDIQ_OBS_EVT_QUEUE_DROP
+            && e.state_or_flag == EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN && e.target_fb_id == ep) {
+            drop_events++;
+            dropped = e.msg_id;
+        }
+    }
+    uint32_t reports   = embediq_osal_atomic32_load(&g_storm_reports);
+    uint32_t calls     = embediq_osal_atomic32_load(&g_sd_fault_calls);
+    uint32_t delivered = embediq_osal_atomic32_load(&g_sd_fill_rx);
+    printf("      shutdown=%u ms reports=%u fault_fn=%u normal: delivered=%u dropped=%u "
+           "(events=%u)\n", (unsigned)shutdown_ms, (unsigned)reports, (unsigned)calls,
+           (unsigned)delivered, (unsigned)dropped, (unsigned)drop_events);
+    ASSERT(shutdown_ms < SHUTDOWN_MAX_MS && calls == reports && reports > 0u
+           && drop_events <= 1u && delivered + dropped == STORM_NORMAL_MSGS,
+           "shutdown bounded under a reporter storm; faults applied == reported");
+}
+
 int main(void)
 {
     test_fb_register_stores_config();
@@ -1243,6 +1600,9 @@ int main(void)
     test_boot_fails_when_exec_lock_allocation_fails();
     test_nested_fault_reports_all_delivered_in_order();
     test_run_fn_cost_under_exec_lock();
+    test_fault_queued_before_shutdown_is_applied();
+    test_report_fault_never_waits_for_queue_capacity();
+    test_dispatch_shutdown_returns_under_reporter_storm();   /* last: alarm-bounded */
     fb_engine__reset();
 
     printf("\nAll %d tests passed. (%d failed)\n",

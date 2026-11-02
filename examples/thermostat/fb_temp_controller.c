@@ -41,6 +41,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#ifdef EMBEDIQ_PLATFORM_HOST
+#include <stdatomic.h>   /* host-only test counter */
+#endif
 
 /* Watchdog service API — platform service, not an OSAL call (R-sub-03). */
 extern void embediq_wdg_register(void *fb, uint32_t timeout_ms);
@@ -64,7 +67,10 @@ extern void embediq_wdg_checkin(void *fb);
 static EmbedIQ_FB_Handle_t g_ctrl_fb = NULL;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
-static uint32_t g_reading_count = 0u;
+/* Incremented in ctrl_run on the FB's thread, read by the host-only
+ * ctrl__reading_count() accessor on the test thread: a C11 atomic counter,
+ * so the handler needs no lock. The counter and accessor exist only on host. */
+static _Atomic uint32_t g_reading_count = 0u;
 #endif
 
 /* ---------------------------------------------------------------------------

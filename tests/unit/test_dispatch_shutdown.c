@@ -8,10 +8,11 @@
  *   2. All dispatch threads have exited within 2 seconds.
  *   3. Shutdown is idempotent — second call returns EMBEDIQ_OK, no crash.
  *   4. No messages processed after shutdown — message sits in queue.
- *   5. Re-boot after shutdown processes messages normally.
+ *   5. Re-boot after shutdown processes messages normally; a fault reported
+ *      after shutdown returned is applied inline (no dispatch thread).
  *
  * Run:      ./build/tests/unit/test_dispatch_shutdown
- * Expected: "All 5 tests passed. (0 failed)"
+ * Expected: "All 6 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -81,13 +82,14 @@ static EmbedIQ_Msg_t make_msg(uint16_t id, uint8_t prio)
  * Declared at file scope so multiple tests can use it.
  * ------------------------------------------------------------------------- */
 
-static volatile int g_dispatch_count = 0;
+/* Written on the dispatch thread, read on the test thread: atomic. */
+static embediq_osal_atomic32_t g_dispatch_count = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 
 static void count_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg,
                           void *fb_data, void *subfn_data)
 {
     (void)fb; (void)msg; (void)fb_data; (void)subfn_data;
-    g_dispatch_count++;
+    (void)embediq_osal_atomic32_add(&g_dispatch_count, 1u);
 }
 
 /* Sub-fn config used by test_reboot_after_shutdown (file scope — C11). */
@@ -107,6 +109,19 @@ static void reboot_init_fn(EmbedIQ_FB_Handle_t h, void *d)
     embediq_subfn_register(h, &g_reboot_subfn);
 }
 
+/* Fault recorder for the post-shutdown report. */
+#define FAULT_REASON_AFTER_SHUTDOWN  0x71u
+
+static embediq_osal_atomic32_t g_fault_calls  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_fault_reason = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void record_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
+{
+    (void)fb; (void)fb_data;
+    embediq_osal_atomic32_store(&g_fault_reason, reason);
+    (void)embediq_osal_atomic32_add(&g_fault_calls, 1u);
+}
+
 /* ---------------------------------------------------------------------------
  * test_shutdown_after_boot
  *
@@ -117,7 +132,7 @@ static void reboot_init_fn(EmbedIQ_FB_Handle_t h, void *d)
 static void test_shutdown_after_boot(void)
 {
     full_reset();
-    g_dispatch_count = 0;
+    embediq_osal_atomic32_store(&g_dispatch_count, 0u);
 
     EMBEDIQ_SUBS(subs, MSG_SHUTDOWN_A);
     EmbedIQ_FB_Config_t cfg = {
@@ -205,7 +220,7 @@ static void test_shutdown_idempotent(void)
 static void test_no_messages_processed_after_shutdown(void)
 {
     full_reset();
-    g_dispatch_count = 0;
+    embediq_osal_atomic32_store(&g_dispatch_count, 0u);
 
     EMBEDIQ_SUBS(subs, MSG_SHUTDOWN_B);
 
@@ -233,7 +248,8 @@ static void test_no_messages_processed_after_shutdown(void)
     bool in_queue = message_bus__test_recv(ep_dst,
                                            EMBEDIQ_MSG_PRIORITY_NORMAL, &rx);
 
-    ASSERT(in_queue && rx.msg_id == MSG_SHUTDOWN_B && g_dispatch_count == 0,
+    ASSERT(in_queue && rx.msg_id == MSG_SHUTDOWN_B
+           && embediq_osal_atomic32_load(&g_dispatch_count) == 0u,
            "message published during shutdown must remain in queue, unprocessed");
 }
 
@@ -247,19 +263,20 @@ static void test_no_messages_processed_after_shutdown(void)
 static void test_reboot_after_shutdown(void)
 {
     full_reset();
-    g_dispatch_count = 0;
+    embediq_osal_atomic32_store(&g_dispatch_count, 0u);
 
     EmbedIQ_FB_Config_t cfg_dst = {
         .name = "fb_sd_reboot_dst", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
         .subscriptions = g_reboot_subs, .subscription_count = 1,
-        .init_fn = reboot_init_fn,
+        .init_fn = reboot_init_fn, .fault_fn = record_fault_fn,
     };
     EmbedIQ_FB_Config_t cfg_src = {
         .name = "fb_sd_reboot_src", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
     };
 
-    embediq_fb_register(&cfg_dst);
+    EmbedIQ_FB_Handle_t dst = embediq_fb_register(&cfg_dst);
     EmbedIQ_FB_Handle_t src = embediq_fb_register(&cfg_src);
+    embediq_osal_atomic32_store(&g_fault_calls, 0u);
     embediq_engine_boot();
     embediq_engine_dispatch_boot();
     embediq_engine_dispatch_shutdown();  /* first round — stop threads */
@@ -273,14 +290,23 @@ static void test_reboot_after_shutdown(void)
 
     /* Allow up to 500 ms for the dispatch thread to process the message. */
     uint32_t deadline = embediq_osal_time_ms() + 500u;
-    while (g_dispatch_count == 0 && embediq_osal_time_ms() < deadline) {
+    while (embediq_osal_atomic32_load(&g_dispatch_count) == 0u
+           && embediq_osal_time_ms() < deadline) {
         embediq_osal_delay_ms(10u);
     }
 
     embediq_engine_dispatch_shutdown();  /* clean up before full_reset */
 
-    ASSERT(g_dispatch_count == 1,
+    ASSERT(embediq_osal_atomic32_load(&g_dispatch_count) == 1u,
            "restarted dispatch threads must process messages normally");
+
+    /* After shutdown returned there is no dispatch thread: the fault is
+     * applied on this thread before report_fault returns. */
+    embediq_fb_report_fault(dst, FAULT_REASON_AFTER_SHUTDOWN);
+    ASSERT(embediq_osal_atomic32_load(&g_fault_calls) == 1u
+           && embediq_osal_atomic32_load(&g_fault_reason) == FAULT_REASON_AFTER_SHUTDOWN
+           && embediq_fb_get_state(dst) == EMBEDIQ_FB_STATE_FAULT,
+           "a fault reported after shutdown is applied inline");
 }
 
 /* ---------------------------------------------------------------------------

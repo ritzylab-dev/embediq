@@ -169,6 +169,13 @@ extern "C" {
 #define EMBEDIQ_OBS_EVT_MSG_RX              0x21u /**< Message delivered to subscriber FB */
 #define EMBEDIQ_OBS_EVT_QUEUE_DROP          0x22u /**< Message dropped — queue full */
 
+/** state_or_flag of an EMBEDIQ_OBS_EVT_QUEUE_DROP emitted by
+ *  embediq_engine_dispatch_shutdown(): messages still queued for an FB at
+ *  shutdown were discarded. source_fb_id = 0xFF (framework), target_fb_id =
+ *  the FB, msg_id = number discarded (saturates at 0xFFFF). Above the three
+ *  priority values (0–2) the field otherwise carries. */
+#define EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN      3u
+
 /* STATE family (0x30–0x3F) ------------------------------------------------ */
 
 /* Existing — FROZEN */

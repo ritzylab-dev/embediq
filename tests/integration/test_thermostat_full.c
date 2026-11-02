@@ -127,14 +127,17 @@ static void *g_h_ctrl   = NULL;
  *      calls embediq_wdg_checkin() to satisfy the watchdog
  * ------------------------------------------------------------------------- */
 
-static volatile bool g_sim_running = false;
+/* Written by the test thread, read by the simulation task: atomic. The task
+ * is joined before any assertion reads what it produced. */
+static embediq_osal_atomic32_t g_sim_running = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static EmbedIQ_Task_t         *g_sim_task    = NULL;
 
 static void sim_run(void *arg)
 {
     (void)arg;
-    while (g_sim_running) {
-        embediq_osal_delay_ms(1000u);
-        if (!g_sim_running) break;
+    while (embediq_osal_atomic32_load(&g_sim_running) != 0u) {
+        embediq_osal_delay_ms(1000u);   /* simulation pacing: one tick per second */
+        if (embediq_osal_atomic32_load(&g_sim_running) == 0u) break;
 
         /* Tick the sensor — advances the simulated temperature. */
         fb_engine__deliver_msg(g_h_sensor, MSG_TIMER_1SEC, NULL);
@@ -190,14 +193,15 @@ static void test_all_five_fbs_running(void)
  */
 static void test_temp_readings_received(void)
 {
-    g_sim_running = true;
-    embediq_osal_task_create("sim_run", sim_run, NULL, 0u, 4096u);
+    embediq_osal_atomic32_store(&g_sim_running, 1u);
+    g_sim_task = embediq_osal_task_create("sim_run", sim_run, NULL, 0u, 4096u);
 
     printf("  [running 15 s simulation...]\n");
-    embediq_osal_delay_ms(15000u);
+    embediq_osal_delay_ms(15000u);   /* the simulated run itself */
 
-    g_sim_running = false;
-    embediq_osal_delay_ms(200u);   /* allow current sim iteration to finish */
+    embediq_osal_atomic32_store(&g_sim_running, 0u);
+    embediq_osal_task_join(g_sim_task);   /* sim task has exited: its writes are visible */
+    g_sim_task = NULL;
 
     ASSERT(ctrl__reading_count() >= 8u,
            "controller processed >= 8 MSG_TEMP_READING messages in 15 s");
