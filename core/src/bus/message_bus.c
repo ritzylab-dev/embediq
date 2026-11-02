@@ -387,12 +387,15 @@ static void route_message(EmbedIQ_Msg_t *msg)
  *
  * Enqueue msg directly onto one endpoint's priority queue, bypassing the
  * subscription table, then wake its dispatch thread. Used by the engine to
- * deliver MSG_FB_FAULT to the faulted FB only. Blocking send (UINT32_MAX),
- * as on the HIGH publish path.
- * Returns EMBEDIQ_OK, or EMBEDIQ_ERR_INVALID if ep/prio/queue is unusable.
+ * deliver MSG_FB_FAULT to the faulted FB only. timeout_ms bounds the wait for
+ * queue capacity (0 = never wait; the engine posts faults with 0 and applies
+ * a refused fault itself).
+ * Returns EMBEDIQ_OK, EMBEDIQ_ERR_INVALID if ep/prio/queue is unusable, or
+ * the queue's timeout error if it stayed full.
  * ------------------------------------------------------------------------- */
 
-embediq_err_t message_bus_post_ep(uint8_t ep, uint8_t prio, const EmbedIQ_Msg_t *msg)
+embediq_err_t message_bus_post_ep(uint8_t ep, uint8_t prio, const EmbedIQ_Msg_t *msg,
+                                  uint32_t timeout_ms)
 {
     if (!msg || ep >= g_ep_count || prio > (uint8_t)EMBEDIQ_MSG_PRIORITY_LOW) {
         return EMBEDIQ_ERR_INVALID;
@@ -401,7 +404,7 @@ embediq_err_t message_bus_post_ep(uint8_t ep, uint8_t prio, const EmbedIQ_Msg_t 
     if (!q) return EMBEDIQ_ERR_INVALID;
 
     EmbedIQ_Msg_t copy = *msg;
-    embediq_err_t rc = embediq_osal_queue_send(q, &copy, UINT32_MAX);
+    embediq_err_t rc = embediq_osal_queue_send(q, &copy, timeout_ms);
     if (rc != EMBEDIQ_OK) return rc;
     if (g_notify_fn) g_notify_fn(ep);
     return EMBEDIQ_OK;

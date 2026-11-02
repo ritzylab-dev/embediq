@@ -21,6 +21,8 @@
  *      FB's code: init_fn, each run_fn dispatch, each fault application
  *      (review #182 N1–N3)
  *   4. embediq_subfn_register() — stored sorted by init_order (I-10 enforced)
+ *   6. embediq_engine_dispatch_shutdown() — bounded; faults still queued are
+ *      applied, other queued messages discarded and reported
  * R-02: no malloc/free. All storage is static.
  * I-10: sub-fn registration is gated by the registering flag, which is true
  *       only during the parent FB's init_fn call.
@@ -100,20 +102,38 @@ static uint8_t       g_boot_count = 0;
 /* Forward declaration — defined after embediq_engine_boot(). */
 void embediq_engine_notify_fb(uint8_t ep_id);
 
-/* Package-internal (message_bus.c): direct enqueue to one endpoint. */
+/* Package-internal (message_bus.c): direct enqueue to one endpoint, waiting
+ * at most timeout_ms for queue capacity. */
 extern embediq_err_t message_bus_post_ep(uint8_t ep, uint8_t prio,
-                                         const EmbedIQ_Msg_t *msg);
+                                         const EmbedIQ_Msg_t *msg, uint32_t timeout_ms);
 
 typedef struct {
     EmbedIQ_FB_t   *fb;
     uint8_t         ep_id;
-    embediq_sem_t   sem;    /* posted by bus on every successful enqueue */
-    EmbedIQ_Task_t *task;   /* handle stored for pthread_join on shutdown */
+    embediq_sem_t   sem;        /* posted by bus on every successful enqueue */
+    EmbedIQ_Task_t *task;       /* handle stored for pthread_join on shutdown */
+    uint32_t        discarded;  /* messages the thread discarded at shutdown;
+                                   written by it before exit, read after join */
 } dispatch_arg_t;
 
 static dispatch_arg_t           g_dispatch_args[EMBEDIQ_MAX_ENDPOINTS];
-static embediq_osal_atomic32_t  g_dispatch_running  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
-static embediq_osal_atomic32_t  g_dispatch_shutdown = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+/* Dispatch lifecycle. g_dispatch_shutdown is the single linearization point
+ * between fault reporters and embediq_engine_dispatch_shutdown(): a reporter
+ * announces its post in g_fault_posts_inflight, then reads the flags; shutdown
+ * sets the flag, then waits for in-flight posts before its final drain. So a
+ * post either completes before that drain (and is applied by it) or sees the
+ * flag and is applied by the reporter itself. */
+static embediq_osal_atomic32_t  g_dispatch_running     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t  g_dispatch_shutdown    = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t  g_fault_posts_inflight = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+/* Upper bound on messages one shutdown drain pops for an FB: every queue
+ * full, plus faults its fault_fns may queue on it meanwhile. */
+#define SHUTDOWN_DRAIN_MAX  ((uint32_t)EMBEDIQ_HIGH_QUEUE_DEPTH                 \
+                             + (uint32_t)EMBEDIQ_NORMAL_QUEUE_DEPTH             \
+                             + (uint32_t)EMBEDIQ_LOW_QUEUE_DEPTH                \
+                             + (uint32_t)EMBEDIQ_FB_FAULT_PENDING_DEPTH)
 
 /* The FB whose dispatch thread is the calling thread (NULL on every other
  * thread). Lets report_fault apply a self-reported fault inline instead of
@@ -260,11 +280,18 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
     if (!fb) return;
 
     uint8_t ep = fb->ep_idx;
-    bool has_dispatch_thread =
-        g_dispatch_args[ep].sem != NULL &&
-        embediq_osal_atomic32_load(&g_dispatch_running) != 0u;
 
-    if (has_dispatch_thread && tl_dispatch_fb != fb) {
+    if (g_dispatch_args[ep].sem != NULL && tl_dispatch_fb != fb) {
+        /* Announce the post BEFORE reading the flags (see g_dispatch_shutdown). */
+        (void)embediq_osal_atomic32_add(&g_fault_posts_inflight, 1u);
+        if (embediq_osal_atomic32_load(&g_dispatch_running) == 0u
+            || embediq_osal_atomic32_load(&g_dispatch_shutdown) != 0u) {
+            /* No dispatch thread, or shutting down: apply here. */
+            (void)embediq_osal_atomic32_sub(&g_fault_posts_inflight, 1u);
+            apply_fault(fb, reason);
+            return;
+        }
+
         /* Deliver on the FB's own thread: HIGH MSG_FB_FAULT to its queue only. */
         EmbedIQ_Msg_t m;
         memset(&m, 0, sizeof(m));
@@ -278,15 +305,17 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
         p.fault_code = reason;
         memcpy(m.payload, &p, sizeof(p));
         m.payload_len = (uint16_t)sizeof(p);
-        if (message_bus_post_ep(ep, (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH, &m) == EMBEDIQ_OK) {
-            return;
-        }
-        /* Queue unusable — fall through and apply inline rather than lose it. */
+        /* Never wait for queue capacity: timeout 0. */
+        embediq_err_t rc = message_bus_post_ep(ep, (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH,
+                                               &m, 0u);
+        (void)embediq_osal_atomic32_sub(&g_fault_posts_inflight, 1u);
+        if (rc == EMBEDIQ_OK) return;
+        /* HIGH queue full (or unusable) — apply here rather than wait or lose it. */
     }
 
-    /* No dispatch thread, before dispatch_boot, or already on the FB's own
-     * dispatch thread: apply here under the FB's execution lock — it waits
-     * for any init_fn, run_fn or fault_fn of this FB in progress (R4, N1). */
+    /* No dispatch thread, a refused post, or already on the FB's own dispatch
+     * thread: apply here under the FB's execution lock — it waits for any
+     * init_fn, run_fn or fault_fn of this FB in progress. */
     apply_fault(fb, reason);
 }
 
@@ -612,65 +641,108 @@ void embediq_engine_notify_fb(uint8_t ep_id)
  *
  * One instance runs per FB that has subscriptions.
  * Blocks on the FB's dispatch semaphore (posted by the bus after each
- * enqueue) then drains all available messages before blocking again.
- * Zero CPU burn when idle — no polling.
+ * enqueue) then drains available messages before blocking again, testing the
+ * shutdown flag before every message so shutdown is bounded by one message,
+ * not by how fast others keep posting. On exit it drains what is left
+ * (drain_at_shutdown). Zero CPU burn when idle — no polling.
  * ------------------------------------------------------------------------- */
+
+/* True when msg is a framework-posted MSG_FB_FAULT for endpoint ep; *reason
+ * receives its fault code. A MSG_FB_FAULT published by an FB through the bus
+ * is not one. */
+static bool is_framework_fault(const EmbedIQ_Msg_t *msg, uint8_t ep, uint32_t *reason)
+{
+    if (msg->msg_id != MSG_FB_FAULT || msg->source_endpoint_id != EMBEDIQ_EP_FRAMEWORK) {
+        return false;
+    }
+    MSG_FB_FAULT_Payload_t p;
+    memcpy(&p, msg->payload, sizeof(p));
+    if (p.fb_id != ep) return false;
+    *reason = p.fault_code;
+    return true;
+}
+
+/* Pop the next message (HIGH, then NORMAL, then LOW) into *msg. */
+static bool recv_next(uint8_t ep, EmbedIQ_Msg_t *msg, uint8_t *prio)
+{
+    for (uint8_t p = 0u; p < 3u; p++) {
+        if (message_bus_recv_ep(ep, p, msg)) {
+            *prio = p;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Dispatch one queued message. Returns false when all queues are empty. */
+static bool dispatch_next(EmbedIQ_FB_t *fb, uint8_t ep)
+{
+    EmbedIQ_Msg_t msg;
+    uint8_t       rx_prio = 0u;
+    if (!recv_next(ep, &msg, &rx_prio)) return false;
+
+    /* MSG_RX tap — level-3 (trace) event. */
+    if (embediq_obs_level_at_least(3u)) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_RX, msg.source_endpoint_id,
+                         ep, rx_prio, msg.msg_id);
+    }
+    /* One message under the FB's execution lock; released between messages
+     * so inline reporters can interleave. */
+    if (!exec_enter(fb)) return true;
+    /* Framework-posted fault for this FB: apply here, on its own thread, and
+     * do not dispatch to sub-functions. */
+    uint32_t reason = 0u;
+    if (is_framework_fault(&msg, ep, &reason)) {
+        fault_apply_one_locked(fb, reason);
+    } else {
+        dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
+    }
+    exec_exit(fb);   /* applies faults the FB queued on itself */
+    return true;
+}
+
+/* Empty fb's queues at dispatch shutdown: framework faults for fb are applied
+ * under its execution lock; every other message is discarded and counted.
+ * Bounded by SHUTDOWN_DRAIN_MAX pops. Returns the number discarded. */
+static uint32_t drain_at_shutdown(EmbedIQ_FB_t *fb, uint8_t ep)
+{
+    uint32_t      discarded = 0u;
+    EmbedIQ_Msg_t msg;
+    uint8_t       prio = 0u;
+    for (uint32_t n = 0u; n < SHUTDOWN_DRAIN_MAX && recv_next(ep, &msg, &prio); n++) {
+        uint32_t reason = 0u;
+        if (is_framework_fault(&msg, ep, &reason)) {
+            apply_fault(fb, reason);
+        } else {
+            discarded++;
+        }
+    }
+    return discarded;
+}
 
 static void fb_dispatch_loop(void *arg)
 {
     dispatch_arg_t *da = (dispatch_arg_t *)arg;
     EmbedIQ_FB_t   *fb = da->fb;
     uint8_t         ep = da->ep_id;
-    EmbedIQ_Msg_t   msg;
 
     tl_dispatch_fb = fb;   /* this thread is fb's dispatch thread */
 
-    while (embediq_osal_atomic32_load(&g_dispatch_running) != 0u) {
+    while (embediq_osal_atomic32_load(&g_dispatch_running) != 0u
+           && embediq_osal_atomic32_load(&g_dispatch_shutdown) == 0u) {
         /* Block until the bus signals that at least one message is queued
          * or dispatch_shutdown posts the semaphore to wake this thread. */
         embediq_sem_wait(da->sem);
 
-        /* Shutdown path: exit the loop cleanly without processing more msgs. */
-        if (embediq_osal_atomic32_load(&g_dispatch_shutdown) != 0u) break;
-
-        /* Drain all queued messages before blocking again. */
-        bool got;
-        do {
-            got = false;
-            uint8_t rx_prio = 0u;
-            for (uint8_t p = 0u; p < 3u && !got; p++) {
-                got = message_bus_recv_ep(ep, p, &msg);
-                if (got) rx_prio = p;
-            }
-            if (got) {
-                /* MSG_RX tap — level-3 (trace) event (T2-6). */
-                if (embediq_obs_level_at_least(3u)) {
-                    embediq_obs_emit(EMBEDIQ_OBS_EVT_MSG_RX, msg.source_endpoint_id,
-                                     ep, rx_prio, msg.msg_id);
-                }
-                /* One message under the FB's execution lock (N1); released
-                 * between messages so inline reporters can interleave. */
-                if (!exec_enter(fb)) continue;
-                /* Framework-posted fault for this FB: apply here, on its own
-                 * thread, and do not dispatch to sub-functions. A MSG_FB_FAULT
-                 * published by an FB through the bus is unaffected. */
-                bool is_own_fault = false;
-                if (msg.msg_id == MSG_FB_FAULT &&
-                    msg.source_endpoint_id == EMBEDIQ_EP_FRAMEWORK) {
-                    MSG_FB_FAULT_Payload_t p;
-                    memcpy(&p, msg.payload, sizeof(p));
-                    if (p.fb_id == ep) {
-                        fault_apply_one_locked(fb, p.fault_code);
-                        is_own_fault = true;
-                    }
-                }
-                if (!is_own_fault) {
-                    dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
-                }
-                exec_exit(fb);   /* applies faults the FB queued on itself */
-            }
-        } while (got);
+        /* Drain queued messages, testing the shutdown flag before each one. */
+        while (embediq_osal_atomic32_load(&g_dispatch_shutdown) == 0u
+               && dispatch_next(fb, ep)) {
+        }
     }
+
+    /* Shutdown: apply the faults still queued, discard the rest. */
+    da->discarded = drain_at_shutdown(fb, ep);
+    tl_dispatch_fb = NULL;
 }
 
 /* ---------------------------------------------------------------------------
@@ -705,28 +777,31 @@ void embediq_engine_dispatch_boot(void)
 /* ---------------------------------------------------------------------------
  * Public: embediq_engine_dispatch_shutdown()
  *
- * 1. Set the shutdown flag so dispatch loops exit after their next sem_wait.
- * 2. Post each FB's semaphore once to unblock any thread currently waiting.
- * 3. Join every dispatch thread — returns only when all have exited.
- * 4. Clear the shutdown flag and g_dispatch_running so dispatch_boot() can
- *    be called again for a clean restart (idempotent re-boot support).
+ * 1. Set the shutdown flag — the linearization point for fault reporters.
+ * 2. Post each FB's semaphore once and join every dispatch thread; each exits
+ *    within one message and drains its own queues (drain_at_shutdown).
+ * 3. Wait for fault posts in flight (timeout-0 sends: microseconds), bounded
+ *    by EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS; report if the bound is reached.
+ * 4. Drain every dispatch FB's queues once more on this thread, then report
+ *    the discarded messages as one QUEUE_DROP event per FB.
+ * 5. Clear running, THEN shutdown: reporters test (running == 0 ||
+ *    shutdown == 1), so this order leaves no moment in which a reporter could
+ *    post into a queue nobody drains.
  * ------------------------------------------------------------------------- */
 
 int embediq_engine_dispatch_shutdown(void)
 {
     if (embediq_osal_atomic32_load(&g_dispatch_running) == 0u) return 0;   /* idempotent */
 
-    /* Signal all dispatch loops to exit after their next wake-up. */
+    /* 1. */
     embediq_osal_atomic32_store(&g_dispatch_shutdown, 1u);
 
-    /* Post each semaphore once to unblock any thread blocked in sem_wait. */
+    /* 2. */
     for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
         if (g_dispatch_args[i].sem) {
             embediq_sem_post(g_dispatch_args[i].sem);
         }
     }
-
-    /* Join every thread — no busy-wait, no polling. */
     for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
         if (g_dispatch_args[i].task) {
             embediq_osal_task_join(g_dispatch_args[i].task);
@@ -734,9 +809,33 @@ int embediq_engine_dispatch_shutdown(void)
         }
     }
 
-    /* Reset flags so dispatch_boot() can restart cleanly. */
-    embediq_osal_atomic32_store(&g_dispatch_shutdown, 0u);
+    /* 3. */
+    uint32_t t0 = embediq_osal_time_ms();
+    while (embediq_osal_atomic32_load(&g_fault_posts_inflight) != 0u) {
+        if ((embediq_osal_time_ms() - t0) >= EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS) {
+            embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, 0xFFu,
+                             (uint8_t)EMBEDIQ_FAULT_SHUTDOWN_INFLIGHT, 0u);
+            break;
+        }
+        embediq_osal_delay_ms(1u);
+    }
+
+    /* 4. */
+    for (uint8_t i = 0u; i < EMBEDIQ_MAX_ENDPOINTS; i++) {
+        if (!g_dispatch_args[i].sem || !g_dispatch_args[i].fb) continue;
+        uint32_t discarded = g_dispatch_args[i].discarded
+                             + drain_at_shutdown(g_dispatch_args[i].fb, i);
+        g_dispatch_args[i].discarded = 0u;
+        if (discarded > 0u) {
+            embediq_obs_emit(EMBEDIQ_OBS_EVT_QUEUE_DROP, 0xFFu, i,
+                             (uint8_t)EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN,
+                             (uint16_t)(discarded > UINT16_MAX ? UINT16_MAX : discarded));
+        }
+    }
+
+    /* 5. */
     embediq_osal_atomic32_store(&g_dispatch_running, 0u);
+    embediq_osal_atomic32_store(&g_dispatch_shutdown, 0u);
     return 0;
 }
 

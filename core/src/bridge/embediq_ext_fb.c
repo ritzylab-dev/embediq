@@ -68,18 +68,54 @@ struct embediq_ext_fb_s {
  * ------------------------------------------------------------------------- */
 
 static embediq_ext_fb_t s_pool[EMBEDIQ_BRIDGE_MAX_EXT_FBS];
-static bool             s_pool_initialised = false;
 
-static void pool_init_once(void)
+/* Pool lock: guards every slot's in_use flag — the scan-and-claim in
+ * embediq_ext_fb_init() and the release in embediq_ext_fb_deinit() /
+ * init failure. A claimed slot's other fields belong to its claimer. */
+static EmbedIQ_Mutex_t *s_pool_mutex = NULL;
+
+/* One-time pool initialisation, safe against concurrent first callers. An
+ * atomic state rather than the OSAL critical section, which must not wrap an
+ * OSAL call or a loop over data (embediq_osal.h). */
+#define POOL_UNINIT        0u
+#define POOL_INITIALISING  1u
+#define POOL_READY         2u
+static embediq_osal_atomic32_t s_pool_state = EMBEDIQ_OSAL_ATOMIC32_INIT(POOL_UNINIT);
+
+static bool pool_init_once(void)
 {
-    if (s_pool_initialised) return;
-    memset(s_pool, 0, sizeof(s_pool));
+    for (;;) {
+        uint32_t st = embediq_osal_atomic32_load(&s_pool_state);
+        if (st == POOL_READY) return true;
+        if (st == POOL_UNINIT
+            && embediq_osal_atomic32_cas(&s_pool_state, POOL_UNINIT, POOL_INITIALISING)) {
+            memset(s_pool, 0, sizeof(s_pool));
 #if defined(EMBEDIQ_BRIDGE_TRANSPORT_SOCKET)
-    for (uint8_t i = 0u; i < EMBEDIQ_BRIDGE_MAX_EXT_FBS; i++) {
-        s_pool[i].fd = -1;
-    }
+            for (uint8_t i = 0u; i < EMBEDIQ_BRIDGE_MAX_EXT_FBS; i++) {
+                s_pool[i].fd = -1;
+            }
 #endif
-    s_pool_initialised = true;
+            s_pool_mutex = embediq_osal_mutex_create();
+            if (s_pool_mutex == NULL) {
+                embediq_osal_atomic32_store(&s_pool_state, POOL_UNINIT);
+                return false;
+            }
+            embediq_osal_atomic32_store(&s_pool_state, POOL_READY);
+            return true;
+        }
+        embediq_osal_delay_ms(1u);   /* another caller is initialising (microseconds) */
+    }
+}
+
+/* Return a claimed slot to the pool. */
+static void pool_release(embediq_ext_fb_t *slot)
+{
+    (void)embediq_osal_mutex_lock(s_pool_mutex, UINT32_MAX);
+    memset(slot, 0, sizeof(*slot));
+#if defined(EMBEDIQ_BRIDGE_TRANSPORT_SOCKET)
+    slot->fd = -1;
+#endif
+    embediq_osal_mutex_unlock(s_pool_mutex);
 }
 
 /* ---------------------------------------------------------------------------
@@ -88,9 +124,10 @@ static void pool_init_once(void)
 
 embediq_ext_fb_t *embediq_ext_fb_init(const char *name)
 {
-    pool_init_once();
+    if (!pool_init_once()) return NULL;
 
-    /* Scan for a free slot. */
+    /* Scan for a free slot and claim it under the pool lock. */
+    if (embediq_osal_mutex_lock(s_pool_mutex, UINT32_MAX) != EMBEDIQ_OK) return NULL;
     uint8_t slot_idx = (uint8_t)EMBEDIQ_BRIDGE_MAX_EXT_FBS;
     for (uint8_t i = 0u; i < EMBEDIQ_BRIDGE_MAX_EXT_FBS; i++) {
         if (!s_pool[i].in_use) {
@@ -99,12 +136,14 @@ embediq_ext_fb_t *embediq_ext_fb_init(const char *name)
         }
     }
     if (slot_idx >= EMBEDIQ_BRIDGE_MAX_EXT_FBS) {
+        embediq_osal_mutex_unlock(s_pool_mutex);
         return NULL;
     }
-
     embediq_ext_fb_t *slot = &s_pool[slot_idx];
     slot->in_use              = true;
     slot->virtual_endpoint_id = (uint8_t)(0x40u + slot_idx);
+    embediq_osal_mutex_unlock(s_pool_mutex);
+
     slot->subscription_count  = 0u;
     if (name != NULL) {
         (void)strncpy(slot->name, name, sizeof(slot->name) - 1u);
@@ -123,7 +162,7 @@ embediq_ext_fb_t *embediq_ext_fb_init(const char *name)
     if (slot->inbound_q == NULL || slot->outbound_q == NULL) {
         if (slot->inbound_q  != NULL) embediq_osal_queue_destroy(slot->inbound_q);
         if (slot->outbound_q != NULL) embediq_osal_queue_destroy(slot->outbound_q);
-        memset(slot, 0, sizeof(*slot));
+        pool_release(slot);
         return NULL;
     }
     fb_bridge__publish_extfb_connected(slot->virtual_endpoint_id,
@@ -138,8 +177,7 @@ embediq_ext_fb_t *embediq_ext_fb_init(const char *name)
     }
     int fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (fd < 0) {
-        memset(slot, 0, sizeof(*slot));
-        slot->fd = -1;
+        pool_release(slot);
         return NULL;
     }
     struct sockaddr_un addr;
@@ -148,8 +186,7 @@ embediq_ext_fb_t *embediq_ext_fb_init(const char *name)
     (void)strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1u);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(fd);
-        memset(slot, 0, sizeof(*slot));
-        slot->fd = -1;
+        pool_release(slot);
         return NULL;
     }
     slot->fd = fd;
@@ -329,8 +366,5 @@ void embediq_ext_fb_deinit(embediq_ext_fb_t *h)
     }
 #endif
 
-    memset(h, 0, sizeof(*h));
-#if defined(EMBEDIQ_BRIDGE_TRANSPORT_SOCKET)
-    h->fd = -1;
-#endif
+    pool_release(h);
 }

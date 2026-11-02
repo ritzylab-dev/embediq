@@ -78,6 +78,11 @@ typedef enum {
  *  was running its own code; msg_id = number of reports not applied. */
 #define EMBEDIQ_FAULT_PENDING_OVERFLOW  0x81u
 
+/** embediq_engine_dispatch_shutdown() stopped waiting for in-flight fault
+ *  posts after EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS and continued.
+ *  source_fb_id = target_fb_id = 0xFF. */
+#define EMBEDIQ_FAULT_SHUTDOWN_INFLIGHT 0x82u
+
 /* ---------------------------------------------------------------------------
  * Subscription / publication array macros
  *
@@ -173,9 +178,11 @@ EmbedIQ_FB_Handle_t embediq_fb_register(const EmbedIQ_FB_Config_t *config);
  * its fault applied on the reporting thread, under the FB's execution lock,
  * so concurrent reporters, init_fn and the first dispatches are serialised.
  *
- * Calling context: any thread. May block on the target FB's execution lock
- * (bounded by the running handler / init_fn) and, when a dispatch thread is
- * running, on the target's HIGH queue (UINT32_MAX send) if it is full.
+ * Calling context: any thread. Never waits for queue capacity: if the
+ * target's HIGH queue is full, or dispatch is shutting down, the fault is
+ * applied on the calling thread under the FB's execution lock (bounded by
+ * that FB's running handler). A fault is never lost: posted faults still
+ * queued at dispatch_shutdown are applied before it returns.
  */
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t fb, uint32_t reason);
 
@@ -225,8 +232,9 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
  *               run_fn dispatch, each framework MSG_FB_FAULT), never while
  *               blocked on its semaphore; the first dispatch therefore waits
  *               for any in-flight inline fault_fn.
- *   shutdown  — embediq_engine_dispatch_shutdown() joins the dispatch thread
- *               between messages. exit_fn is not invoked by the engine in v1.
+ *   shutdown  — embediq_engine_dispatch_shutdown() stops the dispatch thread
+ *               between messages; faults still queued are applied under the
+ *               lock. exit_fn is not invoked by the engine in v1.
  * Cost: one uncontended mutex lock/unlock per dispatched message (tens of ns
  * on POSIX). Boot fails if a per-FB execution lock cannot be allocated.
  * ------------------------------------------------------------------------- */
@@ -262,13 +270,19 @@ void embediq_engine_dispatch_boot(void);
  * Signal all dispatch threads to exit and join them.
  *
  * Sets the shutdown flag, posts each FB's dispatch semaphore once to unblock
- * any waiting thread, then calls pthread_join() on every dispatch thread.
- * Returns only after all threads have exited — no polling, no busy-wait.
+ * any waiting thread, then joins every dispatch thread; each stops within one
+ * message. Applies every framework fault still queued; discards other queued
+ * messages and reports the count as one QUEUE_DROP event per FB (state
+ * EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN). Returns in bounded time regardless of
+ * concurrent fault reporters (in-flight posts are awaited for at most
+ * EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS). Afterwards faults are applied on the
+ * reporting thread until dispatch_boot is called again.
  *
  * Safe to call multiple times (idempotent).
  * Call before OTA restart or clean process exit.
  *
  * Returns 0 on success (including when no threads were running), -1 on error.
+ * Calling context: the thread that called embediq_engine_dispatch_boot().
  */
 int embediq_engine_dispatch_shutdown(void);
 

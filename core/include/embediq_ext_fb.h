@@ -26,6 +26,13 @@ extern "C" {
 
 typedef struct embediq_ext_fb_s embediq_ext_fb_t;  /* opaque */
 
+/**
+ * Claim a pool slot (and its virtual endpoint id) for a new External FB.
+ * Returns NULL if the pool is full or the transport cannot be set up.
+ * Calling context: any thread. Slot claim and release are serialised by a
+ * pool lock held only for the scan-and-claim / release; concurrent callers
+ * always receive distinct slots.
+ */
 embediq_ext_fb_t *embediq_ext_fb_init(const char *name);
 embediq_err_t     embediq_ext_fb_subscribe(embediq_ext_fb_t *h,
                                             const uint16_t *ids, uint8_t n);
@@ -33,6 +40,10 @@ embediq_err_t     embediq_ext_fb_publish(embediq_ext_fb_t *h,
                                           const EmbedIQ_Msg_t *msg);
 embediq_err_t     embediq_ext_fb_recv(embediq_ext_fb_t *h,
                                        EmbedIQ_Msg_t *out, uint32_t timeout_ms);
+/**
+ * Release h's slot back to the pool (NULL-safe).
+ * Calling context: any thread; one call per handle.
+ */
 void              embediq_ext_fb_deinit(embediq_ext_fb_t *h);
 
 #ifdef __cplusplus

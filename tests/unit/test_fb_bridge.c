@@ -3,9 +3,10 @@
 /*
  * test_fb_bridge.c — Unit tests for the fb_bridge C framework (Item 5a)
  *
- * 8 in-process tests covering External FB pool management, virtual endpoint
- * assignment, publish routing, subscribe filtering, source endpoint stamping,
- * and bridge bus message emission. Compiled with EMBEDIQ_BRIDGE_TRANSPORT_QUEUE
+ * 9 in-process tests covering External FB pool management (including
+ * concurrent slot claims), virtual endpoint assignment, publish routing,
+ * subscribe filtering, source endpoint stamping, and bridge bus message
+ * emission. Compiled with EMBEDIQ_BRIDGE_TRANSPORT_QUEUE
  * so no socket is needed — all tests run in-process against the real bus.
  *
  * Test pattern matches tests/unit/test_message_bus.c exactly: custom ASSERT
