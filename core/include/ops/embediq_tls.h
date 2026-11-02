@@ -13,6 +13,8 @@
  *         embediq_tls_err_t added; embediq_bus.h dependency removed.
  *   v2 (additive) — EMBEDIQ_TLS_ERR_BUSY (-12): returned by every op on a slot while a
  *         connect_async() is in flight. No field change; EMBEDIQ_TLS_OPS_VERSION stays 2.
+ *   v2 (additive) — connect_async() on a connected slot also returns
+ *         EMBEDIQ_TLS_ERR_BUSY. No field change; EMBEDIQ_TLS_OPS_VERSION stays 2.
  *
  * Context safety: INSTANCE-SAFE — each ops table slot represents one
  * independent TLS connection context. Concurrent use of distinct slots
@@ -21,6 +23,10 @@
  * slot — configure, a second connect_async, disconnect, send, recv —
  * returns EMBEDIQ_TLS_ERR_BUSY without blocking. The slot accepts ops again
  * once the connect has completed (no later than on_complete being invoked).
+ * The completion callback and user context belong to the attempt that
+ * started them; a later connect_async() on the same slot cannot redirect or
+ * drop an earlier completion. A slot that is connected or connecting refuses
+ * connect_async() with EMBEDIQ_TLS_ERR_BUSY: disconnect first.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -63,7 +69,7 @@ typedef int32_t embediq_tls_err_t;
 #define EMBEDIQ_TLS_ERR_NO_RESOURCES      ((embediq_tls_err_t) -9)  /**< slot index out of range */
 #define EMBEDIQ_TLS_ERR_SEND              ((embediq_tls_err_t)-10)  /**< send() underlying write failed */
 #define EMBEDIQ_TLS_ERR_RECV              ((embediq_tls_err_t)-11)  /**< recv() underlying read failed */
-#define EMBEDIQ_TLS_ERR_BUSY              ((embediq_tls_err_t)-12)  /**< slot has a connect_async() in flight */
+#define EMBEDIQ_TLS_ERR_BUSY              ((embediq_tls_err_t)-12)  /**< connect_async() in flight; or connect_async() on a connected slot */
 
 /* ---------------------------------------------------------------------------
  * Async connect callback
@@ -143,6 +149,8 @@ typedef struct {
      * user_ctx:    passed unchanged to on_complete. May be NULL.
      *
      * Returns EMBEDIQ_TLS_OK if the operation was successfully initiated.
+     * Returns EMBEDIQ_TLS_ERR_BUSY if the slot is connected or connecting
+     * (disconnect first).
      * on_complete is NOT called on error return — the caller must check the
      * return value and handle it directly.
      */

@@ -150,25 +150,23 @@ static void prov_run_startup(void)
         return;
     }
 
-    /* STEP 3: write mqtt.client_id from the cert CN if not already set.
+    /* STEP 3: provision mqtt.client_id from the cert CN, every startup.
      * mqtt.client_id is a CFG_MUT_FACTORY key — embediq_cfg_set_str() would be
      * rejected by the NVM mutability guard. embediq_nvm_provision() is the
      * authorized write-once path: it sets the key only while absent/empty and
-     * is idempotent once provisioned (IEC 62443 commissioning immutability). */
-    char existing_id[EMBEDIQ_NVM_VAL_SIZE];
-    existing_id[0] = '\0';
-    (void)embediq_cfg_get_str("mqtt.client_id", existing_id, sizeof(existing_id), "");
-    if (strcmp(existing_id, ctx.device_id) != 0) {
-        if (embediq_nvm_provision("mqtt.client_id", ctx.device_id) != EMBEDIQ_OK) {
-            prov_obs_fault(1u);
-            prov_report_fault(2u);
-            return;
-        }
-        if (embediq_nvm_flush() != EMBEDIQ_OK) {
-            prov_obs_fault(2u);
-            prov_report_fault(3u);
-            return;
-        }
+     * keeps a provisioned value (IEC 62443 commissioning immutability). It is
+     * called even when RAM already holds the value: it returns OK only once
+     * that value is on flash, so a persist that failed earlier is retried
+     * here, not mistaken for a durable identity. */
+    if (embediq_nvm_provision("mqtt.client_id", ctx.device_id) != EMBEDIQ_OK) {
+        prov_obs_fault(1u);
+        prov_report_fault(2u);
+        return;
+    }
+    if (embediq_nvm_flush() != EMBEDIQ_OK) {
+        prov_obs_fault(2u);
+        prov_report_fault(3u);
+        return;
     }
 
     /* STEP 3b: advance to MANUFACTURED if not already there. */

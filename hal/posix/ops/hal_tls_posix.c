@@ -13,13 +13,16 @@
  *
  * Thread safety: one pthread_mutex_t per slot, only ever unlocked by the
  * thread that locked it. All public functions lock the slot mutex.
- * connect_async() sets `connecting` under the mutex, releases it and spawns a
- * detached connect thread. While `connecting` is true the connect thread owns
- * the slot's mbedTLS and socket state exclusively, without holding the mutex;
- * every other op checks `connecting` under the mutex and returns
- * EMBEDIQ_TLS_ERR_BUSY. The connect thread publishes its result and clears
- * `connecting` under the mutex, unlocks, then calls on_complete (mutex not
- * held).
+ * connect_async() refuses a slot that is connected or connecting; otherwise
+ * it sets `connecting` under the mutex, fills the slot's argument entry,
+ * releases the mutex and spawns a detached connect thread. While `connecting`
+ * is true the connect thread owns the slot's mbedTLS and socket state
+ * exclusively, without holding the mutex; every other op checks `connecting`
+ * under the mutex and returns EMBEDIQ_TLS_ERR_BUSY. The connect thread copies
+ * its argument entry before any blocking work and uses only that copy: the
+ * entry may be reused by the next attempt once `connecting` is cleared. It
+ * publishes its result and clears `connecting` under the mutex, unlocks, then
+ * calls the copy's on_complete with the copy's user_ctx (mutex not held).
  *
  * Phase 3 note: FreeRTOS implementation uses mbedTLS with OSAL primitives
  * instead of pthreads. The ops table contract is identical.
@@ -130,11 +133,15 @@ static embediq_tls_err_t map_mbedtls_handshake_err(tls_slot_t *s, int rc)
 /* ---------------------------------------------------------------------------
  * Connect thread — spawned by connect_async()
  * Owns the slot exclusively while s->connecting is true and does its work
- * WITHOUT the slot mutex. At the end it takes the mutex, publishes the result
- * and clears `connecting`, unlocks, then calls on_complete (mutex not held).
+ * WITHOUT the slot mutex, from its own copy of the attempt. At the end it
+ * takes the mutex, publishes the result and clears `connecting`, unlocks,
+ * then calls the attempt's on_complete (mutex not held).
  * ------------------------------------------------------------------------- */
 
-static void connect_finish(tls_slot_t *s, const connect_args_t *a, embediq_tls_err_t result)
+/* attempt is the connect thread's own copy: after the unlock the slot and its
+ * argument entry belong to the next attempt, so nothing after it reads them. */
+static void connect_finish(tls_slot_t *s, const connect_args_t *attempt,
+                           embediq_tls_err_t result)
 {
     pthread_mutex_lock(&s->mutex);
     s->connected  = (result == EMBEDIQ_TLS_OK);
@@ -142,14 +149,16 @@ static void connect_finish(tls_slot_t *s, const connect_args_t *a, embediq_tls_e
     pthread_mutex_unlock(&s->mutex);
 #ifdef EMBEDIQ_PLATFORM_HOST
     tls_connect_finish_hook_t hook = atomic_load(&s_connect_finish_hook);
-    if (hook) hook(a->user_ctx);
+    if (hook) hook(attempt->user_ctx);
 #endif
-    a->on_complete(result, a->user_ctx);
+    attempt->on_complete(result, attempt->user_ctx);
 }
 
 static void *connect_thread(void *arg)
 {
-    connect_args_t *a   = (connect_args_t *)arg;
+    /* Copy the attempt first, while `connecting` keeps the entry unchanged. */
+    const connect_args_t attempt = *(const connect_args_t *)arg;
+    const connect_args_t *a = &attempt;
     tls_slot_t     *s   = &g_slots[a->slot_idx];
     embediq_tls_err_t result;
     char            port_str[TLS_PORT_STR_MAX];
@@ -328,7 +337,9 @@ static embediq_tls_err_t slot_connect_async(uint8_t                   idx,
 
     pthread_mutex_lock(&s->mutex);
 
-    if (s->connecting) {
+    /* A live session or an attempt in flight owns the socket and the ssl
+     * context: disconnect first. */
+    if (s->connecting || s->connected) {
         pthread_mutex_unlock(&s->mutex);
         return EMBEDIQ_TLS_ERR_BUSY;
     }

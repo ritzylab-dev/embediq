@@ -540,9 +540,6 @@ static void test_concurrent_sets_persist_newest(void)
  * ------------------------------------------------------------------------- */
 
 #define PERSIST_FAIL_SETS      70000u   /* well past any 16-bit generation lag */
-#ifndef EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL
-#define EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL 0x6Bu   /* until embediq_obs.h declares it */
-#endif
 
 /* Reload the table from flash, as a power cycle does. */
 static void reload_from_flash(void)

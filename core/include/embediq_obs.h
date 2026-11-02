@@ -279,7 +279,17 @@ extern "C" {
                                                             rejected key (0=factory 2=user).
                                                           msg_id: low 16 bits of key name CRC32
                                                             (key name itself is never logged). */
-/* 0x6A–0x6F reserved */
+/* 0x6A reserved: STREAM_FAULT (ARCHITECTURE.md "Streaming Data Plane") */
+#define EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL      0x6Bu /**< NVM table write to flash failed.
+                                                          The change stays in RAM; the next
+                                                          successful persist carries it.
+                                                          One event per failed write.
+                                                          source_fb_id: 0. target_fb_id: 0.
+                                                          state_or_flag: HAL return value
+                                                            truncated to uint8_t.
+                                                          msg_id: low 16 bits of the table
+                                                            generation that failed to persist. */
+/* 0x6C–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */
 

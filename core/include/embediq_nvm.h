@@ -6,7 +6,9 @@
  * The ESP32 implementation uses NVS (Non-Volatile Storage).
  *
  * All operations are synchronous from the caller's perspective.
- * fb_nvm owns internal write buffering and flush scheduling.
+ * Every mutation persists synchronously and returns whether the change
+ * reached flash; embediq_nvm_flush() rewrites the current table (use it
+ * after a failed mutation to retry).
  *
  * Concurrency — every function is callable from any thread. fb_nvm uses two
  * locks with one fixed order (persist lock, then table lock):
@@ -19,13 +21,14 @@
  *     (a later writer persisted a newer table) skips its write, so an older
  *     table never overwrites a newer one.
  * embediq_nvm_get() takes only the table lock: it never waits for a persist
- * in flight. Writes return once their change (or a newer table) is on flash
- * and may wait for another writer's persist.
+ * in flight. Writes return EMBEDIQ_OK once their change (or a newer table)
+ * is on flash, EMBEDIQ_ERR if the flash write failed, and may wait for
+ * another writer's persist.
  *
  * Constraints (v1):
  *   - Keys are NUL-terminated strings up to EMBEDIQ_NVM_KEY_MAX bytes.
  *   - Values are raw byte arrays up to EMBEDIQ_NVM_VAL_MAX bytes.
- *   - No transactions. embediq_nvm_flush() is the durability boundary.
+ *   - No transactions.
  *   - embediq_nvm_reset() erases ALL keys — use with care.
  *
  * I-01: Compiles standalone with zero OSAL or BSP dependencies.
@@ -72,6 +75,9 @@ extern "C" {
  * @param val   Pointer to value bytes.
  * @param len   Number of bytes in val; must be <= EMBEDIQ_NVM_VAL_MAX.
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR on invalid args or store error.
+ * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
+ * the change and the next successful persist (any later write, or flush)
+ * carries it.
  *
  * Calling context: any thread. May wait for a persist in flight.
  */
@@ -93,6 +99,9 @@ embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len);
 /**
  * Remove the entry for the given key.
  * If the key does not exist, returns EMBEDIQ_OK (idempotent).
+ * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
+ * the change and the next successful persist (any later write, or flush)
+ * carries it.
  *
  * Calling context: any thread. May wait for a persist in flight.
  */
@@ -101,7 +110,12 @@ embediq_err_t embediq_nvm_delete(const char *key);
 /**
  * embediq_nvm_provision — write-once provisioning write.
  * Semantics: if key is absent or empty, write value and return EMBEDIQ_OK.
- *            if key is already set (non-empty), return EMBEDIQ_OK (idempotent).
+ *            Idempotent: a second call with the key already provisioned does
+ *            not change the value; it returns EMBEDIQ_OK only once that value
+ *            is on flash, retrying a persist that previously failed.
+ * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
+ * the change and the next successful persist (any later write, or flush)
+ * carries it.
  * This is the ONLY authorized write path for CFG_MUT_FACTORY keys at runtime.
  * IEC 62443 commissioning immutability: operator cannot overwrite after provisioning.
  * fb_provisioning calls this at UNMANUFACTURED -> MANUFACTURED transition only.
@@ -116,6 +130,9 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value);
  * (see docs/architecture/lifecycle.md — OTA shutdown contract).
  *
  * @return EMBEDIQ_OK if all data is safely persisted, EMBEDIQ_ERR on I/O error.
+ * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
+ * the change and the next successful persist (any later write, or flush)
+ * carries it.
  *
  * Calling context: any thread. Always writes the current table; may wait for
  * a persist in flight.
@@ -127,6 +144,9 @@ embediq_err_t embediq_nvm_flush(void);
  * Typically called during factory reset only.
  *
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR on store error.
+ * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
+ * the change and the next successful persist (any later write, or flush)
+ * carries it.
  *
  * Calling context: any thread. May wait for a persist in flight.
  */

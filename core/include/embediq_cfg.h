@@ -23,9 +23,9 @@
  * no global mutable state of its own — the getter / setter calls pass
  * straight through to embediq_nvm_get / _set / _delete.
  *
- * Durability: fb_nvm persists at its own cadence. Callers that must
- * guarantee a value is flushed to storage before continuing should call
- * embediq_nvm_flush() explicitly (for example, before MSG_SYS_OTA_READY).
+ * Durability: every mutation persists synchronously and returns whether the
+ * change reached flash; embediq_nvm_flush() rewrites the current table (use
+ * it after a failed mutation to retry).
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -71,7 +71,10 @@ size_t   embediq_cfg_get_str  (const char *key, char *buf,
 
 /* ---------------------------------------------------------------------------
  * Typed setters — persist the value under `key`. Return true on success,
- * false on NVM error, over-long key, or store full.
+ * false on NVM error, over-long key, or store full. false also when the
+ * value could not be persisted; in that case the new value IS in RAM
+ * (getters return it) and reaches flash with the next successful persist —
+ * unlike every other false, which leaves the old value.
  *
  * Calling context: any thread. A setter writes to flash and may wait for
  * another writer's persist in flight (see embediq_nvm.h).
@@ -85,7 +88,9 @@ bool     embediq_cfg_set_str  (const char *key, const char *value);
 
 /**
  * Remove the entry for the given key. Returns true on success or if the
- * key was already absent (fb_nvm makes delete idempotent).
+ * key was already absent (fb_nvm makes delete idempotent). false also when
+ * the removal could not be persisted; in that case the key IS gone from RAM
+ * and the removal reaches flash with the next successful persist.
  *
  * Calling context: any thread. May wait for a persist in flight.
  */
