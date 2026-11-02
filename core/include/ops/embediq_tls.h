@@ -11,6 +11,8 @@
  *   v1 — initial stub contract (LIB-5)
  *   v2 — configure() added; callback changed to void *user_ctx;
  *         embediq_tls_err_t added; embediq_bus.h dependency removed.
+ *   v2 (additive) — EMBEDIQ_TLS_ERR_BUSY (-12): returned by every op on a slot while a
+ *         connect_async() is in flight. No field change; EMBEDIQ_TLS_OPS_VERSION stays 2.
  *
  * Context safety: INSTANCE-SAFE — each ops table slot represents one
  * independent TLS connection context. Concurrent use of distinct slots
