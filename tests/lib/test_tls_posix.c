@@ -36,6 +36,9 @@
 /* Use extern declarations — not HAL headers (boundary_checker rule for tests/) */
 extern const embediq_tls_ops_t *hal_tls_posix_ops_slot(uint8_t idx);
 extern const embediq_tls_ops_t *hal_tls_posix_ops(void);
+/* Host-only: called after a connect attempt releases its slot and before its
+ * on_complete, with that attempt's user_ctx (NULL removes it). */
+extern void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx));
 
 /* Test-local buffer sizes */
 #define TLS_CMD_BUF_SIZE   512u   /* shell command string for system() */
@@ -487,6 +490,193 @@ static void test_async_connect_mutex_ownership(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_async_completion_belongs_to_its_attempt
+ *
+ * Two attempts on one slot, each failing its TCP connect at once (the port is
+ * closed). The host hook parks the first attempt's worker after it has
+ * released the slot and before its on_complete; the second attempt is then
+ * accepted and completes. Released, the first worker delivers its own
+ * completion: each callback runs exactly once, with its own context.
+ * ------------------------------------------------------------------------- */
+
+#define ATTEMPT_WAIT_MS          2000u
+#define LATE_CALLBACK_WAIT_NS    100000000L   /* 100 ms: no duplicate or late call */
+
+typedef struct {
+    pthread_mutex_t mu;
+    int             calls;
+    void           *last_ctx;
+} attempt_cb_t;
+
+static attempt_cb_t g_attempt_a = { PTHREAD_MUTEX_INITIALIZER, 0, NULL };
+static attempt_cb_t g_attempt_b = { PTHREAD_MUTEX_INITIALIZER, 0, NULL };
+static int          g_ctx_a;   /* distinct addresses: the attempts' contexts */
+static int          g_ctx_b;
+
+static pthread_mutex_t g_park_mu      = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_park_cv      = PTHREAD_COND_INITIALIZER;
+static bool            g_park_entered = false;
+static bool            g_park_release = false;
+
+static void record_attempt(attempt_cb_t *c, void *user_ctx)
+{
+    pthread_mutex_lock(&c->mu);
+    c->calls++;
+    c->last_ctx = user_ctx;
+    pthread_mutex_unlock(&c->mu);
+}
+
+static void attempt_a_cb(embediq_tls_err_t result, void *user_ctx)
+{
+    (void)result;
+    record_attempt(&g_attempt_a, user_ctx);
+}
+
+static void attempt_b_cb(embediq_tls_err_t result, void *user_ctx)
+{
+    (void)result;
+    record_attempt(&g_attempt_b, user_ctx);
+}
+
+/* Parks only the attempt whose context is g_ctx_a. */
+static void park_attempt_a(void *user_ctx)
+{
+    if (user_ctx != &g_ctx_a) return;
+    pthread_mutex_lock(&g_park_mu);
+    g_park_entered = true;
+    pthread_cond_broadcast(&g_park_cv);
+    while (!g_park_release) pthread_cond_wait(&g_park_cv, &g_park_mu);
+    pthread_mutex_unlock(&g_park_mu);
+}
+
+static int attempt_calls(attempt_cb_t *c, void **ctx)
+{
+    pthread_mutex_lock(&c->mu);
+    int n = c->calls;
+    if (ctx) *ctx = c->last_ctx;
+    pthread_mutex_unlock(&c->mu);
+    return n;
+}
+
+static bool wait_attempt_calls(attempt_cb_t *c, int n, unsigned timeout_ms)
+{
+    for (unsigned waited = 0u; waited < timeout_ms; waited++) {
+        if (attempt_calls(c, NULL) >= n) return true;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    return attempt_calls(c, NULL) >= n;
+}
+
+/* A loopback port with no listener: a TCP connect to it fails at once. */
+static uint16_t closed_port(void)
+{
+    uint16_t port = 0u;
+    int fd = open_silent_listener(&port);
+    if (fd < 0) return 0u;
+    close(fd);
+    return port;
+}
+
+static void test_async_completion_belongs_to_its_attempt(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+    uint16_t port = closed_port();
+
+    hal_tls__set_connect_finish_hook(park_attempt_a);
+    embediq_tls_err_t rc_a = ops->connect_async("127.0.0.1", port, "localhost",
+                                                attempt_a_cb, &g_ctx_a);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += (long)(ATTEMPT_WAIT_MS / 1000u);
+    pthread_mutex_lock(&g_park_mu);
+    while (!g_park_entered
+           && pthread_cond_timedwait(&g_park_cv, &g_park_mu, &deadline) == 0) {
+    }
+    bool parked = g_park_entered;
+    pthread_mutex_unlock(&g_park_mu);
+
+    embediq_tls_err_t rc_b = ops->connect_async("127.0.0.1", port, "localhost",
+                                                attempt_b_cb, &g_ctx_b);
+    bool b_done = wait_attempt_calls(&g_attempt_b, 1, ATTEMPT_WAIT_MS);
+
+    pthread_mutex_lock(&g_park_mu);
+    g_park_release = true;
+    pthread_cond_broadcast(&g_park_cv);
+    pthread_mutex_unlock(&g_park_mu);
+    (void)wait_attempt_calls(&g_attempt_a, 1, ATTEMPT_WAIT_MS);
+    struct timespec ts_wait = { .tv_sec = 0, .tv_nsec = LATE_CALLBACK_WAIT_NS };
+    nanosleep(&ts_wait, NULL);
+    hal_tls__set_connect_finish_hook(NULL);
+    alarm(0u);
+
+    void *ctx_a = NULL, *ctx_b = NULL;
+    int calls_a = attempt_calls(&g_attempt_a, &ctx_a);
+    int calls_b = attempt_calls(&g_attempt_b, &ctx_b);
+    printf("      connect_a=%d parked_a=%d connect_b=%d b_completed=%d "
+           "callback_a=%d ctx_a_own=%d callback_b=%d ctx_b_own=%d\n",
+           (int)rc_a, (int)parked, (int)rc_b, (int)b_done, calls_a,
+           (int)(ctx_a == &g_ctx_a), calls_b, (int)(ctx_b == &g_ctx_b));
+    ASSERT(configured && port != 0u && rc_a == EMBEDIQ_TLS_OK && parked
+           && rc_b == EMBEDIQ_TLS_OK && calls_a == 1 && ctx_a == &g_ctx_a
+           && calls_b == 1 && ctx_b == &g_ctx_b,
+           "each attempt's completion runs once, with its own context");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_connect_async_refused_on_connected_slot
+ *
+ * After a successful handshake, a second connect_async on the slot returns
+ * EMBEDIQ_TLS_ERR_BUSY and the live session still sends and receives.
+ * ------------------------------------------------------------------------- */
+
+static void test_connect_async_refused_on_connected_slot(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+
+    start_echo_server(TEST_PORT + 4, false);
+    cb_state_t st; cb_state_init(&st);
+    (void)ops->connect_async("127.0.0.1", TEST_PORT + 4, "localhost", connect_cb, &st);
+    bool connected = wait_for_connect(&st, 5000u) == EMBEDIQ_TLS_OK;
+
+    static cb_state_t second;
+    cb_state_init(&second);
+    embediq_tls_err_t rc2 = ops->connect_async("127.0.0.1", TEST_PORT + 4, "localhost",
+                                               connect_cb, &second);
+    if (rc2 == EMBEDIQ_TLS_OK) {
+        (void)wait_for_connect(&second, 5000u);   /* let an accepted attempt finish */
+    }
+
+    const uint8_t ping[] = "PING";
+    embediq_tls_err_t rc_send = ops->send(ping, (uint16_t)sizeof(ping));
+    uint8_t buf[TLS_TEST_RECV_BUF];
+    int32_t n = ops->recv(buf, (uint16_t)sizeof(buf), 3000u);
+    bool echoed = n == (int32_t)sizeof(ping) && memcmp(buf, ping, sizeof(ping)) == 0;
+
+    (void)ops->disconnect();
+    stop_echo_server();
+    alarm(0u);
+
+    printf("      connected=%d second_connect=%d send=%d recv=%d echoed=%d\n",
+           (int)connected, (int)rc2, (int)rc_send, (int)n, (int)echoed);
+    ASSERT(configured && connected && rc2 == EMBEDIQ_TLS_ERR_BUSY
+           && rc_send == EMBEDIQ_TLS_OK && echoed,
+           "connected slot refuses connect_async; the live session keeps working");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -510,6 +700,8 @@ int main(void)
     test_slot_isolation();
 #endif
     test_async_connect_mutex_ownership();
+    test_async_completion_belongs_to_its_attempt();
+    test_connect_async_refused_on_connected_slot();
 
     printf("\n%d/%d tests passed.\n",
            g_tests_run - g_tests_failed, g_tests_run);
