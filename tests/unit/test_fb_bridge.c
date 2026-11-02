@@ -31,6 +31,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <pthread.h>
 
 /* ---------------------------------------------------------------------------
  * Test-only APIs (EMBEDIQ_PLATFORM_HOST builds)
@@ -335,11 +336,85 @@ static void test_ext_fb_msg_bridge_disconnected(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_ext_fb_init_concurrent_unique_slots — one slot per concurrent client
+ *
+ * Every pool slot is claimed by a different thread at the same moment (the
+ * test runs first, so this also races the pool's one-time initialisation).
+ * Each client gets its own slot and virtual endpoint id.
+ * ------------------------------------------------------------------------- */
+
+#define CONCURRENT_CLIENTS  EMBEDIQ_BRIDGE_MAX_EXT_FBS
+
+static embediq_osal_atomic32_t g_clients_go = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+typedef struct {
+    char              name[EMBEDIQ_BRIDGE_NAME_LEN];
+    embediq_ext_fb_t *h;
+} client_slot_t;
+
+static void *client_init(void *arg)
+{
+    client_slot_t *c = (client_slot_t *)arg;
+    while (embediq_osal_atomic32_load(&g_clients_go) == 0u) { /* start together */ }
+    c->h = embediq_ext_fb_init(c->name);
+    return NULL;
+}
+
+static void test_ext_fb_init_concurrent_unique_slots(void)
+{
+    uint8_t recv_ep = boot_with_harness_receiver();
+    drain_all(recv_ep);
+
+    client_slot_t clients[CONCURRENT_CLIENTS];
+    pthread_t     th[CONCURRENT_CLIENTS];
+    for (uint32_t i = 0u; i < CONCURRENT_CLIENTS; i++) {
+        (void)snprintf(clients[i].name, sizeof(clients[i].name), "client%u", (unsigned)i);
+        clients[i].h = NULL;
+        pthread_create(&th[i], NULL, client_init, &clients[i]);
+    }
+    embediq_osal_atomic32_store(&g_clients_go, 1u);
+    for (uint32_t i = 0u; i < CONCURRENT_CLIENTS; i++) {
+        pthread_join(th[i], NULL);
+    }
+
+    /* Distinct handles, and one CONNECTED event per client, each with its
+     * own virtual endpoint id. */
+    bool all_claimed = true, all_distinct = true;
+    for (uint32_t i = 0u; i < CONCURRENT_CLIENTS; i++) {
+        if (clients[i].h == NULL) { all_claimed = false; continue; }
+        for (uint32_t j = 0u; j < i; j++) {
+            if (clients[j].h == clients[i].h) all_distinct = false;
+        }
+    }
+    uint8_t  veps[CONCURRENT_CLIENTS];
+    uint32_t n_connected = 0u;
+    EmbedIQ_Msg_t m;
+    while (drain_one(recv_ep, &m)) {
+        if (m.msg_id != MSG_BRIDGE_EXTFB_CONNECTED) continue;
+        const EmbedIQ_Msg_BridgeExtFbConnected_t *p =
+            (const EmbedIQ_Msg_BridgeExtFbConnected_t *)m.payload;
+        for (uint32_t j = 0u; j < n_connected; j++) {
+            if (veps[j] == p->virtual_endpoint_id) all_distinct = false;
+        }
+        if (n_connected < CONCURRENT_CLIENTS) veps[n_connected] = p->virtual_endpoint_id;
+        n_connected++;
+    }
+    for (uint32_t i = 0u; i < CONCURRENT_CLIENTS; i++) {
+        embediq_ext_fb_deinit(clients[i].h);   /* NULL-safe */
+    }
+    printf("      claimed_all=%d distinct=%d connected_events=%u\n",
+           (int)all_claimed, (int)all_distinct, (unsigned)n_connected);
+    ASSERT(all_claimed && all_distinct && n_connected == CONCURRENT_CLIENTS,
+           "concurrent init: every client gets its own slot and virtual endpoint id");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
 int main(void)
 {
+    test_ext_fb_init_concurrent_unique_slots();   /* first: races pool init too */
     test_ext_fb_pool_init_deinit();
     test_ext_fb_pool_exhaustion();
     test_ext_fb_virtual_endpoint_range();
