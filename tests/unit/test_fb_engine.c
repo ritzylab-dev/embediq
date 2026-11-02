@@ -46,38 +46,38 @@ __attribute__((weak)) bool fb_engine__exec_lock_held(uint8_t ep) { (void)ep; ret
 extern void     embediq_osal__fail_next_mutex_create(uint32_t nth);
 
 /* ---------------------------------------------------------------------------
- * F3 named constants
+ * Fault-as-message and engine API constants
  * ------------------------------------------------------------------------- */
 
-#define F3_MSG_PING          0x1430u  /* community range, unique to this file */
-#define F3_MSG_BURST         0x1431u
-#define F3_FAULT_REASON      0x55u
-#define F3_WAIT_MS           200u
-#define F3_GETSTATE_THREADS  4u
-#define F3_GETSTATE_ITERS    20000u
-#define F3_BURST_COUNT       50u
-#define F3_BURST_SPACING_MS  2u
-#define F3_BURST_WAIT_MS     500u
-#define F3_API_FBS           3u
+#define MSG_TEST_PING          0x1430u  /* community range, unique to this file */
+#define MSG_TEST_BURST         0x1431u
+#define FAULT_REASON_TEST      0x55u
+#define DISPATCH_WAIT_MS       200u
+#define GETSTATE_THREADS       4u
+#define GETSTATE_ITERS         20000u
+#define BURST_COUNT            50u
+#define BURST_SPACING_MS       2u
+#define BURST_WAIT_MS          500u
+#define API_TEST_FBS           3u
 
-/* F9 (review R4) named constants */
-#define F9_FAULT_SLEEP_MS    100u     /* fault_fn hold time: widens any overlap */
-#define F9_REPORTERS         2u
-#define F9_MSG_SUB           0x1432u  /* community range, unique to this file */
+/* Inline fault serialisation constants */
+#define FAULT_HOLD_LONG_MS     100u     /* fault_fn hold time: widens any overlap */
+#define FAULT_REPORTERS        2u
+#define MSG_TEST_SUB           0x1432u  /* community range, unique to this file */
 
-/* F9b (review #182 N1–N3) named constants */
-#define F9B_MSG              0x1433u  /* community range, unique to this file */
-#define F9B_GATE_MAX_MS      2000u    /* upper bound on any gate wait */
-#define F9B_SAMPLE_MS        100u     /* run_fn must stay silent this long */
-#define F9B_INIT_BUSY_MS     50u      /* init_fn keeps using fb_data */
-#define F9B_FAULT_HOLD_MS    10u
-#define F9B_DATA_WORDS       2u
-#define F9B_FAIL_NTH_MUTEX   2u       /* second lock allocation fails */
-#define F9B_REASON_CAP       12u
-#define F9B_OVF_OUTER        10u
-#define F9B_OVF_EXTRA        2u       /* reports beyond the pending depth */
-#define F9B_COST_MSGS        100000u
-#define F9B_COST_MAX_NS      2000u    /* < 2 us per dispatch over baseline */
+/* Execution-ownership constants (init, dispatch, nested faults, boot resource) */
+#define MSG_TEST_EXEC          0x1433u  /* community range, unique to this file */
+#define GATE_MAX_MS            2000u    /* upper bound on any gate wait */
+#define RUN_SILENT_SAMPLE_MS   100u     /* run_fn must stay silent this long */
+#define INIT_BUSY_MS           50u      /* init_fn keeps using fb_data */
+#define FAULT_HOLD_SHORT_MS    10u
+#define FB_DATA_WORDS          2u
+#define FAIL_NTH_MUTEX         2u       /* second lock allocation fails */
+#define REASON_CAP             12u
+#define NESTED_OVERFLOW_OUTER  10u
+#define NESTED_OVERFLOW_EXTRA  2u       /* reports beyond the pending depth */
+#define DISPATCH_COST_MSGS     100000u
+#define DISPATCH_COST_MAX_NS   2000u    /* < 2 us per dispatch over baseline */
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -442,7 +442,7 @@ static void test_max_endpoint_overflow_returns_null(void)
 }
 
 /* ===========================================================================
- * F3 — faults on the FB thread, engine API, boot-order race
+ * Faults on the FB thread, engine API, boot-order race
  * ======================================================================== */
 
 /* Shared recorders. pthread_t values are published by the atomic flags that
@@ -469,7 +469,7 @@ static void f3_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
     embediq_osal_atomic32_store(&g_f3_fault_seen, 1u);
 }
 
-EMBEDIQ_SUBS(g_f3_ping_subs, F3_MSG_PING);
+EMBEDIQ_SUBS(g_f3_ping_subs, MSG_TEST_PING);
 
 static const EmbedIQ_SubFn_Config_t g_f3_ping_subfn = {
     .name = "f3_ping", .init_order = 0,
@@ -531,21 +531,21 @@ static void test_report_fault_from_foreign_thread_applies_on_fb_thread(void)
     /* Learn the dispatch thread's identity through a normal message. */
     EmbedIQ_Msg_t m;
     memset(&m, 0, sizeof(m));
-    m.msg_id   = F3_MSG_PING;
+    m.msg_id   = MSG_TEST_PING;
     m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
     embediq_publish(src, &m);
-    bool ran = f3_wait_flag(&g_f3_run_seen, F3_WAIT_MS);
+    bool ran = f3_wait_flag(&g_f3_run_seen, DISPATCH_WAIT_MS);
 
     pthread_t th;
-    f3_fault_req_t req = { dst, F3_FAULT_REASON };
+    f3_fault_req_t req = { dst, FAULT_REASON_TEST };
     pthread_create(&th, NULL, f3_fault_reporter, &req);
     pthread_join(th, NULL);
-    bool faulted = f3_wait_flag(&g_f3_fault_seen, F3_WAIT_MS);
+    bool faulted = f3_wait_flag(&g_f3_fault_seen, DISPATCH_WAIT_MS);
 
     bool ok = ran && faulted
               && pthread_equal(g_f3_fault_thread, g_f3_run_thread)
               && !pthread_equal(g_f3_fault_thread, th)
-              && g_f3_fault_reason == F3_FAULT_REASON
+              && g_f3_fault_reason == FAULT_REASON_TEST
               && embediq_fb_get_state(dst) == EMBEDIQ_FB_STATE_FAULT;
     (void)embediq_engine_dispatch_shutdown();
     ASSERT(ok, "fault_fn must run on the FB's dispatch thread with reason 0x55");
@@ -571,7 +571,7 @@ static void test_report_fault_inline_for_fb_without_dispatch_thread(void)
     embediq_engine_dispatch_boot();
 
     pthread_t th;
-    f3_fault_req_t req = { h, F3_FAULT_REASON };
+    f3_fault_req_t req = { h, FAULT_REASON_TEST };
     pthread_create(&th, NULL, f3_fault_reporter, &req);
     pthread_join(th, NULL);   /* report_fault has returned */
 
@@ -595,7 +595,7 @@ static void *f3_state_reader(void *arg)
 {
     (void)arg;
     uint32_t n = 0u;
-    while (embediq_osal_atomic32_load(&g_f3_state_stop) == 0u && n < F3_GETSTATE_ITERS) {
+    while (embediq_osal_atomic32_load(&g_f3_state_stop) == 0u && n < GETSTATE_ITERS) {
         (void)embediq_fb_get_state(g_f3_state_fb);
         n++;
     }
@@ -612,17 +612,17 @@ static void test_get_state_concurrent_tsan(void)
     embediq_engine_boot();
     embediq_osal_atomic32_store(&g_f3_state_stop, 0u);
 
-    pthread_t rd[F3_GETSTATE_THREADS], wr;
-    for (uint32_t i = 0u; i < F3_GETSTATE_THREADS; i++) {
+    pthread_t rd[GETSTATE_THREADS], wr;
+    for (uint32_t i = 0u; i < GETSTATE_THREADS; i++) {
         pthread_create(&rd[i], NULL, f3_state_reader, NULL);
     }
-    f3_fault_req_t req = { g_f3_state_fb, F3_FAULT_REASON };
+    f3_fault_req_t req = { g_f3_state_fb, FAULT_REASON_TEST };
     pthread_create(&wr, NULL, f3_fault_reporter, &req);
     pthread_join(wr, NULL);
     pthread_create(&wr, NULL, f3_fault_reporter, &req);   /* report twice */
     pthread_join(wr, NULL);
     embediq_osal_atomic32_store(&g_f3_state_stop, 1u);
-    for (uint32_t i = 0u; i < F3_GETSTATE_THREADS; i++) {
+    for (uint32_t i = 0u; i < GETSTATE_THREADS; i++) {
         pthread_join(rd[i], NULL);
     }
     ASSERT(embediq_fb_get_state(g_f3_state_fb) == EMBEDIQ_FB_STATE_FAULT,
@@ -637,19 +637,19 @@ static void test_get_state_concurrent_tsan(void)
 static void test_engine_fb_api_matches_registry(void)
 {
     fb_engine__reset();
-    static const EmbedIQ_FB_Config_t k_cfgs[F3_API_FBS] = {
+    static const EmbedIQ_FB_Config_t k_cfgs[API_TEST_FBS] = {
         { .name = "f3_api_a", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION },
         { .name = "f3_api_b", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION },
         { .name = "f3_api_c", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION },
     };
-    EmbedIQ_FB_Handle_t h[F3_API_FBS];
-    for (uint8_t i = 0u; i < F3_API_FBS; i++) h[i] = embediq_fb_register(&k_cfgs[i]);
+    EmbedIQ_FB_Handle_t h[API_TEST_FBS];
+    for (uint8_t i = 0u; i < API_TEST_FBS; i++) h[i] = embediq_fb_register(&k_cfgs[i]);
     embediq_engine_boot();
 
-    bool ok = embediq_engine_fb_count() == F3_API_FBS
-              && embediq_engine_fb_config(F3_API_FBS) == NULL
+    bool ok = embediq_engine_fb_count() == API_TEST_FBS
+              && embediq_engine_fb_config(API_TEST_FBS) == NULL
               && embediq_engine_fb_ep(NULL) == 0xFFu;
-    for (uint8_t i = 0u; ok && i < F3_API_FBS; i++) {
+    for (uint8_t i = 0u; ok && i < API_TEST_FBS; i++) {
         const EmbedIQ_FB_Config_t *c = embediq_engine_fb_config(i);
         uint8_t ep = embediq_engine_fb_ep(h[i]);
         ok = c != NULL && strcmp(c->name, k_cfgs[i].name) == 0
@@ -672,13 +672,13 @@ static pthread_t               g_f3_burst_th;
 static void *f3_burst_publisher(void *arg)
 {
     (void)arg;
-    for (uint32_t i = 0u; i < F3_BURST_COUNT; i++) {
+    for (uint32_t i = 0u; i < BURST_COUNT; i++) {
         EmbedIQ_Msg_t m;
         memset(&m, 0, sizeof(m));
-        m.msg_id   = F3_MSG_BURST;
+        m.msg_id   = MSG_TEST_BURST;
         m.priority = EMBEDIQ_MSG_PRIORITY_NORMAL;
         embediq_publish(g_f3_burst_src, &m);
-        embediq_osal_delay_ms(F3_BURST_SPACING_MS);  /* stay under the NORMAL depth */
+        embediq_osal_delay_ms(BURST_SPACING_MS);  /* stay under the NORMAL depth */
     }
     return NULL;
 }
@@ -697,7 +697,7 @@ static void f3_burst_rx_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *fb_dat
     (void)embediq_osal_atomic32_add(&g_f3_burst_rx, 1u);
 }
 
-EMBEDIQ_SUBS(g_f3_burst_subs, F3_MSG_BURST);
+EMBEDIQ_SUBS(g_f3_burst_subs, MSG_TEST_BURST);
 
 static const EmbedIQ_SubFn_Config_t g_f3_burst_subfn = {
     .name = "f3_burst_rx", .init_order = 0,
@@ -733,14 +733,14 @@ static void test_platform_thread_publish_during_boot_is_not_lost(void)
 
     pthread_join(g_f3_burst_th, NULL);
     uint32_t t0 = embediq_osal_time_ms();
-    while (embediq_osal_atomic32_load(&g_f3_burst_rx) < F3_BURST_COUNT
-           && (embediq_osal_time_ms() - t0) < F3_BURST_WAIT_MS) {
+    while (embediq_osal_atomic32_load(&g_f3_burst_rx) < BURST_COUNT
+           && (embediq_osal_time_ms() - t0) < BURST_WAIT_MS) {
         embediq_osal_delay_ms(1u);
     }
     uint32_t got = embediq_osal_atomic32_load(&g_f3_burst_rx);
     (void)embediq_engine_dispatch_shutdown();
-    printf("      received %u / %u\n", (unsigned)got, (unsigned)F3_BURST_COUNT);
-    ASSERT(got == F3_BURST_COUNT, "every message published during boot must be delivered");
+    printf("      received %u / %u\n", (unsigned)got, (unsigned)BURST_COUNT);
+    ASSERT(got == BURST_COUNT, "every message published during boot must be delivered");
 }
 
 /* ---------------------------------------------------------------------------
@@ -748,7 +748,7 @@ static void test_platform_thread_publish_during_boot_is_not_lost(void)
  * ------------------------------------------------------------------------- */
 
 /* ===========================================================================
- * F9 — review R4: fault_fn never runs concurrently with itself
+ * fault_fn never runs concurrently with itself (review R4)
  * ======================================================================== */
 
 /* fault_fn that sleeps and tracks overlap with atomics only (reviewer probe). */
@@ -765,7 +765,7 @@ static void f9_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
     while (active > peak && !embediq_osal_atomic32_cas(&g_f9_peak, peak, active)) {
         peak = embediq_osal_atomic32_load(&g_f9_peak);
     }
-    embediq_osal_delay_ms(F9_FAULT_SLEEP_MS);
+    embediq_osal_delay_ms(FAULT_HOLD_LONG_MS);
     (void)embediq_osal_atomic32_sub(&g_f9_active, 1u);
     (void)embediq_osal_atomic32_add(&g_f9_count, 1u);
 }
@@ -773,7 +773,7 @@ static void f9_fault_fn(EmbedIQ_FB_Handle_t fb, void *fb_data, uint32_t reason)
 static void *f9_reporter(void *arg)
 {
     while (embediq_osal_atomic32_load(&g_f9_go) == 0u) { /* start together */ }
-    embediq_fb_report_fault((EmbedIQ_FB_Handle_t)arg, F3_FAULT_REASON);
+    embediq_fb_report_fault((EmbedIQ_FB_Handle_t)arg, FAULT_REASON_TEST);
     return NULL;
 }
 
@@ -785,12 +785,12 @@ static uint32_t f9_report_concurrently(EmbedIQ_FB_Handle_t h, uint32_t *count)
     embediq_osal_atomic32_store(&g_f9_peak,   0u);
     embediq_osal_atomic32_store(&g_f9_count,  0u);
     embediq_osal_atomic32_store(&g_f9_go,     0u);
-    pthread_t th[F9_REPORTERS];
-    for (uint32_t i = 0u; i < F9_REPORTERS; i++) {
+    pthread_t th[FAULT_REPORTERS];
+    for (uint32_t i = 0u; i < FAULT_REPORTERS; i++) {
         pthread_create(&th[i], NULL, f9_reporter, h);
     }
     embediq_osal_atomic32_store(&g_f9_go, 1u);
-    for (uint32_t i = 0u; i < F9_REPORTERS; i++) {
+    for (uint32_t i = 0u; i < FAULT_REPORTERS; i++) {
         pthread_join(th[i], NULL);
     }
     *count = embediq_osal_atomic32_load(&g_f9_count);
@@ -818,7 +818,7 @@ static void test_fault_fn_never_concurrent_for_non_dispatch_fb(void)
     uint32_t peak  = f9_report_concurrently(h, &count);
     (void)embediq_engine_dispatch_shutdown();
     printf("      peak=%u count=%u\n", (unsigned)peak, (unsigned)count);
-    ASSERT(peak == 1u && count == F9_REPORTERS
+    ASSERT(peak == 1u && count == FAULT_REPORTERS
            && embediq_fb_get_state(h) == EMBEDIQ_FB_STATE_FAULT,
            "non-dispatch FB: fault_fn applied twice, never concurrently");
 }
@@ -833,7 +833,7 @@ static void test_fault_fn_never_concurrent_for_non_dispatch_fb(void)
 static void test_fault_fn_never_concurrent_before_dispatch_boot(void)
 {
     fb_engine__reset();
-    EMBEDIQ_SUBS(subs, F9_MSG_SUB);
+    EMBEDIQ_SUBS(subs, MSG_TEST_SUB);
     EmbedIQ_FB_Config_t cfg = {
         .name = "f9_predispatch", .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
         .fault_fn = f9_fault_fn,
@@ -847,13 +847,13 @@ static void test_fault_fn_never_concurrent_before_dispatch_boot(void)
     embediq_engine_dispatch_boot();
     int rc = embediq_engine_dispatch_shutdown();
     printf("      peak=%u count=%u shutdown=%d\n", (unsigned)peak, (unsigned)count, rc);
-    ASSERT(peak == 1u && count == F9_REPORTERS && rc == 0
+    ASSERT(peak == 1u && count == FAULT_REPORTERS && rc == 0
            && embediq_fb_get_state(h) == EMBEDIQ_FB_STATE_FAULT,
            "pre-dispatch FB: fault_fn applied twice, never concurrently");
 }
 
 /* ===========================================================================
- * F9b — review #182 N1–N3: one per-FB execution lock across the lifecycle
+ * One per-FB execution lock across the lifecycle (review #182 N1–N3)
  * ======================================================================== */
 
 /* Gate helpers: spin in 1 ms steps until flag != 0 or ms elapse. */
@@ -883,7 +883,7 @@ static void f9b_gated_fault_fn(EmbedIQ_FB_Handle_t fb, void *d, uint32_t r)
 {
     (void)fb; (void)d; (void)r;
     embediq_osal_atomic32_store(&g_f9b_in_fault, 1u);
-    (void)f9b_wait(&g_f9b_gate, F9B_GATE_MAX_MS);
+    (void)f9b_wait(&g_f9b_gate, GATE_MAX_MS);
     embediq_osal_atomic32_store(&g_f9b_in_fault, 0u);
 }
 
@@ -896,7 +896,7 @@ static void f9b_run_fn(EmbedIQ_FB_Handle_t fb, const void *msg, void *d, void *s
     embediq_osal_atomic32_store(&g_f9b_run_seen, 1u);
 }
 
-EMBEDIQ_SUBS(g_f9b_subs, F9B_MSG);
+EMBEDIQ_SUBS(g_f9b_subs, MSG_TEST_EXEC);
 
 static const EmbedIQ_SubFn_Config_t g_f9b_subfn = {
     .name = "f9b_run", .init_order = 0,
@@ -912,7 +912,7 @@ static void f9b_subfn_init(EmbedIQ_FB_Handle_t h, void *d)
 
 static void *f9b_reporter(void *h)
 {
-    embediq_fb_report_fault((EmbedIQ_FB_Handle_t)h, F3_FAULT_REASON);
+    embediq_fb_report_fault((EmbedIQ_FB_Handle_t)h, FAULT_REASON_TEST);
     return NULL;
 }
 
@@ -935,21 +935,21 @@ static void test_dispatch_waits_for_inflight_inline_fault(void)
 
     pthread_t th;
     pthread_create(&th, NULL, f9b_reporter, h);
-    bool entered = f9b_wait(&g_f9b_in_fault, F9B_GATE_MAX_MS);
+    bool entered = f9b_wait(&g_f9b_in_fault, GATE_MAX_MS);
 
     embediq_engine_dispatch_boot();
     EmbedIQ_Msg_t m;
     memset(&m, 0, sizeof(m));
-    m.msg_id   = F9B_MSG;
+    m.msg_id   = MSG_TEST_EXEC;
     m.priority = (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL;
     embediq_publish(h, &m);
 
-    embediq_osal_delay_ms(F9B_SAMPLE_MS);   /* fault_fn still gated */
+    embediq_osal_delay_ms(RUN_SILENT_SAMPLE_MS);   /* fault_fn still gated */
     uint32_t ran_while_gated = embediq_osal_atomic32_load(&g_f9b_run_seen);
 
     embediq_osal_atomic32_store(&g_f9b_gate, 1u);
     pthread_join(th, NULL);
-    bool ran_after = f9b_wait(&g_f9b_run_seen, F9B_GATE_MAX_MS);
+    bool ran_after = f9b_wait(&g_f9b_run_seen, GATE_MAX_MS);
     (void)embediq_engine_dispatch_shutdown();
 
     uint32_t overlap = embediq_osal_atomic32_load(&g_f9b_overlap);
@@ -972,7 +972,7 @@ static embediq_osal_atomic32_t g_f9b_init_overlap   = EMBEDIQ_OSAL_ATOMIC32_INIT
 static embediq_osal_atomic32_t g_f9b_fault_ran      = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static embediq_osal_atomic32_t g_f9b_fault_in_init  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static pthread_t               g_f9b_plat_thread;
-static uint32_t                g_f9b_fb_data[F9B_DATA_WORDS];
+static uint32_t                g_f9b_fb_data[FB_DATA_WORDS];
 
 static void f9b_init_fault_fn(EmbedIQ_FB_Handle_t fb, void *d, uint32_t r)
 {
@@ -982,7 +982,7 @@ static void f9b_init_fault_fn(EmbedIQ_FB_Handle_t fb, void *d, uint32_t r)
         embediq_osal_atomic32_store(&g_f9b_fault_in_init, 1u);
     }
     ((uint32_t *)d)[0]++;                    /* touches the same fb_data */
-    embediq_osal_delay_ms(F9B_FAULT_HOLD_MS);
+    embediq_osal_delay_ms(FAULT_HOLD_SHORT_MS);
     embediq_osal_atomic32_store(&g_f9b_fault_ran, 1u);
     embediq_osal_atomic32_store(&g_f9b_fault_active, 0u);
 }
@@ -991,7 +991,7 @@ static void f9b_init_with_platform_thread(EmbedIQ_FB_Handle_t h, void *d)
 {
     pthread_create(&g_f9b_plat_thread, NULL, f9b_reporter, h);
     uint32_t t0 = embediq_osal_time_ms();
-    while ((embediq_osal_time_ms() - t0) < F9B_INIT_BUSY_MS) {
+    while ((embediq_osal_time_ms() - t0) < INIT_BUSY_MS) {
         ((uint32_t *)d)[1]++;                /* init_fn using fb_data */
         if (embediq_osal_atomic32_load(&g_f9b_fault_active) != 0u) {
             embediq_osal_atomic32_store(&g_f9b_init_overlap, 1u);
@@ -1066,7 +1066,7 @@ static void test_boot_fails_when_exec_lock_allocation_fails(void)
     embediq_fb_register(&k_b);
     embediq_fb_register(&k_c);
 
-    embediq_osal__fail_next_mutex_create(F9B_FAIL_NTH_MUTEX);
+    embediq_osal__fail_next_mutex_create(FAIL_NTH_MUTEX);
     int rc = embediq_engine_boot();
     embediq_osal__fail_next_mutex_create(0u);   /* disarm */
 
@@ -1092,19 +1092,19 @@ static void test_boot_fails_when_exec_lock_allocation_fails(void)
  * and reported in one EMBEDIQ_FAULT_PENDING_OVERFLOW event (msg_id 2).
  * ------------------------------------------------------------------------- */
 
-static uint32_t g_f9b_reasons[F9B_REASON_CAP];
+static uint32_t g_f9b_reasons[REASON_CAP];
 static uint32_t g_f9b_reason_n = 0u;
 
 static void f9b_nested_fault_fn(EmbedIQ_FB_Handle_t fb, void *d, uint32_t r)
 {
     (void)d;
-    if (g_f9b_reason_n < F9B_REASON_CAP) g_f9b_reasons[g_f9b_reason_n++] = r;
+    if (g_f9b_reason_n < REASON_CAP) g_f9b_reasons[g_f9b_reason_n++] = r;
     if (r == 1u) {
         embediq_fb_report_fault(fb, 2u);
         embediq_fb_report_fault(fb, 3u);
-    } else if (r == F9B_OVF_OUTER) {
-        for (uint32_t i = 0u; i < EMBEDIQ_FB_FAULT_PENDING_DEPTH + F9B_OVF_EXTRA; i++) {
-            embediq_fb_report_fault(fb, F9B_OVF_OUTER + 1u + i);
+    } else if (r == NESTED_OVERFLOW_OUTER) {
+        for (uint32_t i = 0u; i < EMBEDIQ_FB_FAULT_PENDING_DEPTH + NESTED_OVERFLOW_EXTRA; i++) {
+            embediq_fb_report_fault(fb, NESTED_OVERFLOW_OUTER + 1u + i);
         }
     }
 }
@@ -1126,11 +1126,11 @@ static void test_nested_fault_reports_all_delivered_in_order(void)
     uint32_t n_first = g_f9b_reason_n;
 
     g_f9b_reason_n = 0u;
-    embediq_fb_report_fault(h, F9B_OVF_OUTER);
+    embediq_fb_report_fault(h, NESTED_OVERFLOW_OUTER);
     bool second = g_f9b_reason_n == 1u + EMBEDIQ_FB_FAULT_PENDING_DEPTH
-                  && g_f9b_reasons[0] == F9B_OVF_OUTER;
+                  && g_f9b_reasons[0] == NESTED_OVERFLOW_OUTER;
     for (uint32_t i = 1u; second && i < g_f9b_reason_n; i++) {
-        second = g_f9b_reasons[i] == F9B_OVF_OUTER + i;
+        second = g_f9b_reasons[i] == NESTED_OVERFLOW_OUTER + i;
     }
 
     uint32_t ovf_events = 0u, ovf_count = 0u;
@@ -1146,7 +1146,7 @@ static void test_nested_fault_reports_all_delivered_in_order(void)
            "overflow_events=%u dropped=%u\n",
            (unsigned)n_first, (int)first, (unsigned)g_f9b_reason_n, (int)second,
            (unsigned)ovf_events, (unsigned)ovf_count);
-    ASSERT(first && second && ovf_events == 1u && ovf_count == F9B_OVF_EXTRA,
+    ASSERT(first && second && ovf_events == 1u && ovf_count == NESTED_OVERFLOW_EXTRA,
            "nested fault reports: queued in order, overflow counted and reported");
 }
 
@@ -1154,7 +1154,7 @@ static void test_nested_fault_reports_all_delivered_in_order(void)
  * test_run_fn_cost_under_exec_lock
  * 100,000 messages dispatched through the engine path (which runs run_fn
  * under the FB's execution lock — asserted from inside run_fn) cost less than
- * F9B_COST_MAX_NS more per message than calling run_fn directly.
+ * DISPATCH_COST_MAX_NS more per message than calling run_fn directly.
  * ------------------------------------------------------------------------- */
 
 static uint32_t g_f9b_cost_calls  = 0u;
@@ -1197,25 +1197,25 @@ static void test_run_fn_cost_under_exec_lock(void)
 
     g_f9b_cost_calls = 0u;
     uint32_t t0 = embediq_osal_time_us();
-    for (uint32_t i = 0u; i < F9B_COST_MSGS; i++) {
+    for (uint32_t i = 0u; i < DISPATCH_COST_MSGS; i++) {
         f9b_cost_run_fn(h, payload, NULL, NULL);          /* baseline: direct call */
     }
     uint32_t base_us = embediq_osal_time_us() - t0;
 
     g_f9b_cost_calls = 0u; g_f9b_cost_locked = 0u;
     t0 = embediq_osal_time_us();
-    for (uint32_t i = 0u; i < F9B_COST_MSGS; i++) {
-        fb_engine__deliver_msg(h, F9B_MSG, payload);      /* engine dispatch path */
+    for (uint32_t i = 0u; i < DISPATCH_COST_MSGS; i++) {
+        fb_engine__deliver_msg(h, MSG_TEST_EXEC, payload);      /* engine dispatch path */
     }
     uint32_t lock_us = embediq_osal_time_us() - t0;
 
     uint32_t over_ns = (lock_us > base_us)
-        ? (uint32_t)(((uint64_t)(lock_us - base_us) * 1000u) / F9B_COST_MSGS) : 0u;
+        ? (uint32_t)(((uint64_t)(lock_us - base_us) * 1000u) / DISPATCH_COST_MSGS) : 0u;
     printf("      base=%u us engine=%u us overhead=%u ns/msg locked=%u/%u\n",
            (unsigned)base_us, (unsigned)lock_us, (unsigned)over_ns,
            (unsigned)g_f9b_cost_locked, (unsigned)g_f9b_cost_calls);
-    ASSERT(g_f9b_cost_calls == F9B_COST_MSGS && g_f9b_cost_locked == F9B_COST_MSGS
-           && over_ns < F9B_COST_MAX_NS,
+    ASSERT(g_f9b_cost_calls == DISPATCH_COST_MSGS && g_f9b_cost_locked == DISPATCH_COST_MSGS
+           && over_ns < DISPATCH_COST_MAX_NS,
            "run_fn under the exec lock: every dispatch locked, overhead < 2 us/msg");
 }
 
