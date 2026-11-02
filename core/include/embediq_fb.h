@@ -65,6 +65,20 @@ typedef enum {
 } EmbedIQ_BootPhase_t;
 
 /* ---------------------------------------------------------------------------
+ * Engine fault codes — state_or_flag of an EMBEDIQ_OBS_EVT_FAULT event the
+ * engine emits itself. Kept above the EmbedIQ_FB_State_t values (0–5), which
+ * the existing boot FAULT events carry in the same field.
+ * ------------------------------------------------------------------------- */
+
+/** Boot failed: a required per-FB resource (the FB execution lock) could not
+ *  be allocated. source_fb_id = 0xFF, target_fb_id = the FB's endpoint. */
+#define EMBEDIQ_FAULT_BOOT_RESOURCE     0x80u
+
+/** Nested fault reports exceeded EMBEDIQ_FB_FAULT_PENDING_DEPTH while the FB
+ *  was running its own code; msg_id = number of reports not applied. */
+#define EMBEDIQ_FAULT_PENDING_OVERFLOW  0x81u
+
+/* ---------------------------------------------------------------------------
  * Subscription / publication array macros
  *
  * ALWAYS use these macros. Never use compound literals.
@@ -94,7 +108,23 @@ typedef void (*embediq_fb_run_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data);
 /** Called once during ordered shutdown before the FB thread is stopped. */
 typedef void (*embediq_fb_exit_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data);
 
-/** Called when the FB enters FAULT state. reason is a caller-defined code. */
+/**
+ * Called when the FB enters FAULT state. reason is a caller-defined code.
+ * Ownership: executes on the FB's dispatch thread when one exists, otherwise
+ * on the reporting thread; always under the FB's execution lock (see
+ * "Execution ownership" below), so it never runs concurrently with itself,
+ * with init_fn or with any run_fn of the same FB. It may run before
+ * dispatch_boot (platform threads started in init_fn) — after init_fn has
+ * returned. Nested fault reports for the same FB (from inside its fault_fn,
+ * init_fn or run_fn) are queued (depth EMBEDIQ_FB_FAULT_PENDING_DEPTH) and
+ * applied in order after the current handler returns; beyond that depth
+ * they are counted and reported as one EMBEDIQ_OBS_EVT_FAULT event
+ * (EMBEDIQ_FAULT_PENDING_OVERFLOW, msg_id = count), not silently lost.
+ * A fault_fn that publishes HIGH to a full queue blocks only its own FB's
+ * code. Two FBs without dispatch threads must not report faults on each
+ * other from their fault_fns on two threads: each would wait for the
+ * other's execution lock (AB/BA).
+ */
 typedef void (*embediq_fb_fault_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data,
                                     uint32_t reason);
 
@@ -139,10 +169,13 @@ EmbedIQ_FB_Handle_t embediq_fb_register(const EmbedIQ_FB_Config_t *config);
  * Observatory LIFECYCLE event and fault_fn all run on the FB's own dispatch
  * thread — never concurrently with its run_fn. Called from the FB's own
  * dispatch thread, it applies the fault immediately (already the right thread).
- * An FB without a dispatch thread has no concurrent execution context; its
- * fault is applied on the reporting thread.
+ * An FB without a dispatch thread — and any FB before dispatch starts — has
+ * its fault applied on the reporting thread, under the FB's execution lock,
+ * so concurrent reporters, init_fn and the first dispatches are serialised.
  *
- * Calling context: any thread.
+ * Calling context: any thread. May block on the target FB's execution lock
+ * (bounded by the running handler / init_fn) and, when a dispatch thread is
+ * running, on the target's HIGH queue (UINT32_MAX send) if it is full.
  */
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t fb, uint32_t reason);
 
@@ -177,6 +210,27 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
 
 /* embediq_bus_resolve_name() is declared in embediq_bus.h */
 
+/* ---------------------------------------------------------------------------
+ * Execution ownership (review #182 N1–N3)
+ *
+ * Every FB has one framework-owned execution lock, held by whichever thread
+ * runs that FB's code; the FB author never sees it:
+ *   init      — embediq_engine_boot() holds it around IDLE → INITIALISING,
+ *               init_fn and the conditional INITIALISING → RUNNING; a fault
+ *               applied during init leaves FAULT (RUNNING never overwrites it).
+ *   pre-dispatch — a fault reported before embediq_engine_dispatch_boot()
+ *               (or for an FB without subscriptions) is applied on the
+ *               reporting thread under the lock.
+ *   dispatch  — the dispatch thread holds it for one message at a time (each
+ *               run_fn dispatch, each framework MSG_FB_FAULT), never while
+ *               blocked on its semaphore; the first dispatch therefore waits
+ *               for any in-flight inline fault_fn.
+ *   shutdown  — embediq_engine_dispatch_shutdown() joins the dispatch thread
+ *               between messages. exit_fn is not invoked by the engine in v1.
+ * Cost: one uncontended mutex lock/unlock per dispatched message (tens of ns
+ * on POSIX). Boot fails if a per-FB execution lock cannot be allocated.
+ * ------------------------------------------------------------------------- */
+
 /**
  * Boot the framework: sort all registered FBs by phase (1→2→3→4), resolve
  * depends_on order within each phase via topological sort, then call each
@@ -185,7 +239,9 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
  *
  * Must be called exactly once, after all embediq_fb_register() calls are done.
  * Returns 0 on success. Returns -1 and emits an Observatory FAULT event if a
- * dependency cycle or missing dependency is detected.
+ * dependency cycle or missing dependency is detected, or if a per-FB
+ * execution lock cannot be allocated (EMBEDIQ_FAULT_BOOT_RESOURCE; no init_fn
+ * has run). Calling context: boot thread only.
  */
 int embediq_engine_boot(void);
 

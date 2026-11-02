@@ -10,7 +10,7 @@
  * Zero external test framework — stdlib + pthread only.
  *
  * Run:      ./build/tests/unit/test_obs_concurrent
- * Expected: "All 9 tests passed. (0 failed)"
+ * Expected: "All 10 tests passed. (0 failed)"
  *
  * TSan:
  *   cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON
@@ -57,6 +57,9 @@ extern void     fb_engine__reset(void);
 /* Weak fallback so this file links before obs.c provides the hook (TDD-first
  * commit). obs.c's strong definition replaces it once implemented. */
 __attribute__((weak)) uint32_t obs__isr_dropped_total(void) { return 0u; }
+__attribute__((weak)) bool     obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out)
+{ (void)idx; (void)out; return false; }
+__attribute__((weak)) uint32_t obs__sequence_outside_critical(void) { return 0u; }
 
 /* ---------------------------------------------------------------------------
  * Named test constants
@@ -69,6 +72,14 @@ __attribute__((weak)) uint32_t obs__isr_dropped_total(void) { return 0u; }
 #define OBS_ISR_PER_THREAD   1000u
 #define OBS_ISR_LOOP_EMITS   2000u
 #define OBS_ISR_EXTRA        5u      /* emits beyond the ISR ring depth (test 3) */
+
+#define OBS_MIX_ISR_PER_THREAD 30000u  /* review R3 probe shape (test 2) */
+#define OBS_MIX_THREAD_EMITS   15000u
+#define OBS_MIX_SRC_ISR        1u
+#define OBS_MIX_SRC_THREAD     2u
+#define OBS_MIX_MSG_ID         0x1441u
+#define OBS_PEEK_N             5u      /* ISR records inspected before drain (test 2b) */
+#define OBS_PEEK_MSG_BASE      0x1460u /* community range, unique to this file */
 
 #define OBS_FILE_THREADS     4u
 #define OBS_FILE_PER_THREAD  2000u
@@ -106,7 +117,7 @@ __attribute__((weak)) uint32_t obs__isr_dropped_total(void) { return 0u; }
 
 /* Recording buffers: up to 2 frames per emit once the 256-event ring is full
  * (each emit then also writes an OVERFLOW record). */
-#define REC_CAP              (1024u * 1024u)
+#define REC_CAP              (4u * 1024u * 1024u)
 #define SEQ_CAP              32768u
 
 /* ---------------------------------------------------------------------------
@@ -204,11 +215,7 @@ static void use_file_transport(const embediq_obs_stream_ops_t *ops)
 
 static uint16_t rd_u16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
-static int cmp_u32(const void *a, const void *b)
-{
-    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-    return (x > y) - (x < y);
-}
+static uint32_t g_seq_buf[SEQ_CAP];   /* file-order sequences (test 4) */
 
 /* Parse g_rec as back-to-back EVENT TLVs. Returns frame count, or -1 on any
  * framing error or if the frames exceed cap. Fills seq[] (file order) and
@@ -299,59 +306,145 @@ static void test_sequence_strictly_monotonic_across_threads(void)
 }
 
 /* ===========================================================================
- * Test 2
+ * Test 2 — review R3: one sequencing point across the ISR and thread paths
  * ======================================================================== */
 
-static void *isr_producer(void *arg)
+static embediq_osal_atomic32_t g_mix_go = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+static void *mix_isr_producer(void *arg)
 {
     (void)arg;
-    for (uint32_t i = 0u; i < OBS_ISR_PER_THREAD; i++) {
-        embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_HAL_FAULT,
-                                  EMBEDIQ_HAL_SRC_OBS_STREAM, 0u, 4u, 0u);
+    while (embediq_osal_atomic32_load(&g_mix_go) == 0u) { /* start together */ }
+    for (uint32_t i = 0u; i < OBS_MIX_ISR_PER_THREAD; i++) {
+        embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_FAULT, OBS_MIX_SRC_ISR, 0u, 0u,
+                                  OBS_MIX_MSG_ID);
     }
     return NULL;
 }
 
+/* Walk g_rec in WRITE order (no sorting). Returns the frame count, or -1 on a
+ * framing error. *ordered is false at the first sequence that is not strictly
+ * greater than the one written before it. Counts FAULT frames per source. */
+static int walk_frames_in_write_order(bool *ordered, uint32_t *n_isr,
+                                      uint32_t *n_thread, uint32_t *first_bad)
+{
+    uint32_t off = 0u, n = 0u, prev = 0u;
+    *ordered = true; *n_isr = 0u; *n_thread = 0u; *first_bad = 0u;
+    while (off < g_rec_len) {
+        if (off + TLV_HDR > g_rec_len) return -1;
+        uint16_t type = rd_u16(&g_rec[off]);
+        uint16_t len  = rd_u16(&g_rec[off + 2u]);
+        if (type != TLV_EVENT || len != sizeof(EmbedIQ_Event_t)) return -1;
+        if (off + TLV_HDR + len > g_rec_len) return -1;
+        EmbedIQ_Event_t e;
+        memcpy(&e, &g_rec[off + TLV_HDR], sizeof(e));
+        if (n > 0u && e.sequence <= prev && *ordered) {
+            *ordered = false;
+            *first_bad = n;
+        }
+        if (e.event_type == EMBEDIQ_OBS_EVT_FAULT) {
+            if (e.source_fb_id == OBS_MIX_SRC_ISR)    (*n_isr)++;
+            if (e.source_fb_id == OBS_MIX_SRC_THREAD) (*n_thread)++;
+        }
+        prev = e.sequence;
+        n++;
+        off += TLV_HDR + len;
+    }
+    return (int)n;
+}
+
 /* ---------------------------------------------------------------------------
- * test_isr_path_no_lock_and_drained
- * 4 threads × 1,000 emit_from_isr while one thread emits normally. Every ISR
- * event is either drained to the transport or counted as an ISR-ring drop,
- * and no sequence number appears twice.
+ * test_mixed_path_transport_order_strictly_increasing
+ * 4 ISR producers x 30,000 emit_from_isr + 1 thread x 15,000 emit (the
+ * reviewer's shape). Every record IN THE ORDER WRITTEN to the transport has
+ * a strictly greater sequence than the one before it. Every thread event is
+ * written; every ISR event is written or counted as an ISR-ring drop (the
+ * drops the OVERFLOW records report). No sequence is taken outside the
+ * Observatory critical section.
  * ------------------------------------------------------------------------- */
 
-static uint32_t g_seq_buf[SEQ_CAP];
-
-static void test_isr_path_no_lock_and_drained(void)
+static void test_mixed_path_transport_order_strictly_increasing(void)
 {
     use_file_transport(&k_record_ops);
     g_rec_len = 0u;
+    embediq_osal_atomic32_store(&g_mix_go, 0u);
 
-    pthread_t prod[OBS_ISR_PRODUCERS], loop;
-    uint32_t loop_iters = OBS_ISR_LOOP_EMITS;
-    pthread_create(&loop, NULL, lifecycle_emitter, &loop_iters);
+    pthread_t prod[OBS_ISR_PRODUCERS];
     for (uint32_t i = 0u; i < OBS_ISR_PRODUCERS; i++) {
-        pthread_create(&prod[i], NULL, isr_producer, NULL);
+        pthread_create(&prod[i], NULL, mix_isr_producer, NULL);
+    }
+    embediq_osal_atomic32_store(&g_mix_go, 1u);
+    for (uint32_t i = 0u; i < OBS_MIX_THREAD_EMITS; i++) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, OBS_MIX_SRC_THREAD, 0u, 0u,
+                         OBS_MIX_MSG_ID);
     }
     for (uint32_t i = 0u; i < OBS_ISR_PRODUCERS; i++) {
         pthread_join(prod[i], NULL);
     }
-    pthread_join(loop, NULL);
     embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);  /* final drain */
 
-    uint32_t hal = 0u;
-    int frames = parse_event_frames(g_seq_buf, SEQ_CAP, EMBEDIQ_OBS_EVT_HAL_FAULT, &hal);
+    bool ordered = false;
+    uint32_t n_isr = 0u, n_thread = 0u, first_bad = 0u;
+    int frames = walk_frames_in_write_order(&ordered, &n_isr, &n_thread, &first_bad);
     uint32_t dropped = obs__isr_dropped_total();
-    bool ok = frames > 0
-              && hal + dropped == OBS_ISR_PRODUCERS * OBS_ISR_PER_THREAD;
-    if (ok) {
-        qsort(g_seq_buf, (size_t)frames, sizeof(uint32_t), cmp_u32);
-        for (int i = 1; ok && i < frames; i++) {
-            ok = g_seq_buf[i] != g_seq_buf[i - 1];
+    uint32_t outside = obs__sequence_outside_critical();
+    printf("      frames=%d ordered=%d first_bad_frame=%u isr_written=%u isr_dropped=%u"
+           " thread_written=%u seq_outside_critical=%u\n",
+           frames, (int)ordered, (unsigned)first_bad, (unsigned)n_isr,
+           (unsigned)dropped, (unsigned)n_thread, (unsigned)outside);
+    ASSERT(frames > 0 && ordered
+           && n_isr + dropped == OBS_ISR_PRODUCERS * OBS_MIX_ISR_PER_THREAD
+           && n_thread == OBS_MIX_THREAD_EMITS
+           && outside == 0u,
+           "transport order == sequence order across ISR and thread paths (unsorted)");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_isr_records_have_no_sequence_before_drain
+ * 5 emit_from_isr records sit in the ISR ring with sequence 0 (none taken at
+ * production). One thread-path emit drains them: they enter the main ring
+ * with consecutive sequences, all lower than the thread event's.
+ * ------------------------------------------------------------------------- */
+
+static void test_isr_records_have_no_sequence_before_drain(void)
+{
+    use_file_transport(&k_discard_ops);
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);  /* seq 0 used */
+    for (uint32_t i = 0u; i < OBS_PEEK_N; i++) {
+        embediq_obs_emit_from_isr(EMBEDIQ_OBS_EVT_FAULT, OBS_MIX_SRC_ISR, 0u, 0u,
+                                  (uint16_t)(OBS_PEEK_MSG_BASE + i));
+    }
+    uint32_t peeked = 0u, unsequenced = 0u;
+    for (uint32_t i = 0u; i < OBS_PEEK_N; i++) {
+        EmbedIQ_Event_t e;
+        if (obs__isr_ring_peek(i, &e)) {
+            peeked++;
+            if (e.sequence == 0u) unsequenced++;
         }
     }
-    printf("      frames=%d hal_fault=%u isr_dropped=%u\n",
-           frames, (unsigned)hal, (unsigned)dropped);
-    ASSERT(ok, "all ISR events drained or counted; no duplicate sequence");
+
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);  /* drains */
+    uint32_t isr_seq[OBS_PEEK_N];
+    uint32_t found = 0u, thread_seq = 0u;
+    bool in_order = true;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__ring_read(i, &e); i++) {
+        if (e.event_type == EMBEDIQ_OBS_EVT_FAULT && found < OBS_PEEK_N) {
+            if (e.msg_id != (uint16_t)(OBS_PEEK_MSG_BASE + found)) in_order = false;
+            isr_seq[found++] = e.sequence;
+        } else if (e.event_type == EMBEDIQ_OBS_EVT_LIFECYCLE) {
+            thread_seq = e.sequence;   /* last LIFECYCLE = the draining emit */
+        }
+    }
+    bool ok = peeked == OBS_PEEK_N && unsequenced == OBS_PEEK_N
+              && found == OBS_PEEK_N && in_order;
+    for (uint32_t i = 0u; ok && i < OBS_PEEK_N; i++) {
+        ok = isr_seq[i] < thread_seq && (i == 0u || isr_seq[i] == isr_seq[i - 1u] + 1u);
+    }
+    printf("      peeked=%u unsequenced=%u found=%u in_order=%d thread_seq=%u\n",
+           (unsigned)peeked, (unsigned)unsequenced, (unsigned)found, (int)in_order,
+           (unsigned)thread_seq);
+    ASSERT(ok, "ISR records carry no sequence until drain; drained ahead of the drainer");
 }
 
 /* ===========================================================================
@@ -677,7 +770,8 @@ int main(void)
 {
     test_emit_before_init_is_safe();          /* must be first */
     test_sequence_strictly_monotonic_across_threads();
-    test_isr_path_no_lock_and_drained();
+    test_mixed_path_transport_order_strictly_increasing();
+    test_isr_records_have_no_sequence_before_drain();
     test_isr_ring_overflow_counted();
     test_file_transport_frames_not_interleaved();
     test_critical_section_hold_time();

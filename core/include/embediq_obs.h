@@ -479,6 +479,13 @@ _Static_assert(sizeof(EmbedIQ_Obs_Session_t) == 40,
  *                   ordering or gap detection (I-13)
  *   sequence      — CANONICAL ordering field; monotonic, never resets;
  *                   use sequence delta for gap detection (I-13)
+ *
+ * Sequencing rule (one linearization point, review R3): sequence is assigned
+ * when a record enters the main ring (thread path: at emit; ISR path: at
+ * drain). Ordering among ISR records = slot reservation order. timestamp_us
+ * is production time and may be non-monotonic relative to sequence across
+ * the two paths — decoders order by sequence. Transport order == sequence
+ * order for every record.
  * ------------------------------------------------------------------------- */
 
 typedef struct __attribute__((packed)) {
@@ -558,9 +565,10 @@ bool embediq_obs_level_at_least(uint8_t lvl);
 
 /**
  * Emit an Observatory event. No-op when EMBEDIQ_OBS_LEVEL == 0.
- * Thread-safe: sequence is a lock-free atomic shared with the ISR path; the
- * ring is written inside the OSAL critical section; transport I/O is
- * serialised by a mutex so file order equals sequence order. Never from ISR.
+ * Thread-safe: the event and any pending ISR records it drains take their
+ * sequence numbers inside the OSAL critical section (the single sequencing
+ * point); transport I/O is serialised by a mutex in that same order, so file
+ * order equals sequence order. Never from ISR.
  * Calling context: any thread.
  */
 void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
@@ -636,6 +644,9 @@ int embediq_obs_capture_end(void);
  * The next thread-path emit (or capture_end) drains it into the main ring and
  * the transport; a full ISR ring counts the drop, reported in the next
  * OVERFLOW event. Safe to call from inside a stream-HAL write.
+ * The record takes no sequence number here: it is sequenced when drained
+ * into the main ring (see the sequencing rule at EmbedIQ_Event_t); its
+ * timestamp_us is the production time.
  * On MCU (Phase 2): the same ISR ring, drained by the observer task.
  *
  * The _from_isr suffix ensures ISR call sites are grep-auditable.

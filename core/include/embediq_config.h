@@ -69,6 +69,15 @@ extern "C" {
 /** Maximum number of sub-functions that can be registered per Functional Block. */
 #define EMBEDIQ_MAX_SUBFNS_PER_FB       16
 
+/** Per-FB queue of fault reports made from inside that FB's own running code
+ *  (fault_fn, init_fn, run_fn) while it holds its execution lock. They are
+ *  applied in order after the current handler returns; reports beyond this
+ *  depth are counted and reported as one EMBEDIQ_FAULT_PENDING_OVERFLOW
+ *  FAULT event (review #182 N3). */
+#ifndef EMBEDIQ_FB_FAULT_PENDING_DEPTH
+#  define EMBEDIQ_FB_FAULT_PENDING_DEPTH  4u
+#endif
+
 /* ---------------------------------------------------------------------------
  * Observatory ring buffer
  * ------------------------------------------------------------------------- */
