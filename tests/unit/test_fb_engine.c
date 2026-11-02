@@ -88,6 +88,18 @@ extern void     embediq_osal__fail_next_mutex_create(uint32_t nth);
 #define NESTED_OVERFLOW_EXTRA  2u       /* reports beyond the inbox depth */
 #define DISPATCH_COST_MSGS     100000u
 #define DISPATCH_COST_MAX_NS   2000u    /* < 2 us per dispatch over baseline */
+/* Sanitizer-instrumented build: GCC defines __SANITIZE_*__, Clang answers
+ * __has_feature (nested: a compiler without __has_feature cannot parse it). */
+#if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
+#  define SANITIZER_BUILD 1
+#elif defined(__has_feature)
+#  if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)
+#    define SANITIZER_BUILD 1
+#  endif
+#endif
+#ifndef SANITIZER_BUILD
+#  define SANITIZER_BUILD 0
+#endif
 
 /* Dispatch shutdown constants */
 #define MSG_TEST_GATED           0x1434u  /* community range, unique to this file */
@@ -1277,12 +1289,24 @@ static void test_run_fn_cost_under_exec_lock(void)
 
     uint32_t over_ns = (lock_us > base_us)
         ? (uint32_t)(((uint64_t)(lock_us - base_us) * 1000u) / DISPATCH_COST_MSGS) : 0u;
+    /* A wall-clock bound measures the un-instrumented engine. Under a
+     * sanitizer the number is an artefact of instrumentation and of whatever
+     * else the CI host is running, so it is printed, not asserted. */
+#if SANITIZER_BUILD
+    printf("      base=%u us engine=%u us overhead=%u ns/msg locked=%u/%u "
+           "(instrumented build: bound not asserted)\n",
+           (unsigned)base_us, (unsigned)lock_us, (unsigned)over_ns,
+           (unsigned)g_exec_cost_locked, (unsigned)g_exec_cost_calls);
+    ASSERT(g_exec_cost_calls == DISPATCH_COST_MSGS && g_exec_cost_locked == DISPATCH_COST_MSGS,
+           "run_fn under the exec lock: every dispatch locked");
+#else
     printf("      base=%u us engine=%u us overhead=%u ns/msg locked=%u/%u\n",
            (unsigned)base_us, (unsigned)lock_us, (unsigned)over_ns,
            (unsigned)g_exec_cost_locked, (unsigned)g_exec_cost_calls);
     ASSERT(g_exec_cost_calls == DISPATCH_COST_MSGS && g_exec_cost_locked == DISPATCH_COST_MSGS
            && over_ns < DISPATCH_COST_MAX_NS,
            "run_fn under the exec lock: every dispatch locked, overhead < 2 us/msg");
+#endif
 }
 
 /* ===========================================================================

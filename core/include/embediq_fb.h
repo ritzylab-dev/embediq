@@ -288,11 +288,14 @@ void embediq_engine_dispatch_boot(void);
  *
  * Sets the shutdown flag, posts each FB's dispatch semaphore once to unblock
  * any waiting thread, then joins every dispatch thread; each stops within one
- * message. Executes every latched fault before returning; discards queued
- * messages and reports the count as one QUEUE_DROP event per FB (state
- * EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN). Never waits for concurrent fault
- * reporters. Afterwards faults are executed on the reporting thread until
- * dispatch_boot is called again.
+ * message. Executes the faults latched for each FB whose execution lock it
+ * can take; a fault being executed by a reporting thread at that moment
+ * completes on that thread, and reasons it leaves latched are executed by
+ * that thread's own release-check loop. dispatch_shutdown never waits for an
+ * execution lock. Discards queued messages and reports the count as one
+ * QUEUE_DROP event per FB (state EMBEDIQ_QUEUE_DROP_AT_SHUTDOWN). Afterwards
+ * faults are executed on the reporting thread until dispatch_boot is called
+ * again.
  *
  * Safe to call multiple times (idempotent).
  * Call before OTA restart or clean process exit.

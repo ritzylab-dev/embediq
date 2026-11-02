@@ -1085,7 +1085,9 @@ comment stating one of: "FB dispatch thread only", "boot thread only", "any thre
   holder releases, then checks the inbox, and while it is not empty takes the lock again
   by trylock and runs another pass — repeating until a check that follows a release finds
   the inbox empty. A push after that check finds the lock free and executes itself, or is
-  refused only because a new holder exists, which runs the same loop.
+  refused only because a new holder exists, which runs the same loop. Execution is
+  re-checked against the owner before every reason, so a thread that observed a previous
+  owner cannot execute after a transition.
 - **Boot ordering.** A fault accepted before or during `init_fn` is executed before the FB
   is marked RUNNING. A report accepted in the closing window — after that drain and before
   the boot thread releases the lock — is executed immediately after; the trace may then

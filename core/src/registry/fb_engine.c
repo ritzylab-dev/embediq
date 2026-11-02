@@ -29,6 +29,14 @@
  * owner change is inside the OSAL critical section, and each owner drains
  * after the change that made it the owner. Nothing runs before init_fn: the
  * owner stays BOOT until the boot thread, holding the lock, flips it after.
+ * No stale executor: a thread acts on an owner it read earlier, but a drain
+ * pass consults the owner again inside the critical section before its
+ * budget and before every reason, and executes only in a role that owner
+ * allows (DISPATCH: the dispatch thread; NONE: any other thread). A thread
+ * whose owner read went stale — boot failed, or dispatch_boot handed the FB
+ * to its dispatch thread — can still win the lock but drains nothing: it
+ * leaves the inbox to the new owner, which is woken (DISPATCH) or counts or
+ * executes it (BOOT).
  * Nothing is stranded: every release of an execution lock is followed by a
  * check of the inbox. A push that lands before the check is seen by it; a
  * push after the check finds the lock free and executes itself, or is
@@ -113,6 +121,14 @@ typedef enum {
     FAULT_OWNER_NONE     = 1,   /* no dispatch thread: the reporter executes */
     FAULT_OWNER_DISPATCH = 2,   /* the FB's dispatch thread executes         */
 } fault_owner_t;
+
+/* The role in which a thread holding an FB's execution lock drains its
+ * inbox. A drain executes only when the current owner allows the role. */
+typedef enum {
+    EXEC_ROLE_DISPATCH = 0,   /* the FB's dispatch thread: owner DISPATCH   */
+    EXEC_ROLE_REPORTER = 1,   /* any other thread (reporter, the boot thread
+                                 after its flip, shutdown): owner NONE     */
+} exec_role_t;
 
 /* ---------------------------------------------------------------------------
  * Static registry — R-02: no malloc
@@ -230,21 +246,31 @@ static void fault_apply_one_locked(EmbedIQ_FB_t *fb, uint32_t reason)
     }
 }
 
+/* Whether owner allows a drain in role. Called inside the critical section. */
+static bool owner_allows(uint8_t owner, exec_role_t role)
+{
+    return (role == EXEC_ROLE_DISPATCH && owner == (uint8_t)FAULT_OWNER_DISPATCH)
+        || (role == EXEC_ROLE_REPORTER && owner == (uint8_t)FAULT_OWNER_NONE);
+}
+
 /* One drain pass: execute, in acceptance order, at most the number of
  * reasons latched when the pass starts (<= EMBEDIQ_FB_FAULT_INBOX_DEPTH);
  * reasons the fault_fns latch meanwhile wait for the next pass. Then report
- * any overflow once. Caller holds fb->exec_lock, not the critical section. */
-static void fault_drain_pass_locked(EmbedIQ_FB_t *fb)
+ * any overflow once. The owner is checked against role with the budget and
+ * again before every reason: if it stops allowing the role, the pass stops
+ * and leaves the inbox and the overflow count to the new owner. Caller holds
+ * fb->exec_lock, not the critical section. */
+static void fault_drain_pass_locked(EmbedIQ_FB_t *fb, exec_role_t role)
 {
     embediq_osal_critical_enter();
-    uint8_t budget = fb->inbox_count;
+    uint8_t budget = owner_allows(fb->fault_owner, role) ? fb->inbox_count : 0u;
     embediq_osal_critical_exit();
 
     for (uint8_t n = 0u; n < budget; n++) {
         bool     have   = false;
         uint32_t reason = 0u;
         embediq_osal_critical_enter();
-        if (fb->inbox_count > 0u) {
+        if (owner_allows(fb->fault_owner, role) && fb->inbox_count > 0u) {
             reason         = fb->inbox[fb->inbox_head];
             fb->inbox_head = (uint8_t)((fb->inbox_head + 1u) % EMBEDIQ_FB_FAULT_INBOX_DEPTH);
             fb->inbox_count--;
@@ -256,8 +282,11 @@ static void fault_drain_pass_locked(EmbedIQ_FB_t *fb)
     }
 
     embediq_osal_critical_enter();
-    uint32_t dropped  = fb->inbox_dropped;
-    fb->inbox_dropped = 0u;
+    uint32_t dropped = 0u;
+    if (owner_allows(fb->fault_owner, role)) {
+        dropped           = fb->inbox_dropped;
+        fb->inbox_dropped = 0u;
+    }
     embediq_osal_critical_exit();
     if (dropped > 0u) {
         embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, fb->ep_idx,
@@ -312,16 +341,17 @@ static void exec_release(EmbedIQ_FB_t *fb)
     embediq_osal_mutex_unlock(fb->exec_lock);
 }
 
-/* Drain pass, release, check — repeated until a check that follows a
- * release finds the inbox empty. A reporter whose trylock was refused while
- * this thread held the lock relies on that check: under NONE this thread
- * takes the lock again (trylock only) and runs another pass; refused, a new
- * holder exists and runs this same loop. Under DISPATCH it wakes the
- * dispatch thread; under BOOT the boot thread drains after init_fn. */
-static void exec_exit(EmbedIQ_FB_t *fb)
+/* Drain pass in role, release, check — repeated until a check that
+ * follows a release finds the inbox empty. A reporter whose trylock was
+ * refused while this thread held the lock relies on that check: under NONE
+ * a REPORTER-role thread takes the lock again (trylock only) and runs
+ * another pass; refused, a new holder exists and runs this same loop. Under
+ * DISPATCH it wakes the dispatch thread; under BOOT the reason is the boot
+ * thread's (executed after init_fn, or counted by a failed boot). */
+static void exec_exit(EmbedIQ_FB_t *fb, exec_role_t role)
 {
     for (;;) {
-        fault_drain_pass_locked(fb);
+        fault_drain_pass_locked(fb, role);
         exec_release(fb);
 
         embediq_osal_critical_enter();
@@ -334,7 +364,10 @@ static void exec_exit(EmbedIQ_FB_t *fb)
             embediq_sem_post(g_dispatch_args[fb->ep_idx].sem);
             return;
         }
-        if (owner != (uint8_t)FAULT_OWNER_NONE || !exec_try(fb)) return;
+        if (owner != (uint8_t)FAULT_OWNER_NONE || role != EXEC_ROLE_REPORTER
+            || !exec_try(fb)) {
+            return;
+        }
     }
 }
 
@@ -358,7 +391,9 @@ static void fault_owner_change(EmbedIQ_FB_t *fb, fault_owner_t from_owner,
  * by the owner read in the same section: BOOT — nothing (boot executes after
  * init_fn); DISPATCH — wake the dispatch thread; NONE — execute here under
  * the execution lock: blocking if this thread holds no execution lock, by
- * trylock otherwise (refused: the holder executes it on release).
+ * trylock otherwise (refused: the holder executes it on release). The owner
+ * read here may be stale by the time the lock is held; the drain pass
+ * checks it again and executes only while it is still NONE.
  * ------------------------------------------------------------------------- */
 
 void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
@@ -401,7 +436,7 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
     } else if (!exec_enter(fb)) {
         return;
     }
-    exec_exit(fb);
+    exec_exit(fb, EXEC_ROLE_REPORTER);
 }
 
 /* ---------------------------------------------------------------------------
@@ -534,7 +569,8 @@ static int boot_abort(void)
     for (uint8_t i = 0u; i < g_reg_count; i++) {
         EmbedIQ_FB_t *fb = &g_registry[i];
         embediq_osal_critical_enter();
-        uint32_t latched  = fb->inbox_count + fb->inbox_dropped;
+        uint32_t latched  = (fb->inbox_dropped > UINT32_MAX - fb->inbox_count)
+                            ? UINT32_MAX : fb->inbox_dropped + fb->inbox_count;
         fb->inbox_head    = 0u;
         fb->inbox_count   = 0u;
         fb->inbox_dropped = 0u;
@@ -700,7 +736,7 @@ int embediq_engine_boot(void)
              * immediately after; the trace may then show RUNNING followed by
              * FAULT for that FB. The state never returns to RUNNING. */
             fault_owner_change(fb, FAULT_OWNER_BOOT, FAULT_OWNER_NONE);
-            fault_drain_pass_locked(fb);
+            fault_drain_pass_locked(fb, EXEC_ROLE_REPORTER);
 
             /* Transition INITIALISING → RUNNING, only if no fault was executed
              * (FAULT is never overwritten), before the unlock. */
@@ -709,7 +745,7 @@ int embediq_engine_boot(void)
                 embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, fb->ep_idx, 0xFFu,
                                  (uint8_t)EMBEDIQ_FB_STATE_RUNNING, 0u);
             }
-            exec_exit(fb);
+            exec_exit(fb, EXEC_ROLE_REPORTER);
 
             g_boot_order[g_boot_count++] = idx;
         }
@@ -796,7 +832,7 @@ static bool dispatch_next(EmbedIQ_FB_t *fb, uint8_t ep)
      * so other owners of the lock can interleave. */
     if (!exec_enter(fb)) return true;
     dispatch_msg_to_fb(fb, msg.msg_id, msg.payload);
-    exec_exit(fb);   /* executes faults latched meanwhile */
+    exec_exit(fb, EXEC_ROLE_DISPATCH);   /* executes faults latched meanwhile */
     return true;
 }
 
@@ -827,7 +863,7 @@ static void fb_dispatch_loop(void *arg)
 
         /* Latched faults first, then queued messages, testing the shutdown
          * flag before each one. */
-        if (exec_enter(fb)) exec_exit(fb);
+        if (exec_enter(fb)) exec_exit(fb, EXEC_ROLE_DISPATCH);
         while (embediq_osal_atomic32_load(&g_dispatch_shutdown) == 0u
                && dispatch_next(fb, ep)) {
         }
@@ -835,7 +871,7 @@ static void fb_dispatch_loop(void *arg)
 
     /* Shutdown: discard the queued messages; execute latched faults. */
     da->discarded = drain_at_shutdown(ep);
-    if (exec_enter(fb)) exec_exit(fb);
+    if (exec_enter(fb)) exec_exit(fb, EXEC_ROLE_DISPATCH);
 }
 
 /* ---------------------------------------------------------------------------
@@ -883,10 +919,12 @@ void embediq_engine_dispatch_boot(void)
  * 2. Post each FB's semaphore once and join every dispatch thread; each exits
  *    within one message, discards its queued messages and executes its
  *    latched faults.
- * 3. Per dispatch FB: owner DISPATCH → NONE, then one pass over what was
- *    latched meanwhile — by trylock only: if refused, a reporter is
- *    executing under NONE and carries the rest. A later report is executed
- *    by its reporter. Discard what was queued since the thread's drain and
+ * 3. Per dispatch FB: owner DISPATCH → NONE, then execute the faults
+ *    latched for each FB whose execution lock it can take. A fault being
+ *    executed by a reporting thread at that moment completes on that
+ *    thread, and reasons it leaves latched are executed by that thread's own
+ *    release-check loop; shutdown never waits for an execution lock. A later
+ *    report is executed by its reporter. Discard what was queued since the thread's drain and
  *    report all discarded messages as one QUEUE_DROP event per FB.
  * 4. Clear running, then shutdown.
  * ------------------------------------------------------------------------- */
@@ -916,7 +954,7 @@ int embediq_engine_dispatch_shutdown(void)
         EmbedIQ_FB_t *fb = g_dispatch_args[i].fb;
         if (!g_dispatch_args[i].sem || !fb) continue;
         fault_owner_change(fb, FAULT_OWNER_DISPATCH, FAULT_OWNER_NONE);
-        if (exec_try(fb)) exec_exit(fb);
+        if (exec_try(fb)) exec_exit(fb, EXEC_ROLE_REPORTER);
         uint32_t discarded = g_dispatch_args[i].discarded + drain_at_shutdown(i);
         g_dispatch_args[i].discarded = 0u;
         if (discarded > 0u) {
@@ -1000,7 +1038,7 @@ void fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle, uint16_t msg_id,
     }
     if (!exec_enter(fb)) return;             /* same rule as the dispatch loop */
     dispatch_msg_to_fb(fb, msg_id, msg);
-    exec_exit(fb);
+    exec_exit(fb, EXEC_ROLE_REPORTER);
 }
 
 /** True when the calling thread holds ep's execution lock (test use only). */
