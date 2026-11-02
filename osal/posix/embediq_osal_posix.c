@@ -135,6 +135,19 @@ static void *_task_entry(void *raw)
     return NULL;
 }
 
+/* Test-only failure injection (host builds only), like
+ * embediq_osal__fail_next_mutex_create() below: the nth
+ * embediq_osal_task_create() call from now fails once, observed like a real
+ * thread-creation failure (n = 0 disarms). */
+#ifdef EMBEDIQ_PLATFORM_HOST
+static _Atomic uint32_t s_task_fail_countdown = 0u;
+
+void embediq_osal__fail_next_task_create(uint32_t nth)
+{
+    atomic_store(&s_task_fail_countdown, nth);
+}
+#endif
+
 EmbedIQ_Task_t *embediq_osal_task_create(const char    *name,
                                           void         (*fn)(void *),
                                           void          *arg,
@@ -145,6 +158,16 @@ EmbedIQ_Task_t *embediq_osal_task_create(const char    *name,
     (void)priority;
     (void)stack_bytes;
 
+#ifdef EMBEDIQ_PLATFORM_HOST
+    uint32_t n = atomic_load(&s_task_fail_countdown);
+    while (n != 0u
+           && !atomic_compare_exchange_weak(&s_task_fail_countdown, &n, n - 1u)) {
+    }
+    if (n == 1u) {                       /* injected creation failure */
+        EMBEDIQ_OSAL_OBS_TASK_FAIL(0);
+        return NULL;
+    }
+#endif
     _task_wrapper_t *w = malloc(sizeof(_task_wrapper_t));
     if (!w) return NULL;
     w->fn  = fn;
@@ -455,6 +478,12 @@ embediq_err_t embediq_osal_mutex_lock(EmbedIQ_Mutex_t *m, uint32_t timeout_ms)
     if (pthread_mutex_trylock(&m->mutex) == 0) return EMBEDIQ_OK;
     EMBEDIQ_OSAL_OBS_MUTEX_TIMEOUT(0);
     return EMBEDIQ_ERR_TIMEOUT;
+}
+
+bool embediq_osal_mutex_try(EmbedIQ_Mutex_t *m)
+{
+    /* osal-obs: refusal is an expected outcome */
+    return pthread_mutex_trylock(&m->mutex) == 0;
 }
 
 void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)

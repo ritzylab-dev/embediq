@@ -43,21 +43,14 @@ extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
  * (TDD-first commit); the engine's strong definition replaces it. */
 __attribute__((weak)) bool fb_engine__exec_lock_held(uint8_t ep) { (void)ep; return false; }
 /* Host-only: called by report_fault between accepting a report and acting
- * on it, so a test can hold a reporter there. Weak no-op fallbacks as above. */
+ * on it, so a test can hold a reporter there. */
 typedef void (*fb_engine_report_hook_t)(void);
-__attribute__((weak)) void fb_engine__set_report_delay_hook(fb_engine_report_hook_t fn) { (void)fn; }
-/* Host-only: total reports counted as inbox overflow since the last reset. */
-__attribute__((weak)) uint32_t fb_engine__fault_overflow_total(void) { return 0u; }
+extern void     fb_engine__set_report_delay_hook(fb_engine_report_hook_t fn);
+/* Host-only: total reports counted as fault-inbox overflow since the last reset. */
+extern uint32_t fb_engine__fault_overflow_total(void);
 /* Host-only OSAL failure injection (osal/posix): the nth task_create from
- * now returns NULL. */
-__attribute__((weak)) void embediq_osal__fail_next_task_create(uint32_t nth) { (void)nth; }
-
-#ifndef EMBEDIQ_FB_FAULT_INBOX_DEPTH
-#  define EMBEDIQ_FB_FAULT_INBOX_DEPTH  EMBEDIQ_FB_FAULT_PENDING_DEPTH
-#endif
-#ifndef EMBEDIQ_FAULT_BOOT_ABORTED
-#  define EMBEDIQ_FAULT_BOOT_ABORTED    0x82u
-#endif
+ * now fails once. */
+extern void     embediq_osal__fail_next_task_create(uint32_t nth);
 /* Host-only OSAL failure injection (osal/posix): the nth mutex_create from
  * now returns NULL. */
 extern void     embediq_osal__fail_next_mutex_create(uint32_t nth);

@@ -69,21 +69,12 @@ extern "C" {
 /** Maximum number of sub-functions that can be registered per Functional Block. */
 #define EMBEDIQ_MAX_SUBFNS_PER_FB       16
 
-/** Per-FB queue of fault reports made from inside that FB's own running code
- *  (fault_fn, init_fn, run_fn) while it holds its execution lock. They are
- *  applied in order after the current handler returns; reports beyond this
- *  depth are counted and reported as one EMBEDIQ_FAULT_PENDING_OVERFLOW
- *  FAULT event (review #182 N3). */
-#ifndef EMBEDIQ_FB_FAULT_PENDING_DEPTH
-#  define EMBEDIQ_FB_FAULT_PENDING_DEPTH  4u
-#endif
-
-/** Upper bound (ms) embediq_engine_dispatch_shutdown() waits for fault posts
- *  already in flight before its final drain. Posts never wait for queue
- *  capacity, so in-flight time is microseconds; the bound only guarantees
- *  that shutdown terminates. Reaching it emits EMBEDIQ_FAULT_SHUTDOWN_INFLIGHT. */
-#ifndef EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS
-#  define EMBEDIQ_SHUTDOWN_INFLIGHT_WAIT_MS  100u
+/** Per-FB fault inbox: ordered fault reasons accepted by
+ *  embediq_fb_report_fault() and awaiting execution by the FB's owner (boot
+ *  thread, dispatch thread or reporter). Reports beyond this depth are
+ *  counted and reported as one EMBEDIQ_FAULT_PENDING_OVERFLOW FAULT event. */
+#ifndef EMBEDIQ_FB_FAULT_INBOX_DEPTH
+#  define EMBEDIQ_FB_FAULT_INBOX_DEPTH  4u
 #endif
 
 /* ---------------------------------------------------------------------------

@@ -16,6 +16,12 @@ Scans every .c file under osal/ and verifies:
    embediq_err_t non-OK) calls the corresponding EMBEDIQ_OSAL_OBS_* macro.
 2. No line matches the !fn() anti-pattern: if (!embediq_osal_...)
 
+Exemption: a function whose body contains the marker comment
+    /* osal-obs: refusal is an expected outcome */
+is exempt from the obligation for its `return false` paths — for calls such
+as embediq_osal_mutex_try() whose refusal is a normal result, not a failure.
+The exemption is decided per function; use it only where that holds.
+
 Exit 0 in warning-only mode (default). Exit 1 with --strict on violations.
 """
 
@@ -37,6 +43,27 @@ _FAILURE_RETURN_PATTERNS = [
 
 # Pattern that satisfies the observation obligation
 _OSAL_OBS_PATTERN = re.compile(r'EMBEDIQ_OSAL_OBS_')
+
+# Marker that exempts one function's `return false` paths (see module doc)
+_REFUSAL_MARKER = '/* osal-obs: refusal is an expected outcome */'
+_RETURN_FALSE_PATTERN = re.compile(r'\breturn\s+false\b')
+
+
+def _refusal_exempt_lines(lines):
+    """Return the 1-based line numbers inside functions that carry the
+    refusal marker. A function body runs from a line starting with '{' to
+    the next line starting with '}' (the repository's C style)."""
+    exempt = set()
+    start = None
+    for lineno, line in enumerate(lines, 1):
+        if line.startswith('{'):
+            start = lineno
+        elif line.startswith('}') and start is not None:
+            body = lines[start - 1:lineno]
+            if any(_REFUSAL_MARKER in b for b in body):
+                exempt.update(range(start, lineno + 1))
+            start = None
+    return exempt
 
 
 def _scan_file(filepath, repo_root):
@@ -65,7 +92,10 @@ def _scan_file(filepath, repo_root):
 
     # Check 2: failure return paths without OSAL_OBS_* macro in file
     if not has_osal_obs:
+        exempt = _refusal_exempt_lines(lines)
         for lineno, line in enumerate(lines, 1):
+            if lineno in exempt and _RETURN_FALSE_PATTERN.search(line):
+                continue
             for pat in _FAILURE_RETURN_PATTERNS:
                 if pat.search(line):
                     violations.append({

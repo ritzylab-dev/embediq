@@ -1096,9 +1096,11 @@ comment stating one of: "FB dispatch thread only", "boot thread only", "any thre
   `dispatch_shutdown`'s own work is bounded (one pass per FB, by trylock), so it returns
   once the dispatch threads have joined. A pass is bounded, a storm is not: under an
   unbounded stream of reports on one FB, its `fault_fn` keeps being invoked by whichever
-  executor holds the lock. A `fault_fn` that blocks (for example, publishing HIGH into a
-  full queue) blocks the thread executing it — the reporter under *none*, the dispatch
-  thread under *dispatch* — and shutdown waits for that dispatch thread to join.
+  executor holds the lock. A holder rechecks the inbox once after releasing the lock, so a
+  report whose trylock is refused during that last pass stays latched until the FB's next
+  report or handler. A `fault_fn` that blocks (for example, publishing HIGH into a full
+  queue) blocks the thread executing it — the reporter under *none*, the dispatch thread
+  under *dispatch* — and shutdown waits for that dispatch thread to join.
 - **Overflow.** Beyond `EMBEDIQ_FB_FAULT_INBOX_DEPTH` pending reasons on one FB, further
   reports are counted and reported as one `EMBEDIQ_OBS_EVT_FAULT` event
   (`EMBEDIQ_FAULT_PENDING_OVERFLOW`, `msg_id` = count) after the next drain pass. The FB

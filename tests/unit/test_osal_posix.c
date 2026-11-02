@@ -699,12 +699,6 @@ static void test_mutex_create_failure_injection(void)
  * OSAL_FAULT record: a refusal is an expected outcome, not a timeout.
  * ------------------------------------------------------------------------- */
 
-/* Weak fallback so this file links before the OSAL provides mutex_try: the
- * only non-waiting acquisition the OSAL offered until then. */
-__attribute__((weak)) bool embediq_osal_mutex_try(EmbedIQ_Mutex_t *m)
-{
-    return embediq_osal_mutex_lock(m, 0u) == EMBEDIQ_OK;
-}
 extern bool obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out);
 
 static uint32_t osal_fault_records_pending(void)
