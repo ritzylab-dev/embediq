@@ -11,7 +11,7 @@
  * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 13 tests passed. (0 failed)"
+ * Expected: "All 25 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>     /* setenv */
+#include <pthread.h>
 
 /* ---------------------------------------------------------------------------
  * Public NVM API (matches embediq_nvm.h contract)
@@ -42,6 +43,7 @@
 
 extern void        nvm__init_state(void);
 extern void        nvm__load_state(void);   /* triggers nvm_load() — test-only */
+extern void        nvm__set_persist_delay_ms(uint32_t ms);
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -424,6 +426,107 @@ static void test_blob_persist_and_reload_roundtrip(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Concurrency: reads during a persist, concurrent writers
+ * ------------------------------------------------------------------------- */
+
+#define PERSIST_DELAY_MS       200u    /* slowed persist: a long write in flight */
+#define READER_START_DELAY_MS  10u     /* reader starts once the persist is in flight */
+#define READ_LATENCY_MAX_US    20000u  /* a read must not wait for the persist */
+#define CONCURRENT_SET_ITERS   100u
+#define WRITER_A_BASE          0x10000u
+#define WRITER_B_BASE          0x20000u
+
+static void *slow_persist_setter(void *arg)
+{
+    (void)arg;
+    uint32_t v = 7u;
+    (void)embediq_nvm_set("persist.slow", &v, sizeof(v));
+    return NULL;
+}
+
+/* test_nvm_get_does_not_wait_for_persist
+ * A read issued while another thread's set is persisting (200 ms) returns at
+ * once. embediq_cfg_get_* are single-call wrappers over embediq_nvm_get, so
+ * this is the cfg getter's read path.
+ */
+static void test_nvm_get_does_not_wait_for_persist(void)
+{
+    setup();
+    uint32_t seed = 1u;
+    (void)embediq_nvm_set("read.key", &seed, sizeof(seed));
+
+    nvm__set_persist_delay_ms(PERSIST_DELAY_MS);
+    pthread_t writer;
+    pthread_create(&writer, NULL, slow_persist_setter, NULL);
+    embediq_osal_delay_ms(READER_START_DELAY_MS);
+
+    uint8_t  buf[sizeof(uint32_t)];
+    uint32_t len = sizeof(buf);
+    uint32_t t0  = embediq_osal_time_us();
+    embediq_err_t rc = embediq_nvm_get("read.key", buf, &len);
+    uint32_t latency_us = embediq_osal_time_us() - t0;
+
+    pthread_join(writer, NULL);
+    nvm__set_persist_delay_ms(0u);
+    printf("      read latency during a %u ms persist: %u us\n",
+           (unsigned)PERSIST_DELAY_MS, (unsigned)latency_us);
+    ASSERT(rc == EMBEDIQ_OK && latency_us < READ_LATENCY_MAX_US,
+           "a read must not wait for another thread's persist");
+}
+
+static void *repeat_setter(void *arg)
+{
+    uint32_t base = *(const uint32_t *)arg;
+    for (uint32_t i = 0u; i < CONCURRENT_SET_ITERS; i++) {
+        uint32_t v = base + i;
+        (void)embediq_nvm_set("persist.race", &v, sizeof(v));
+    }
+    return NULL;
+}
+
+static bool read_u32(const char *key, uint32_t *out)
+{
+    uint32_t len = sizeof(*out);
+    return embediq_nvm_get(key, out, &len) == EMBEDIQ_OK && len == sizeof(*out);
+}
+
+/* test_concurrent_sets_persist_newest
+ * Two threads set the same key 100 times each. Flash must hold the newest
+ * value — the one the table holds after both finish — both before and after
+ * an explicit flush (no older write may land after a newer one).
+ */
+static void test_concurrent_sets_persist_newest(void)
+{
+    setup();
+    uint32_t base_a = WRITER_A_BASE, base_b = WRITER_B_BASE;
+    pthread_t ta, tb;
+    pthread_create(&ta, NULL, repeat_setter, &base_a);
+    pthread_create(&tb, NULL, repeat_setter, &base_b);
+    pthread_join(ta, NULL);
+    pthread_join(tb, NULL);
+
+    uint32_t live = 0u, stored = 0u, flushed = 0u;
+    bool ok_live = read_u32("persist.race", &live);
+
+    nvm__init_state();                     /* simulate restart without a flush */
+    nvm__load_state();
+    bool ok_stored = read_u32("persist.race", &stored);
+
+    (void)embediq_nvm_flush();
+    nvm__init_state();
+    nvm__load_state();
+    bool ok_flushed = read_u32("persist.race", &flushed);
+
+    bool newest = live == base_a + CONCURRENT_SET_ITERS - 1u
+                  || live == base_b + CONCURRENT_SET_ITERS - 1u;
+    printf("      live=0x%x stored=0x%x after_flush=0x%x\n",
+           (unsigned)live, (unsigned)stored, (unsigned)flushed);
+    ASSERT(ok_live && ok_stored && ok_flushed && newest
+           && stored == live && flushed == live,
+           "concurrent sets: flash holds the newest value, before and after flush");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -449,6 +552,10 @@ int main(void)
     test_factory_key_set_rejected();
     test_blob_crc_corrupt_causes_fallback();
     test_blob_persist_and_reload_roundtrip();
+
+    /* Concurrency */
+    test_nvm_get_does_not_wait_for_persist();
+    test_concurrent_sets_persist_newest();
 
     printf("\n");
     if (g_tests_failed == 0) {
