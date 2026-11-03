@@ -717,6 +717,7 @@ typedef struct {
     bool        staged;             /* a validated replacement awaits the next connect */
     int         live_configs;       /* configuration sets built and not freed, this slot */
     int         live_sessions;      /* sessions live, all slots */
+    bool        attempt_in_flight;  /* connecting: ssl_conf not read (NULL) */
 } hal_tls_debug_t;
 
 void hal_tls__debug(uint8_t idx, hal_tls_debug_t *out)
@@ -725,7 +726,11 @@ void hal_tls__debug(uint8_t idx, hal_tls_debug_t *out)
     pthread_mutex_lock(&s->mutex);
     const mbedtls_ssl_config *active = &s->cfg[s->active].conf;
     const mbedtls_x509_crt   *ca     = active->MBEDTLS_PRIVATE(ca_chain);
-    out->ssl_conf          = mbedtls_ssl_context_get_config(&s->ssl);
+    /* A worker owns s->ssl while connecting; the snapshot is complete only
+     * when no attempt is in flight. */
+    out->attempt_in_flight = s->connecting;
+    out->ssl_conf          = s->connecting ? NULL
+                                           : mbedtls_ssl_context_get_config(&s->ssl);
     out->active_conf       = active;
     out->active_ca_present = ca != NULL && ca->version != 0;
     out->staged            = s->staged;

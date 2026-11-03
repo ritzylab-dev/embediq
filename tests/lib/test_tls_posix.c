@@ -50,6 +50,7 @@ typedef struct {
     bool        staged;             /* a validated replacement awaits the next connect */
     int         live_configs;       /* configuration sets built and not freed, this slot */
     int         live_sessions;      /* sessions live, all slots */
+    bool        attempt_in_flight;  /* connecting: ssl_conf not read (NULL) */
 } hal_tls_debug_t;
 extern void hal_tls__debug(uint8_t idx, hal_tls_debug_t *out);
 
@@ -796,15 +797,22 @@ static void test_configure_while_connected_keeps_session(void)
 #define ROTATIONS        20
 #define NOT_A_PEM        "not a PEM certificate"
 
-/* Connect slot 0 to a fresh echo server on port; true once connected. */
-static bool connect_echo(const embediq_tls_ops_t *ops, int port, embediq_tls_err_t *result)
+/* Connect slot 0 to a fresh echo server on port (mutual: the server requires
+ * a client certificate); true once connected. */
+static bool connect_echo_mode(const embediq_tls_ops_t *ops, int port, bool mutual,
+                              embediq_tls_err_t *result)
 {
-    start_echo_server(port, false);
+    start_echo_server(port, mutual);
     cb_state_t st; cb_state_init(&st);
     embediq_tls_err_t rc = ops->connect_async("127.0.0.1", (uint16_t)port, "localhost",
                                               connect_cb, &st);
     *result = (rc == EMBEDIQ_TLS_OK) ? wait_for_connect(&st, 5000u) : rc;
     return *result == EMBEDIQ_TLS_OK;
+}
+
+static bool connect_echo(const embediq_tls_ops_t *ops, int port, embediq_tls_err_t *result)
+{
+    return connect_echo_mode(ops, port, false, result);
 }
 
 static void end_echo(const embediq_tls_ops_t *ops)
@@ -957,6 +965,168 @@ static void test_config_rotation_releases_everything_once(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * A staged replacement is replaced or discarded exactly once; a promoted set
+ * stays active after a failed handshake; a mutual-TLS set survives staging.
+ * ------------------------------------------------------------------------- */
+
+static void test_second_configure_while_connected_replaces_staged(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t r1, r2;
+    bool connected = connect_echo(ops, TEST_PORT + 11, &r1);
+    hal_tls_debug_t d0, d1, d2, d3;
+    hal_tls__debug(0u, &d0);
+    embediq_tls_err_t rc_first  = ops->configure(ca, NULL, NULL);
+    hal_tls__debug(0u, &d1);
+    embediq_tls_err_t rc_second = ops->configure(ca, NULL, NULL);
+    hal_tls__debug(0u, &d2);
+    bool echoed = connected && echo_once(ops);
+    end_echo(ops);
+    bool reconnected = connect_echo(ops, TEST_PORT + 11, &r2) && echo_once(ops);
+    hal_tls__debug(0u, &d3);
+    end_echo(ops);
+    free(ca);
+    alarm(0u);
+
+    printf("      connected=%d first=%d staged=%d live_configs=%d | second=%d staged=%d "
+           "live_configs=%d ssl_conf_unchanged=%d active_ca=%d echoed=%d | reconnected=%d "
+           "promoted=%d live_configs_after=%d\n", (int)connected, (int)rc_first,
+           (int)d1.staged, d1.live_configs, (int)rc_second, (int)d2.staged, d2.live_configs,
+           (int)(d2.ssl_conf == d0.ssl_conf), (int)d2.active_ca_present, (int)echoed,
+           (int)reconnected, (int)(d3.active_conf != d0.active_conf), d3.live_configs);
+    ASSERT(configured && connected && rc_first == EMBEDIQ_TLS_OK && d1.staged
+           && d1.live_configs == 2 && rc_second == EMBEDIQ_TLS_OK && d2.staged
+           && d2.live_configs == 2 && d2.ssl_conf == d0.ssl_conf && d2.active_ca_present
+           && echoed && reconnected && d3.active_conf != d0.active_conf
+           && d3.live_configs == 1,
+           "a second staged replacement frees the first and is the one promoted");
+}
+
+static void test_rejected_configure_while_connected_discards_staged(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t r1, r2;
+    bool connected = connect_echo(ops, TEST_PORT + 12, &r1);
+    hal_tls_debug_t d0, d1, d2, d3;
+    hal_tls__debug(0u, &d0);
+    embediq_tls_err_t rc_good = ops->configure(ca, NULL, NULL);
+    hal_tls__debug(0u, &d1);
+    embediq_tls_err_t rc_bad  = ops->configure(NOT_A_PEM, NULL, NULL);
+    hal_tls__debug(0u, &d2);
+    bool echoed = connected && echo_once(ops);
+    end_echo(ops);
+    bool reconnected = connect_echo(ops, TEST_PORT + 12, &r2) && echo_once(ops);
+    hal_tls__debug(0u, &d3);
+    end_echo(ops);
+    free(ca);
+    alarm(0u);
+
+    printf("      connected=%d staged_good=%d staged=%d live_configs=%d | rejected=%d "
+           "staged=%d live_configs=%d ssl_conf_unchanged=%d active_ca=%d echoed=%d | "
+           "reconnected=%d original_set=%d live_configs_after=%d\n", (int)connected,
+           (int)rc_good, (int)d1.staged, d1.live_configs, (int)rc_bad, (int)d2.staged,
+           d2.live_configs, (int)(d2.ssl_conf == d0.ssl_conf), (int)d2.active_ca_present,
+           (int)echoed, (int)reconnected, (int)(d3.active_conf == d0.active_conf),
+           d3.live_configs);
+    ASSERT(configured && connected && rc_good == EMBEDIQ_TLS_OK && d1.staged
+           && d1.live_configs == 2 && rc_bad != EMBEDIQ_TLS_OK && !d2.staged
+           && d2.live_configs == 1 && d2.ssl_conf == d0.ssl_conf && d2.active_ca_present
+           && echoed && reconnected && d3.active_conf == d0.active_conf
+           && d3.live_configs == 1,
+           "a rejected configure discards the staged set; the original stays active");
+}
+
+static void test_promoted_set_that_fails_handshake_is_kept(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca    = read_pem_file(CERT_DIR "/ca.crt");
+    char *other = read_pem_file(CERT_DIR "/client.crt");   /* does not sign the server */
+    ASSERT(ca != NULL && other != NULL, "CA and client certs must exist");
+    if (!ca || !other) { free(ca); free(other); return; }
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t r1, r_fail, r_good;
+    bool connected = connect_echo(ops, TEST_PORT + 13, &r1);
+    hal_tls_debug_t d0, d1, d2;
+    hal_tls__debug(0u, &d0);
+    embediq_tls_err_t rc_other = ops->configure(other, NULL, NULL);
+    hal_tls__debug(0u, &d1);
+    end_echo(ops);
+
+    (void)connect_echo(ops, TEST_PORT + 13, &r_fail);   /* promoted set, handshake fails */
+    hal_tls__debug(0u, &d2);
+    end_echo(ops);
+
+    embediq_tls_err_t rc_good = ops->configure(ca, NULL, NULL);   /* no session: applied now */
+    bool good = connect_echo(ops, TEST_PORT + 13, &r_good) && echo_once(ops);
+    end_echo(ops);
+    free(ca); free(other);
+    alarm(0u);
+
+    printf("      connected=%d staged_other=%d staged=%d | next_connect=%d live_configs=%d "
+           "live_sessions=%d promoted_active=%d active_ca=%d ssl_conf=%s | configure_good=%d "
+           "good_connect=%d\n", (int)connected, (int)rc_other, (int)d1.staged, (int)r_fail,
+           d2.live_configs, d2.live_sessions, (int)(d2.active_conf != d0.active_conf),
+           (int)d2.active_ca_present, d2.ssl_conf == NULL ? "released" : "held",
+           (int)rc_good, (int)good);
+    ASSERT(configured && connected && rc_other == EMBEDIQ_TLS_OK && d1.staged
+           && r_fail == EMBEDIQ_TLS_ERR_CERT_VERIFY && d2.live_configs == 1
+           && d2.live_sessions == 0 && d2.active_conf != d0.active_conf
+           && d2.active_ca_present && !d2.staged && d2.ssl_conf == NULL
+           && rc_good == EMBEDIQ_TLS_OK && good,
+           "a promoted set stays active after its failed handshake; only the session is freed");
+}
+
+static void test_mutual_tls_set_survives_staging(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    char *cc = read_pem_file(CERT_DIR "/client.crt");   /* signed by the test CA */
+    char *ck = read_pem_file(CERT_DIR "/client.key");
+    ASSERT(ca != NULL && cc != NULL && ck != NULL, "CA, client cert and key must exist");
+    if (!ca || !cc || !ck) { free(ca); free(cc); free(ck); return; }
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, cc, ck) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t r1, r2;
+    bool connected = connect_echo_mode(ops, TEST_PORT + 14, true, &r1);
+    hal_tls_debug_t d0, d1, d2;
+    hal_tls__debug(0u, &d0);
+    embediq_tls_err_t rc_stage = ops->configure(ca, cc, ck);
+    hal_tls__debug(0u, &d1);
+    bool echoed = connected && echo_once(ops);
+    end_echo(ops);
+    bool reconnected = connect_echo_mode(ops, TEST_PORT + 14, true, &r2) && echo_once(ops);
+    hal_tls__debug(0u, &d2);
+    end_echo(ops);
+    free(ca); free(cc); free(ck);
+    alarm(0u);
+
+    printf("      mutual_connected=%d staged_mutual=%d staged=%d ssl_conf_unchanged=%d echoed=%d "
+           "| reconnected=%d (%d) promoted=%d live_configs=%d\n", (int)connected,
+           (int)rc_stage, (int)d1.staged, (int)(d1.ssl_conf == d0.ssl_conf), (int)echoed,
+           (int)reconnected, (int)r2, (int)(d2.active_conf != d0.active_conf),
+           d2.live_configs);
+    ASSERT(configured && connected && rc_stage == EMBEDIQ_TLS_OK && d1.staged
+           && d1.ssl_conf == d0.ssl_conf && echoed && reconnected
+           && d2.active_conf != d0.active_conf && d2.live_configs == 1,
+           "a mutual-TLS set staged while connected is promoted and works");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -988,6 +1158,10 @@ int main(void)
     test_failed_reconfigure_while_connected_leaves_active_intact();
     test_staged_replacement_is_used_by_next_connection();
     test_config_rotation_releases_everything_once();
+    test_second_configure_while_connected_replaces_staged();
+    test_rejected_configure_while_connected_discards_staged();
+    test_promoted_set_that_fails_handshake_is_kept();
+    test_mutual_tls_set_survives_staging();
 
     printf("\n%d/%d tests passed.\n",
            g_tests_run - g_tests_failed, g_tests_run);
