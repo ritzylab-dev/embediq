@@ -24,6 +24,12 @@
  * publishes its result and clears `connecting` under the mutex, unlocks, then
  * calls the copy's on_complete with the copy's user_ctx (mutex not held).
  *
+ * Session teardown has one owner, slot_session_free(): it releases the ssl
+ * context and the socket of a session the connect thread initialised. A peer
+ * close seen by recv(), a failed attempt and disconnect() each free the
+ * session; connect_async() frees any session still live before it re-inits,
+ * so a session is never re-initialised over and never freed twice.
+ *
  * Phase 3 note: FreeRTOS implementation uses mbedTLS with OSAL primitives
  * instead of pthreads. The ops table contract is identical.
  *
@@ -77,6 +83,8 @@ typedef struct {
     bool                     connected;
     bool                     has_client_cert;
     bool                     connecting;   /* connect_async in flight; under mutex */
+    bool                     session_live; /* ssl/net initialised for a session; cleared
+                                              only by slot_session_free() */
 } tls_slot_t;
 
 static tls_slot_t g_slots[EMBEDIQ_TLS_MAX_CONNECTIONS];
@@ -101,7 +109,7 @@ static connect_args_t g_connect_args[EMBEDIQ_TLS_MAX_CONNECTIONS];
  * on_complete, with the attempt's user_ctx. NULL = no hook. */
 typedef void (*tls_connect_finish_hook_t)(void *user_ctx);
 static _Atomic(tls_connect_finish_hook_t) s_connect_finish_hook = NULL;
-/* Sessions whose ssl context and socket are initialised and not yet freed. */
+/* Sessions marked live and not yet released by slot_session_free(). */
 static atomic_int s_live_sessions = 0;
 #define LIVE_SESSION_ADD(n) atomic_fetch_add(&s_live_sessions, (n))
 #else
@@ -112,14 +120,23 @@ static atomic_int s_live_sessions = 0;
  * Internal helpers
  * ------------------------------------------------------------------------- */
 
-static void slot_free_certs(tls_slot_t *s)
+/* Release a live session's ssl context and socket. Caller holds the slot
+ * mutex. */
+static void slot_session_free(tls_slot_t *s)
 {
     mbedtls_ssl_free(&s->ssl);
+    mbedtls_net_free(&s->net);
+    s->connected    = false;
+    s->session_live = false;
+    LIVE_SESSION_ADD(-1);
+}
+
+static void slot_free_certs(tls_slot_t *s)
+{
     mbedtls_ssl_config_free(&s->conf);
     mbedtls_x509_crt_free(&s->ca_cert);
     mbedtls_x509_crt_free(&s->client_cert);
     mbedtls_pk_free(&s->client_key);
-    mbedtls_net_free(&s->net);
 }
 
 static embediq_tls_err_t map_mbedtls_handshake_err(tls_slot_t *s, int rc)
@@ -149,6 +166,9 @@ static void connect_finish(tls_slot_t *s, const connect_args_t *attempt,
                            embediq_tls_err_t result)
 {
     pthread_mutex_lock(&s->mutex);
+    if (result != EMBEDIQ_TLS_OK && s->session_live) {
+        slot_session_free(s);   /* a failed attempt leaves no session behind */
+    }
     s->connected  = (result == EMBEDIQ_TLS_OK);
     s->connecting = false;
     pthread_mutex_unlock(&s->mutex);
@@ -183,11 +203,11 @@ static void *connect_thread(void *arg)
 
     /* Initialise SSL context for this connection */
     mbedtls_ssl_init(&s->ssl);
+    s->session_live = true;   /* from here every failure is freed by connect_finish */
     LIVE_SESSION_ADD(1);
     rc = mbedtls_ssl_setup(&s->ssl, &s->conf);
     if (rc != 0) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_IO);
-        mbedtls_net_free(&s->net);
         connect_finish(s, a, EMBEDIQ_TLS_ERR_HANDSHAKE);
         return NULL;
     }
@@ -196,9 +216,6 @@ static void *connect_thread(void *arg)
     rc = mbedtls_ssl_set_hostname(&s->ssl, a->sni);
     if (rc != 0) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
-        mbedtls_ssl_free(&s->ssl);
-        mbedtls_net_free(&s->net);
-        LIVE_SESSION_ADD(-1);
         connect_finish(s, a, EMBEDIQ_TLS_ERR_HANDSHAKE);
         return NULL;
     }
@@ -216,9 +233,6 @@ static void *connect_thread(void *arg)
     if (rc != 0) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_IO);
         result = map_mbedtls_handshake_err(s, rc);
-        mbedtls_ssl_free(&s->ssl);
-        mbedtls_net_free(&s->net);
-        LIVE_SESSION_ADD(-1);
         connect_finish(s, a, result);
         return NULL;
     }
@@ -246,13 +260,14 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
         return EMBEDIQ_TLS_ERR_BUSY;   /* connect thread owns the slot */
     }
 
-    /* Free any previous configuration */
-    if (s->connected) LIVE_SESSION_ADD(-1);
+    /* Free any previous session and configuration */
+    if (s->session_live) {
+        slot_session_free(s);
+    }
     slot_free_certs(s);
     mbedtls_ctr_drbg_free(&s->ctr_drbg);
     mbedtls_entropy_free(&s->entropy);
     s->configured      = false;
-    s->connected       = false;
     s->has_client_cert = false;
 
     /* Re-initialise mbedTLS contexts */
@@ -352,6 +367,11 @@ static embediq_tls_err_t slot_connect_async(uint8_t                   idx,
         pthread_mutex_unlock(&s->mutex);
         return EMBEDIQ_TLS_ERR_BUSY;
     }
+    /* Every path that ends a session frees it; a session still live here
+     * is freed before the re-init below, never initialised over. */
+    if (s->session_live) {
+        slot_session_free(s);
+    }
     if (!s->configured) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
         pthread_mutex_unlock(&s->mutex);
@@ -397,12 +417,11 @@ static embediq_tls_err_t slot_disconnect(uint8_t idx)
         pthread_mutex_unlock(&s->mutex);
         return EMBEDIQ_TLS_ERR_BUSY;
     }
-    if (s->connected) {
-        mbedtls_ssl_close_notify(&s->ssl);  /* best-effort — ignore error */
-        mbedtls_ssl_free(&s->ssl);
-        mbedtls_net_free(&s->net);
-        s->connected = false;
-        LIVE_SESSION_ADD(-1);
+    if (s->session_live) {
+        if (s->connected) {
+            mbedtls_ssl_close_notify(&s->ssl);  /* best-effort — ignore error */
+        }
+        slot_session_free(s);
     }
 
     pthread_mutex_unlock(&s->mutex);
@@ -483,7 +502,7 @@ static int32_t slot_recv(uint8_t idx, uint8_t *buf, uint16_t len, uint32_t timeo
         return (int32_t)rc;
     }
     if (rc == 0 || rc == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
-        s->connected = false;
+        slot_session_free(s);   /* the peer closed: the session is dead */
         pthread_mutex_unlock(&s->mutex);
         return (int32_t)EMBEDIQ_TLS_ERR_RECV;
     }
@@ -567,6 +586,7 @@ static void pool_init(void)
         g_slots[i].connected       = false;
         g_slots[i].has_client_cert = false;
         g_slots[i].connecting      = false;
+        g_slots[i].session_live    = false;
     }
     g_pool_initialised = true;
 }
@@ -603,7 +623,7 @@ void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx))
     atomic_store(&s_connect_finish_hook, fn);
 }
 
-/** Number of sessions initialised and not yet released (test use only). */
+/** Number of sessions marked live and not yet released (test use only). */
 int hal_tls__live_sessions(void)
 {
     return atomic_load(&s_live_sessions);

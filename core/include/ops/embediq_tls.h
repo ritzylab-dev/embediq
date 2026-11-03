@@ -27,6 +27,9 @@
  * started them; a later connect_async() on the same slot cannot redirect or
  * drop an earlier completion. A slot that is connected or connecting refuses
  * connect_async() with EMBEDIQ_TLS_ERR_BUSY: disconnect first.
+ * After a peer close recv() returns EMBEDIQ_TLS_ERR_RECV and the slot is
+ * disconnected; the session's resources are released before recv() returns,
+ * so the next connect_async() is accepted without a disconnect().
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com

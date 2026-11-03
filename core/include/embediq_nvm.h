@@ -24,6 +24,11 @@
  * in flight. Writes return EMBEDIQ_OK once their change (or a newer table)
  * is on flash, EMBEDIQ_ERR if the flash write failed, and may wait for
  * another writer's persist.
+ * Loading: fb_nvm's nvm_load() runs only at boot, before any other caller
+ * exists (and from the host test hook with no concurrent callers). It
+ * replaces the table with the flash contents; a change made concurrently by
+ * another thread would be discarded and its persist skipped. Reloading at
+ * runtime is not supported.
  *
  * Constraints (v1):
  *   - Keys are NUL-terminated strings up to EMBEDIQ_NVM_KEY_MAX bytes.
@@ -98,7 +103,8 @@ embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len);
 
 /**
  * Remove the entry for the given key.
- * If the key does not exist, returns EMBEDIQ_OK (idempotent).
+ * Idempotent: deleting an absent key returns EMBEDIQ_OK only once the table
+ * without that key is on flash, retrying a persist that previously failed.
  * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
  * the change and the next successful persist (any later write, or flush)
  * carries it.

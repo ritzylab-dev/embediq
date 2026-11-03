@@ -87,10 +87,12 @@ bool     embediq_cfg_set_bool (const char *key, bool     value);
 bool     embediq_cfg_set_str  (const char *key, const char *value);
 
 /**
- * Remove the entry for the given key. Returns true on success or if the
- * key was already absent (fb_nvm makes delete idempotent). false also when
- * the removal could not be persisted; in that case the key IS gone from RAM
- * and the removal reaches flash with the next successful persist.
+ * Remove the entry for the given key. Returns true on success.
+ * Idempotent: deleting an absent key returns true only once the table
+ * without that key is on flash, retrying a persist that previously failed.
+ * false also when the removal could not be persisted; in that case the key
+ * IS gone from RAM and the removal reaches flash with the next successful
+ * persist.
  *
  * Calling context: any thread. May wait for a persist in flight.
  */

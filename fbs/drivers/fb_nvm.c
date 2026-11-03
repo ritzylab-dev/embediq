@@ -276,8 +276,12 @@ static embediq_err_t nvm_persist(uint32_t gen, bool force)
 
 /**
  * Load the table from flash (boot, or a simulated power-on in tests).
- * Calling context: any thread; takes the persist lock, then the table lock.
- * Observatory events are emitted after both locks are released.
+ * nvm_load() runs only at boot, before any other caller exists (and from the
+ * host test hook with no concurrent callers). It replaces the table with the
+ * flash contents; a change made concurrently by another thread would be
+ * discarded and its persist skipped. Reloading at runtime is not supported.
+ * Takes the persist lock, then the table lock. Observatory events are emitted
+ * after both locks are released.
  */
 static void nvm_load(void)
 {
@@ -499,10 +503,14 @@ embediq_err_t embediq_nvm_delete(const char *key)
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
+    /* Absent key: idempotent on durability, not on having tried. Return OK
+     * only once the table without the key is on flash — a no-op when it is,
+     * a real retry when an earlier delete's persist failed. */
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
+        uint32_t cur = g_generation;
         embediq_osal_mutex_unlock(g_mutex);
-        return EMBEDIQ_OK;   /* idempotent per contract */
+        return nvm_persist(cur, false);
     }
 
     memset(&g_nvm[slot], 0, sizeof(nvm_entry_t));
