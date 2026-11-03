@@ -113,8 +113,12 @@ static _Atomic(tls_connect_finish_hook_t) s_connect_finish_hook = NULL;
 /* Sessions marked live and not yet released by slot_session_free(). */
 static atomic_int s_live_sessions = 0;
 #define LIVE_SESSION_ADD(n) atomic_fetch_add(&s_live_sessions, (n))
+/* Per slot: configuration sets built and not yet freed. */
+static atomic_int s_live_configs[EMBEDIQ_TLS_MAX_CONNECTIONS];
+#define LIVE_CONFIG_ADD(i, n) atomic_fetch_add(&s_live_configs[(i)], (n))
 #else
 #define LIVE_SESSION_ADD(n) ((void)0)
+#define LIVE_CONFIG_ADD(i, n) ((void)0)
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -260,6 +264,7 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
         pthread_mutex_unlock(&s->mutex);
         return EMBEDIQ_TLS_ERR_BUSY;   /* connect thread owns the slot */
     }
+    if (s->configured) LIVE_CONFIG_ADD(idx, -1);
 
     /* A dead session (peer-closed, not yet reconnected) is released here; a
      * live one is untouched — the new credentials apply on the next
@@ -351,6 +356,7 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
     }
 
     s->configured = true;
+    LIVE_CONFIG_ADD(idx, 1);
     pthread_mutex_unlock(&s->mutex);
     return EMBEDIQ_TLS_OK;
 }
@@ -626,6 +632,31 @@ const embediq_tls_ops_t *hal_tls_posix_ops(void)
 void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx))
 {
     atomic_store(&s_connect_finish_hook, fn);
+}
+
+/** Slot introspection for configuration-lifetime tests (test use only). */
+typedef struct {
+    const void *ssl_conf;           /* configuration the slot's ssl context references */
+    const void *active_conf;        /* the slot's active configuration */
+    bool        active_ca_present;  /* the active configuration has a CA chain */
+    bool        staged;             /* a validated replacement awaits the next connect */
+    int         live_configs;       /* configuration sets built and not freed, this slot */
+    int         live_sessions;      /* sessions live, all slots */
+} hal_tls_debug_t;
+
+void hal_tls__debug(uint8_t idx, hal_tls_debug_t *out)
+{
+    tls_slot_t *s = &g_slots[idx];
+    pthread_mutex_lock(&s->mutex);
+    const mbedtls_ssl_config *active = &s->conf;
+    const mbedtls_x509_crt   *ca     = active->MBEDTLS_PRIVATE(ca_chain);
+    out->ssl_conf          = mbedtls_ssl_context_get_config(&s->ssl);
+    out->active_conf       = active;
+    out->active_ca_present = ca != NULL && ca->version != 0;
+    out->staged            = false;
+    out->live_configs      = atomic_load(&s_live_configs[idx]);
+    out->live_sessions     = atomic_load(&s_live_sessions);
+    pthread_mutex_unlock(&s->mutex);
 }
 
 /** Number of sessions marked live and not yet released (test use only). */
