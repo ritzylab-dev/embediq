@@ -11,7 +11,7 @@
  * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 29 tests passed. (0 failed)"
+ * Expected: "All 30 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -629,6 +629,45 @@ static void test_provision_retry_reestablishes_durability(void)
            "provision retried after a failed persist writes once and is durable");
 }
 
+/* test_delete_retry_reestablishes_durability
+ * k persisted; flash fails: delete k → ERR, and again → ERR. Flash recovers:
+ * delete k again → OK with exactly one flash write; after a reload k is
+ * absent. Deleting a key that never existed, with the absence already on
+ * flash → OK with no flash write.
+ */
+static void test_delete_retry_reestablishes_durability(void)
+{
+    setup();
+    embediq_err_t rc_seed = embediq_nvm_set("credential", "secret", 6u);
+
+    hal_flash__fail_next_write(UINT32_MAX);
+    embediq_err_t rc_del   = embediq_nvm_delete("credential");
+    embediq_err_t rc_still = embediq_nvm_delete("credential");
+    hal_flash__fail_next_write(0u);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_retry = embediq_nvm_delete("credential");
+    uint32_t retry_writes = hal_flash__write_calls() - before;
+
+    before = hal_flash__write_calls();
+    embediq_err_t rc_never = embediq_nvm_delete("never.stored");
+    uint32_t never_writes = hal_flash__write_calls() - before;
+
+    reload_from_flash();
+    char     out[EMBEDIQ_NVM_VAL_MAX];
+    uint32_t len = sizeof(out);
+    bool absent = embediq_nvm_get("credential", out, &len) != EMBEDIQ_OK;
+
+    printf("      seed=%d failed_delete=%d failed_again=%d retry=%d retry_flash_writes=%u "
+           "absent_after_reload=%d | never_stored=%d never_flash_writes=%u\n",
+           (int)rc_seed, (int)rc_del, (int)rc_still, (int)rc_retry,
+           (unsigned)retry_writes, (int)absent, (int)rc_never, (unsigned)never_writes);
+    ASSERT(rc_seed == EMBEDIQ_OK && rc_del == EMBEDIQ_ERR && rc_still == EMBEDIQ_ERR
+           && rc_retry == EMBEDIQ_OK && retry_writes == 1u && absent
+           && rc_never == EMBEDIQ_OK && never_writes == 0u,
+           "delete retried after a failed persist writes once; an absence on flash needs no write");
+}
+
 /* test_flush_reports_failure
  * flush returns ERR while the write fails and OK once it succeeds.
  */
@@ -717,6 +756,7 @@ int main(void)
     /* Persist failures */
     test_set_reports_persist_failure();
     test_provision_retry_reestablishes_durability();
+    test_delete_retry_reestablishes_durability();
     test_flush_reports_failure();
     test_skip_rule_never_skips_an_unpersisted_change();
 

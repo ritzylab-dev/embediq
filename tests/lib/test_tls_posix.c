@@ -39,6 +39,9 @@ extern const embediq_tls_ops_t *hal_tls_posix_ops(void);
 /* Host-only: called after a connect attempt releases its slot and before its
  * on_complete, with that attempt's user_ctx (NULL removes it). */
 extern void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx));
+/* Host-only: sessions whose mbedTLS context and socket are initialised and
+ * not yet released. */
+extern int  hal_tls__live_sessions(void);
 
 /* Test-local buffer sizes */
 #define TLS_CMD_BUF_SIZE   512u   /* shell command string for system() */
@@ -677,6 +680,67 @@ static void test_connect_async_refused_on_connected_slot(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * A session closed by the peer is released before the slot connects again:
+ * recv reports the close, the slot is disconnected, the next connect_async
+ * is accepted and works, and after disconnect no session is left live.
+ * ------------------------------------------------------------------------- */
+
+static bool echo_once(const embediq_tls_ops_t *ops)
+{
+    const uint8_t ping[] = "PING";
+    if (ops->send(ping, (uint16_t)sizeof(ping)) != EMBEDIQ_TLS_OK) return false;
+    uint8_t buf[TLS_TEST_RECV_BUF];
+    int32_t n = ops->recv(buf, (uint16_t)sizeof(buf), 3000u);
+    return n == (int32_t)sizeof(ping) && memcmp(buf, ping, sizeof(ping)) == 0;
+}
+
+static void test_reconnect_after_peer_close_releases_session(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+
+    start_echo_server(TEST_PORT + 5, false);
+    cb_state_t first; cb_state_init(&first);
+    (void)ops->connect_async("127.0.0.1", TEST_PORT + 5, "localhost", connect_cb, &first);
+    bool connected = wait_for_connect(&first, 5000u) == EMBEDIQ_TLS_OK;
+    bool echoed_first = connected && echo_once(ops);
+
+    stop_echo_server();   /* the peer closes the connection */
+    uint8_t buf[TLS_TEST_RECV_BUF];
+    int32_t rc_closed = ops->recv(buf, (uint16_t)sizeof(buf), 3000u);
+    const uint8_t ping[] = "PING";
+    embediq_tls_err_t rc_send_closed = ops->send(ping, (uint16_t)sizeof(ping));
+
+    start_echo_server(TEST_PORT + 5, false);
+    cb_state_t second; cb_state_init(&second);
+    embediq_tls_err_t rc_again = ops->connect_async("127.0.0.1", TEST_PORT + 5, "localhost",
+                                                    connect_cb, &second);
+    bool reconnected = rc_again == EMBEDIQ_TLS_OK
+                       && wait_for_connect(&second, 5000u) == EMBEDIQ_TLS_OK;
+    bool echoed_again = reconnected && echo_once(ops);
+
+    (void)ops->disconnect();
+    stop_echo_server();
+    alarm(0u);
+    int live = hal_tls__live_sessions();
+
+    printf("      connected=%d echoed=%d recv_after_close=%d send_after_close=%d "
+           "connect_again=%d reconnected=%d echoed_again=%d live_sessions=%d\n",
+           (int)connected, (int)echoed_first, (int)rc_closed, (int)rc_send_closed,
+           (int)rc_again, (int)reconnected, (int)echoed_again, live);
+    ASSERT(configured && connected && echoed_first
+           && rc_closed == (int32_t)EMBEDIQ_TLS_ERR_RECV
+           && rc_send_closed == EMBEDIQ_TLS_ERR_SEND
+           && rc_again == EMBEDIQ_TLS_OK && reconnected && echoed_again && live == 0,
+           "a peer-closed session is released before the slot reconnects");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -702,6 +766,7 @@ int main(void)
     test_async_connect_mutex_ownership();
     test_async_completion_belongs_to_its_attempt();
     test_connect_async_refused_on_connected_slot();
+    test_reconnect_after_peer_close_releases_session();
 
     printf("\n%d/%d tests passed.\n",
            g_tests_run - g_tests_failed, g_tests_run);

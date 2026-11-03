@@ -101,6 +101,11 @@ static connect_args_t g_connect_args[EMBEDIQ_TLS_MAX_CONNECTIONS];
  * on_complete, with the attempt's user_ctx. NULL = no hook. */
 typedef void (*tls_connect_finish_hook_t)(void *user_ctx);
 static _Atomic(tls_connect_finish_hook_t) s_connect_finish_hook = NULL;
+/* Sessions whose ssl context and socket are initialised and not yet freed. */
+static atomic_int s_live_sessions = 0;
+#define LIVE_SESSION_ADD(n) atomic_fetch_add(&s_live_sessions, (n))
+#else
+#define LIVE_SESSION_ADD(n) ((void)0)
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -178,6 +183,7 @@ static void *connect_thread(void *arg)
 
     /* Initialise SSL context for this connection */
     mbedtls_ssl_init(&s->ssl);
+    LIVE_SESSION_ADD(1);
     rc = mbedtls_ssl_setup(&s->ssl, &s->conf);
     if (rc != 0) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_IO);
@@ -192,6 +198,7 @@ static void *connect_thread(void *arg)
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TLS, HAL_ERR_INVALID);
         mbedtls_ssl_free(&s->ssl);
         mbedtls_net_free(&s->net);
+        LIVE_SESSION_ADD(-1);
         connect_finish(s, a, EMBEDIQ_TLS_ERR_HANDSHAKE);
         return NULL;
     }
@@ -211,6 +218,7 @@ static void *connect_thread(void *arg)
         result = map_mbedtls_handshake_err(s, rc);
         mbedtls_ssl_free(&s->ssl);
         mbedtls_net_free(&s->net);
+        LIVE_SESSION_ADD(-1);
         connect_finish(s, a, result);
         return NULL;
     }
@@ -239,6 +247,7 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
     }
 
     /* Free any previous configuration */
+    if (s->connected) LIVE_SESSION_ADD(-1);
     slot_free_certs(s);
     mbedtls_ctr_drbg_free(&s->ctr_drbg);
     mbedtls_entropy_free(&s->entropy);
@@ -393,6 +402,7 @@ static embediq_tls_err_t slot_disconnect(uint8_t idx)
         mbedtls_ssl_free(&s->ssl);
         mbedtls_net_free(&s->net);
         s->connected = false;
+        LIVE_SESSION_ADD(-1);
     }
 
     pthread_mutex_unlock(&s->mutex);
@@ -591,5 +601,11 @@ const embediq_tls_ops_t *hal_tls_posix_ops(void)
 void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx))
 {
     atomic_store(&s_connect_finish_hook, fn);
+}
+
+/** Number of sessions initialised and not yet released (test use only). */
+int hal_tls__live_sessions(void)
+{
+    return atomic_load(&s_live_sessions);
 }
 #endif
