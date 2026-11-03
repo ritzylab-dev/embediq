@@ -46,6 +46,15 @@
 static char s_path[PATH_BUF];
 static char s_tmp_path[PATH_BUF];
 
+#ifdef EMBEDIQ_PLATFORM_HOST
+/* Test-only: hal_flash_write calls attempted, and how many of the next
+ * calls fail with HAL_ERR_IO without touching the file. Written by the test
+ * thread between operations; the NVM persist lock serialises the writers. */
+static uint32_t s_write_calls  = 0u;
+static uint32_t s_fail_writes  = 0u;
+static uint32_t s_fail_reads   = 0u;   /* next n hal_flash_read calls fail */
+#endif
+
 /**
  * Ensure parent directory exists (one level only).
  * Scans backwards for '/' and mkdir everything up to that point.
@@ -124,6 +133,13 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
 {
     if (!buf) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     resolve_paths();
+#ifdef EMBEDIQ_PLATFORM_HOST
+    if (s_fail_reads > 0u) {
+        s_fail_reads--;
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+#endif
 
     /* Start with zeroed buffer (simulates erased flash). */
     memset(buf, 0, len);
@@ -144,6 +160,14 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
 int hal_flash_write(uint32_t addr, const void *buf, size_t len)
 {
     if (!buf) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
+#ifdef EMBEDIQ_PLATFORM_HOST
+    s_write_calls++;
+    if (s_fail_writes > 0u) {
+        s_fail_writes--;
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+#endif
     resolve_paths();
 
     /* Read current file (may be empty). */
@@ -185,3 +209,23 @@ uint32_t hal_flash_page_size(void)
 {
     return HAL_FLASH_PAGE_SIZE;
 }
+
+#ifdef EMBEDIQ_PLATFORM_HOST
+/** The next n hal_flash_write calls fail with HAL_ERR_IO (0 = none; test use only). */
+void hal_flash__fail_next_write(uint32_t n)
+{
+    s_fail_writes = n;
+}
+
+/** The next n hal_flash_read calls fail with HAL_ERR_IO (0 = none; test use only). */
+void hal_flash__fail_next_read(uint32_t n)
+{
+    s_fail_reads = n;
+}
+
+/** hal_flash_write calls attempted since the process started (test use only). */
+uint32_t hal_flash__write_calls(void)
+{
+    return s_write_calls;
+}
+#endif

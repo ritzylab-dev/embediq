@@ -2182,7 +2182,7 @@ The family is derived in the decoder with zero runtime overhead:
 | 0x30–0x3F | STATE | LIFECYCLE(0x30), FSM_TRANS(0x31) |
 | 0x40–0x4F | RESOURCE | LIB_INIT(0x40), LIB_DEINIT(0x41) — Phase 2 activates XOBS-3 (queue depth, stack high-water) |
 | 0x50–0x5F | TIMING | Phase 2 activates XOBS-4 (watchdog checkin, message latency) |
-| 0x60–0x6F | FAULT | FAULT(0x60), SECURITY_INCIDENT(0x61), AUTH_EVENT(0x62), FAULT_CLEARED(0x63), LIB_ALLOC_FAIL(0x64), LIB_TIMEOUT(0x65), OSAL_FAULT(0x66 — Phase 2), HAL_FAULT(0x67 — Phase 2) |
+| 0x60–0x6F | FAULT | FAULT(0x60), SECURITY_INCIDENT(0x61), AUTH_EVENT(0x62), FAULT_CLEARED(0x63), LIB_ALLOC_FAIL(0x64), LIB_TIMEOUT(0x65), OSAL_FAULT(0x66 — Phase 2), HAL_FAULT(0x67 — Phase 2), NVM_PERSIST_FAIL(0x6B) |
 | 0x70–0x7F | FUNCTION | TEST_START(0x70), TEST_END(0x71) |
 | 0x80–0x8F | AI (Phase 3) | RESERVED — Phase 3 AI family. Do not allocate. Taxonomy defined after Phase 1 AI production data. |
 | 0x90–0xFF | VENDOR | Community and vendor extension range — 7 full 16-slot sub-bands. Never allocated by the framework. |

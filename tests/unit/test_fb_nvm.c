@@ -11,7 +11,7 @@
  * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 25 tests passed. (0 failed)"
+ * Expected: "All 31 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -22,6 +22,7 @@
 #include "embediq_fb.h"
 #include "embediq_osal.h"
 #include "embediq_config.h"
+#include "embediq_obs.h"
 #include "hal/hal_flash.h"
 
 #include <stdio.h>
@@ -44,6 +45,15 @@
 extern void        nvm__init_state(void);
 extern void        nvm__load_state(void);   /* triggers nvm_load() — test-only */
 extern void        nvm__set_persist_delay_ms(uint32_t ms);
+
+/* Host-only flash failure injection (hal/posix/peripherals/hal_flash_posix.c). */
+extern void        hal_flash__fail_next_write(uint32_t n);
+extern void        hal_flash__fail_next_read(uint32_t n);
+extern uint32_t    hal_flash__write_calls(void);
+
+/* Observatory host-only ring access (core/src/observatory/obs.c). */
+extern void        obs__reset(void);
+extern bool        obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -527,6 +537,257 @@ static void test_concurrent_sets_persist_newest(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Persist failures: returned to the caller, observed, retried until durable
+ * ------------------------------------------------------------------------- */
+
+#define PERSIST_FAIL_SETS      70000u   /* well past any 16-bit generation lag */
+
+/* Reload the table from flash, as a power cycle does. */
+static void reload_from_flash(void)
+{
+    nvm__init_state();
+    nvm__load_state();
+}
+
+static bool get_u32(const char *key, uint32_t *out)
+{
+    uint32_t len = sizeof(*out);
+    return embediq_nvm_get(key, out, &len) == EMBEDIQ_OK && len == sizeof(*out);
+}
+
+static uint32_t count_persist_fail_events(void)
+{
+    uint32_t n = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__ring_read(i, &e); i++) {
+        if (e.event_type == EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL) n++;
+    }
+    return n;
+}
+
+static uint32_t count_events(uint8_t type, uint8_t state)
+{
+    uint32_t n = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__ring_read(i, &e); i++) {
+        if (e.event_type == type && e.state_or_flag == state) n++;
+    }
+    return n;
+}
+
+#define BLOB_STATE_READ_FAIL   3u   /* CFG_BLOB_INVALID state: flash could not be read */
+
+/* test_unreadable_flash_refuses_to_persist_until_flush_reloads
+ * k persisted. A boot whose flash read fails: RAM empty, one CFG_BLOB_INVALID
+ * (read failure). delete(k) and set(j) → ERR, each with NVM_PERSIST_FAIL state
+ * FLASH_UNREADABLE, and nothing is written. flush with the read still failing
+ * → ERR. Read recovers: flush → OK and RAM holds k, not j; after a reload k is
+ * present and j absent.
+ */
+static void test_unreadable_flash_refuses_to_persist_until_flush_reloads(void)
+{
+    setup();
+    uint32_t k = 0x4Bu, j = 0x4Au, got = 0u;
+    embediq_err_t rc_seed = embediq_nvm_set("persist.kept", &k, sizeof(k));
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    nvm__init_state();
+    hal_flash__fail_next_read(UINT32_MAX);
+    nvm__load_state();
+    bool     empty      = !get_u32("persist.kept", &got);
+    uint32_t read_fails = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, BLOB_STATE_READ_FAIL);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_del   = embediq_nvm_delete("persist.kept");
+    embediq_err_t rc_set   = embediq_nvm_set("persist.unsaved", &j, sizeof(j));
+    embediq_err_t rc_flush = embediq_nvm_flush();
+    uint32_t writes  = hal_flash__write_calls() - before;
+    uint32_t refused = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL,
+                                    (uint8_t)EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE);
+
+    hal_flash__fail_next_read(0u);
+    embediq_err_t rc_reload = embediq_nvm_flush();
+    bool k_in_ram = get_u32("persist.kept", &got) && got == k;
+    bool j_in_ram = get_u32("persist.unsaved", &got);
+
+    reload_from_flash();
+    bool k_after = get_u32("persist.kept", &got) && got == k;
+    bool j_after = get_u32("persist.unsaved", &got);
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    printf("      seed=%d empty=%d read_fail_events=%u delete=%d set=%d flush_unreadable=%d "
+           "flash_writes=%u refused_events=%u | flush_recovered=%d k_in_ram=%d j_in_ram=%d "
+           "k_after_reload=%d j_after_reload=%d\n",
+           (int)rc_seed, (int)empty, (unsigned)read_fails, (int)rc_del, (int)rc_set,
+           (int)rc_flush, (unsigned)writes, (unsigned)refused, (int)rc_reload,
+           (int)k_in_ram, (int)j_in_ram, (int)k_after, (int)j_after);
+    ASSERT(rc_seed == EMBEDIQ_OK && empty && read_fails == 1u
+           && rc_del == EMBEDIQ_ERR && rc_set == EMBEDIQ_ERR && rc_flush == EMBEDIQ_ERR
+           && writes == 0u && refused == 3u
+           && rc_reload == EMBEDIQ_OK && k_in_ram && !j_in_ram && k_after && !j_after,
+           "unreadable flash is never overwritten; flush re-reads it and restores the table");
+}
+
+/* test_set_reports_persist_failure
+ * A set whose flash write fails returns EMBEDIQ_ERR and emits one
+ * NVM_PERSIST_FAIL; the value is readable from RAM. The next set (write
+ * succeeds) returns OK, and a reload shows both values.
+ */
+static void test_set_reports_persist_failure(void)
+{
+    setup();
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+    uint32_t a = 0xA1u, b = 0xB2u, got = 0u;
+
+    hal_flash__fail_next_write(1u);
+    embediq_err_t rc_fail = embediq_nvm_set("persist.fail_a", &a, sizeof(a));
+    uint32_t events      = count_persist_fail_events();
+    bool in_ram          = get_u32("persist.fail_a", &got) && got == a;
+
+    embediq_err_t rc_ok  = embediq_nvm_set("persist.fail_b", &b, sizeof(b));
+    reload_from_flash();
+    uint32_t got_a = 0u, got_b = 0u;
+    bool both = get_u32("persist.fail_a", &got_a) && got_a == a
+                && get_u32("persist.fail_b", &got_b) && got_b == b;
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    printf("      failed_set=%d persist_fail_events=%u in_ram=%d next_set=%d "
+           "both_after_reload=%d\n", (int)rc_fail, (unsigned)events, (int)in_ram,
+           (int)rc_ok, (int)both);
+    ASSERT(rc_fail == EMBEDIQ_ERR && events == 1u && in_ram && rc_ok == EMBEDIQ_OK && both,
+           "failed persist returned and observed; the next persist carries the change");
+}
+
+/* test_provision_retry_reestablishes_durability
+ * Seed; flash fails: provision → ERR, flush → ERR. Flash recovers: provision
+ * again → OK with exactly one flash write; after a reload the identity is
+ * there.
+ */
+static void test_provision_retry_reestablishes_durability(void)
+{
+    setup();
+    uint32_t seed = 1u;
+    (void)embediq_nvm_set("persist.seed", &seed, sizeof(seed));
+
+    hal_flash__fail_next_write(UINT32_MAX);
+    embediq_err_t rc_prov  = embediq_nvm_provision("factory.identity", "device1");
+    embediq_err_t rc_flush = embediq_nvm_flush();
+    hal_flash__fail_next_write(0u);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_retry = embediq_nvm_provision("factory.identity", "device1");
+    uint32_t retry_writes = hal_flash__write_calls() - before;
+
+    reload_from_flash();
+    char     id[EMBEDIQ_NVM_VAL_MAX];
+    uint32_t len = sizeof(id);
+    embediq_err_t rc_get = embediq_nvm_get("factory.identity", id, &len);
+    bool identity = rc_get == EMBEDIQ_OK && len == 7u && memcmp(id, "device1", 7u) == 0;
+
+    printf("      failed_provision=%d failed_flush=%d retry=%d retry_flash_writes=%u "
+           "identity_after_reload=%d\n", (int)rc_prov, (int)rc_flush, (int)rc_retry,
+           (unsigned)retry_writes, (int)identity);
+    ASSERT(rc_prov == EMBEDIQ_ERR && rc_flush == EMBEDIQ_ERR && rc_retry == EMBEDIQ_OK
+           && retry_writes == 1u && identity,
+           "provision retried after a failed persist writes once and is durable");
+}
+
+/* test_delete_retry_reestablishes_durability
+ * k persisted; flash fails: delete k → ERR, and again → ERR. Flash recovers:
+ * delete k again → OK with exactly one flash write; after a reload k is
+ * absent. Deleting a key that never existed, with the absence already on
+ * flash → OK with no flash write.
+ */
+static void test_delete_retry_reestablishes_durability(void)
+{
+    setup();
+    embediq_err_t rc_seed = embediq_nvm_set("credential", "secret", 6u);
+
+    hal_flash__fail_next_write(UINT32_MAX);
+    embediq_err_t rc_del   = embediq_nvm_delete("credential");
+    embediq_err_t rc_still = embediq_nvm_delete("credential");
+    hal_flash__fail_next_write(0u);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_retry = embediq_nvm_delete("credential");
+    uint32_t retry_writes = hal_flash__write_calls() - before;
+
+    before = hal_flash__write_calls();
+    embediq_err_t rc_never = embediq_nvm_delete("never.stored");
+    uint32_t never_writes = hal_flash__write_calls() - before;
+
+    reload_from_flash();
+    char     out[EMBEDIQ_NVM_VAL_MAX];
+    uint32_t len = sizeof(out);
+    bool absent = embediq_nvm_get("credential", out, &len) != EMBEDIQ_OK;
+
+    printf("      seed=%d failed_delete=%d failed_again=%d retry=%d retry_flash_writes=%u "
+           "absent_after_reload=%d | never_stored=%d never_flash_writes=%u\n",
+           (int)rc_seed, (int)rc_del, (int)rc_still, (int)rc_retry,
+           (unsigned)retry_writes, (int)absent, (int)rc_never, (unsigned)never_writes);
+    ASSERT(rc_seed == EMBEDIQ_OK && rc_del == EMBEDIQ_ERR && rc_still == EMBEDIQ_ERR
+           && rc_retry == EMBEDIQ_OK && retry_writes == 1u && absent
+           && rc_never == EMBEDIQ_OK && never_writes == 0u,
+           "delete retried after a failed persist writes once; an absence on flash needs no write");
+}
+
+/* test_flush_reports_failure
+ * flush returns ERR while the write fails and OK once it succeeds.
+ */
+static void test_flush_reports_failure(void)
+{
+    setup();
+    hal_flash__fail_next_write(1u);
+    embediq_err_t rc_fail = embediq_nvm_flush();
+    embediq_err_t rc_ok   = embediq_nvm_flush();
+    printf("      failed_flush=%d recovered_flush=%d\n", (int)rc_fail, (int)rc_ok);
+    ASSERT(rc_fail == EMBEDIQ_ERR && rc_ok == EMBEDIQ_OK,
+           "flush returns the flash write result");
+}
+
+/* test_skip_rule_never_skips_an_unpersisted_change
+ * (1) 70,000 sets of one key with the flash failing, then one set after it
+ *     recovers: OK, exactly one flash write, the last value after a reload.
+ * (2) k=1 persisted; k=2 fails; a set of a different key afterwards persists
+ *     the whole table: after a reload k == 2.
+ */
+static void test_skip_rule_never_skips_an_unpersisted_change(void)
+{
+    setup();
+    hal_flash__fail_next_write(UINT32_MAX);
+    for (uint32_t i = 0u; i < PERSIST_FAIL_SETS; i++) {
+        (void)embediq_nvm_set("persist.lag", &i, sizeof(i));
+    }
+    hal_flash__fail_next_write(0u);
+    uint32_t last = PERSIST_FAIL_SETS;
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_last = embediq_nvm_set("persist.lag", &last, sizeof(last));
+    uint32_t writes = hal_flash__write_calls() - before;
+    reload_from_flash();
+    uint32_t got = 0u;
+    bool lag_ok = get_u32("persist.lag", &got) && got == last;
+
+    uint32_t k1 = 1u, k2 = 2u, other = 3u;
+    embediq_err_t rc_k1 = embediq_nvm_set("persist.k", &k1, sizeof(k1));
+    hal_flash__fail_next_write(1u);
+    embediq_err_t rc_k2 = embediq_nvm_set("persist.k", &k2, sizeof(k2));
+    embediq_err_t rc_other = embediq_nvm_set("persist.other", &other, sizeof(other));
+    reload_from_flash();
+    uint32_t k = 0u;
+    bool carried = get_u32("persist.k", &k) && k == k2;
+
+    printf("      after_%u_failed_sets: set=%d flash_writes=%u reloaded_last=%d | "
+           "k1=%d k2=%d other=%d k_after_reload=%u\n", (unsigned)PERSIST_FAIL_SETS,
+           (int)rc_last, (unsigned)writes, (int)lag_ok, (int)rc_k1, (int)rc_k2,
+           (int)rc_other, (unsigned)k);
+    ASSERT(rc_last == EMBEDIQ_OK && writes == 1u && lag_ok && rc_k1 == EMBEDIQ_OK
+           && rc_k2 == EMBEDIQ_ERR && rc_other == EMBEDIQ_OK && carried,
+           "a change not on flash is never skipped; a later persist carries it");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -556,6 +817,14 @@ int main(void)
     /* Concurrency */
     test_nvm_get_does_not_wait_for_persist();
     test_concurrent_sets_persist_newest();
+
+    /* Persist failures */
+    test_set_reports_persist_failure();
+    test_provision_retry_reestablishes_durability();
+    test_delete_retry_reestablishes_durability();
+    test_unreadable_flash_refuses_to_persist_until_flush_reloads();
+    test_flush_reports_failure();
+    test_skip_rule_never_skips_an_unpersisted_change();
 
     printf("\n");
     if (g_tests_failed == 0) {

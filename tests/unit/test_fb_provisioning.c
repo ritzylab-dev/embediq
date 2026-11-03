@@ -51,8 +51,13 @@ extern uint16_t fb_provisioning__test_pub_id(int idx);
 extern uint8_t  fb_provisioning__test_pub_status(int idx);
 extern int      fb_provisioning__test_fault_count(void);
 
-/* fb_nvm host-only state reset (declared in fbs/drivers/fb_nvm.c). */
+/* fb_nvm host-only state reset and reload (declared in fbs/drivers/fb_nvm.c). */
 extern void     nvm__init_state(void);
+extern void     nvm__load_state(void);
+
+/* Host-only flash failure injection (hal/posix/peripherals/hal_flash_posix.c). */
+extern void     hal_flash__fail_next_write(uint32_t n);
+extern uint32_t hal_flash__write_calls(void);
 
 /* ---------------------------------------------------------------------------
  * Mock provisioning ops table — outcomes controlled per test via globals.
@@ -294,6 +299,42 @@ static void test_provisioning_state_advances_to_customer_provisioned(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * TEST 8 — identity provisioning is retried until it is on flash
+ * The flash fails during the first startup: provisioning the identity fails
+ * and the FB reports a fault. A second startup with the flash recovered
+ * provisions it again without a fault, and after a reload (power cycle) the
+ * identity is there.
+ * ------------------------------------------------------------------------- */
+static void test_identity_provision_retried_until_durable(void)
+{
+    setup();
+    g_mock_identity_cn = "test-device-002";
+
+    hal_flash__fail_next_write(UINT32_MAX);
+    fb_provisioning__run_startup_test();
+    int first_faults = fb_provisioning__test_fault_count();
+    hal_flash__fail_next_write(0u);
+
+    fb_provisioning__test_reset();
+    uint32_t before = hal_flash__write_calls();
+    fb_provisioning__run_startup_test();
+    int second_faults = fb_provisioning__test_fault_count();
+    uint32_t writes   = hal_flash__write_calls() - before;
+
+    nvm__init_state();
+    nvm__load_state();
+    char id[EMBEDIQ_NVM_VAL_SIZE] = {0};
+    (void)embediq_cfg_get_str("mqtt.client_id", id, sizeof(id), "");
+    bool durable = strcmp(id, "test-device-002") == 0;
+
+    printf("      first_startup_faults=%d second_startup_faults=%d "
+           "second_startup_flash_writes=%u identity_after_reload=%d\n",
+           first_faults, second_faults, (unsigned)writes, (int)durable);
+    ASSERT(first_faults >= 1 && second_faults == 0 && writes >= 1u && durable,
+           "failed identity persist faults the FB; the next startup makes it durable");
+}
+
+/* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 
@@ -306,6 +347,7 @@ int main(void)
     test_provisioning_factory_reset_clears_nvm_keys();
     test_provisioning_factory_reset_publishes_msg();
     test_provisioning_state_advances_to_customer_provisioned();
+    test_identity_provision_retried_until_durable();
 
     printf("\n");
     if (g_tests_failed == 0) {

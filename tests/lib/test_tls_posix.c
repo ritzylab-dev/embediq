@@ -36,6 +36,22 @@
 /* Use extern declarations — not HAL headers (boundary_checker rule for tests/) */
 extern const embediq_tls_ops_t *hal_tls_posix_ops_slot(uint8_t idx);
 extern const embediq_tls_ops_t *hal_tls_posix_ops(void);
+/* Host-only: called after a connect attempt releases its slot and before its
+ * on_complete, with that attempt's user_ctx (NULL removes it). */
+extern void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx));
+/* Host-only: sessions whose mbedTLS context and socket are initialised and
+ * not yet released. */
+extern int  hal_tls__live_sessions(void);
+/* Host-only slot introspection; layout matches hal_tls_posix.c. */
+typedef struct {
+    const void *ssl_conf;           /* configuration the slot's ssl context references */
+    const void *active_conf;        /* the slot's active configuration */
+    bool        active_ca_present;  /* the active configuration has a CA chain */
+    bool        staged;             /* a validated replacement awaits the next connect */
+    int         live_configs;       /* configuration sets built and not freed, this slot */
+    int         live_sessions;      /* sessions live, all slots */
+} hal_tls_debug_t;
+extern void hal_tls__debug(uint8_t idx, hal_tls_debug_t *out);
 
 /* Test-local buffer sizes */
 #define TLS_CMD_BUF_SIZE   512u   /* shell command string for system() */
@@ -487,6 +503,460 @@ static void test_async_connect_mutex_ownership(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * test_async_completion_belongs_to_its_attempt
+ *
+ * Two attempts on one slot, each failing its TCP connect at once (the port is
+ * closed). The host hook parks the first attempt's worker after it has
+ * released the slot and before its on_complete; the second attempt is then
+ * accepted and completes. Released, the first worker delivers its own
+ * completion: each callback runs exactly once, with its own context.
+ * ------------------------------------------------------------------------- */
+
+#define ATTEMPT_WAIT_MS          2000u
+#define LATE_CALLBACK_WAIT_NS    100000000L   /* 100 ms: no duplicate or late call */
+
+typedef struct {
+    pthread_mutex_t mu;
+    int             calls;
+    void           *last_ctx;
+} attempt_cb_t;
+
+static attempt_cb_t g_attempt_a = { PTHREAD_MUTEX_INITIALIZER, 0, NULL };
+static attempt_cb_t g_attempt_b = { PTHREAD_MUTEX_INITIALIZER, 0, NULL };
+static int          g_ctx_a;   /* distinct addresses: the attempts' contexts */
+static int          g_ctx_b;
+
+static pthread_mutex_t g_park_mu      = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_park_cv      = PTHREAD_COND_INITIALIZER;
+static bool            g_park_entered = false;
+static bool            g_park_release = false;
+
+static void record_attempt(attempt_cb_t *c, void *user_ctx)
+{
+    pthread_mutex_lock(&c->mu);
+    c->calls++;
+    c->last_ctx = user_ctx;
+    pthread_mutex_unlock(&c->mu);
+}
+
+static void attempt_a_cb(embediq_tls_err_t result, void *user_ctx)
+{
+    (void)result;
+    record_attempt(&g_attempt_a, user_ctx);
+}
+
+static void attempt_b_cb(embediq_tls_err_t result, void *user_ctx)
+{
+    (void)result;
+    record_attempt(&g_attempt_b, user_ctx);
+}
+
+/* Parks only the attempt whose context is g_ctx_a. */
+static void park_attempt_a(void *user_ctx)
+{
+    if (user_ctx != &g_ctx_a) return;
+    pthread_mutex_lock(&g_park_mu);
+    g_park_entered = true;
+    pthread_cond_broadcast(&g_park_cv);
+    while (!g_park_release) pthread_cond_wait(&g_park_cv, &g_park_mu);
+    pthread_mutex_unlock(&g_park_mu);
+}
+
+static int attempt_calls(attempt_cb_t *c, void **ctx)
+{
+    pthread_mutex_lock(&c->mu);
+    int n = c->calls;
+    if (ctx) *ctx = c->last_ctx;
+    pthread_mutex_unlock(&c->mu);
+    return n;
+}
+
+static bool wait_attempt_calls(attempt_cb_t *c, int n, unsigned timeout_ms)
+{
+    for (unsigned waited = 0u; waited < timeout_ms; waited++) {
+        if (attempt_calls(c, NULL) >= n) return true;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    return attempt_calls(c, NULL) >= n;
+}
+
+/* A loopback port with no listener: a TCP connect to it fails at once. */
+static uint16_t closed_port(void)
+{
+    uint16_t port = 0u;
+    int fd = open_silent_listener(&port);
+    if (fd < 0) return 0u;
+    close(fd);
+    return port;
+}
+
+static void test_async_completion_belongs_to_its_attempt(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+    uint16_t port = closed_port();
+
+    hal_tls__set_connect_finish_hook(park_attempt_a);
+    embediq_tls_err_t rc_a = ops->connect_async("127.0.0.1", port, "localhost",
+                                                attempt_a_cb, &g_ctx_a);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += (long)(ATTEMPT_WAIT_MS / 1000u);
+    pthread_mutex_lock(&g_park_mu);
+    while (!g_park_entered
+           && pthread_cond_timedwait(&g_park_cv, &g_park_mu, &deadline) == 0) {
+    }
+    bool parked = g_park_entered;
+    pthread_mutex_unlock(&g_park_mu);
+
+    embediq_tls_err_t rc_b = ops->connect_async("127.0.0.1", port, "localhost",
+                                                attempt_b_cb, &g_ctx_b);
+    bool b_done = wait_attempt_calls(&g_attempt_b, 1, ATTEMPT_WAIT_MS);
+
+    pthread_mutex_lock(&g_park_mu);
+    g_park_release = true;
+    pthread_cond_broadcast(&g_park_cv);
+    pthread_mutex_unlock(&g_park_mu);
+    (void)wait_attempt_calls(&g_attempt_a, 1, ATTEMPT_WAIT_MS);
+    struct timespec ts_wait = { .tv_sec = 0, .tv_nsec = LATE_CALLBACK_WAIT_NS };
+    nanosleep(&ts_wait, NULL);
+    hal_tls__set_connect_finish_hook(NULL);
+    alarm(0u);
+
+    void *ctx_a = NULL, *ctx_b = NULL;
+    int calls_a = attempt_calls(&g_attempt_a, &ctx_a);
+    int calls_b = attempt_calls(&g_attempt_b, &ctx_b);
+    printf("      connect_a=%d parked_a=%d connect_b=%d b_completed=%d "
+           "callback_a=%d ctx_a_own=%d callback_b=%d ctx_b_own=%d\n",
+           (int)rc_a, (int)parked, (int)rc_b, (int)b_done, calls_a,
+           (int)(ctx_a == &g_ctx_a), calls_b, (int)(ctx_b == &g_ctx_b));
+    ASSERT(configured && port != 0u && rc_a == EMBEDIQ_TLS_OK && parked
+           && rc_b == EMBEDIQ_TLS_OK && calls_a == 1 && ctx_a == &g_ctx_a
+           && calls_b == 1 && ctx_b == &g_ctx_b,
+           "each attempt's completion runs once, with its own context");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_connect_async_refused_on_connected_slot
+ *
+ * After a successful handshake, a second connect_async on the slot returns
+ * EMBEDIQ_TLS_ERR_BUSY and the live session still sends and receives.
+ * ------------------------------------------------------------------------- */
+
+static void test_connect_async_refused_on_connected_slot(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+
+    start_echo_server(TEST_PORT + 4, false);
+    cb_state_t st; cb_state_init(&st);
+    (void)ops->connect_async("127.0.0.1", TEST_PORT + 4, "localhost", connect_cb, &st);
+    bool connected = wait_for_connect(&st, 5000u) == EMBEDIQ_TLS_OK;
+
+    static cb_state_t second;
+    cb_state_init(&second);
+    embediq_tls_err_t rc2 = ops->connect_async("127.0.0.1", TEST_PORT + 4, "localhost",
+                                               connect_cb, &second);
+    if (rc2 == EMBEDIQ_TLS_OK) {
+        (void)wait_for_connect(&second, 5000u);   /* let an accepted attempt finish */
+    }
+
+    const uint8_t ping[] = "PING";
+    embediq_tls_err_t rc_send = ops->send(ping, (uint16_t)sizeof(ping));
+    uint8_t buf[TLS_TEST_RECV_BUF];
+    int32_t n = ops->recv(buf, (uint16_t)sizeof(buf), 3000u);
+    bool echoed = n == (int32_t)sizeof(ping) && memcmp(buf, ping, sizeof(ping)) == 0;
+
+    (void)ops->disconnect();
+    stop_echo_server();
+    alarm(0u);
+
+    printf("      connected=%d second_connect=%d send=%d recv=%d echoed=%d\n",
+           (int)connected, (int)rc2, (int)rc_send, (int)n, (int)echoed);
+    ASSERT(configured && connected && rc2 == EMBEDIQ_TLS_ERR_BUSY
+           && rc_send == EMBEDIQ_TLS_OK && echoed,
+           "connected slot refuses connect_async; the live session keeps working");
+}
+
+/* ---------------------------------------------------------------------------
+ * A session closed by the peer is released before the slot connects again:
+ * recv reports the close, the slot is disconnected, the next connect_async
+ * is accepted and works, and after disconnect no session is left live.
+ * ------------------------------------------------------------------------- */
+
+static bool echo_once(const embediq_tls_ops_t *ops)
+{
+    const uint8_t ping[] = "PING";
+    if (ops->send(ping, (uint16_t)sizeof(ping)) != EMBEDIQ_TLS_OK) return false;
+    uint8_t buf[TLS_TEST_RECV_BUF];
+    int32_t n = ops->recv(buf, (uint16_t)sizeof(buf), 3000u);
+    return n == (int32_t)sizeof(ping) && memcmp(buf, ping, sizeof(ping)) == 0;
+}
+
+static void test_reconnect_after_peer_close_releases_session(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+
+    start_echo_server(TEST_PORT + 5, false);
+    cb_state_t first; cb_state_init(&first);
+    (void)ops->connect_async("127.0.0.1", TEST_PORT + 5, "localhost", connect_cb, &first);
+    bool connected = wait_for_connect(&first, 5000u) == EMBEDIQ_TLS_OK;
+    bool echoed_first = connected && echo_once(ops);
+
+    stop_echo_server();   /* the peer closes the connection */
+    uint8_t buf[TLS_TEST_RECV_BUF];
+    int32_t rc_closed = ops->recv(buf, (uint16_t)sizeof(buf), 3000u);
+    const uint8_t ping[] = "PING";
+    embediq_tls_err_t rc_send_closed = ops->send(ping, (uint16_t)sizeof(ping));
+
+    start_echo_server(TEST_PORT + 5, false);
+    cb_state_t second; cb_state_init(&second);
+    embediq_tls_err_t rc_again = ops->connect_async("127.0.0.1", TEST_PORT + 5, "localhost",
+                                                    connect_cb, &second);
+    bool reconnected = rc_again == EMBEDIQ_TLS_OK
+                       && wait_for_connect(&second, 5000u) == EMBEDIQ_TLS_OK;
+    bool echoed_again = reconnected && echo_once(ops);
+
+    (void)ops->disconnect();
+    stop_echo_server();
+    alarm(0u);
+    int live = hal_tls__live_sessions();
+
+    printf("      connected=%d echoed=%d recv_after_close=%d send_after_close=%d "
+           "connect_again=%d reconnected=%d echoed_again=%d live_sessions=%d\n",
+           (int)connected, (int)echoed_first, (int)rc_closed, (int)rc_send_closed,
+           (int)rc_again, (int)reconnected, (int)echoed_again, live);
+    ASSERT(configured && connected && echoed_first
+           && rc_closed == (int32_t)EMBEDIQ_TLS_ERR_RECV
+           && rc_send_closed == EMBEDIQ_TLS_ERR_SEND
+           && rc_again == EMBEDIQ_TLS_OK && reconnected && echoed_again && live == 0,
+           "a peer-closed session is released before the slot reconnects");
+}
+
+/* ---------------------------------------------------------------------------
+ * configure() on a connected slot stores credentials for the next connect and
+ * leaves the live session alone: it still echoes, and disconnect releases it.
+ * ------------------------------------------------------------------------- */
+
+static void test_configure_while_connected_keeps_session(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    start_echo_server(TEST_PORT + 6, false);
+    cb_state_t st; cb_state_init(&st);
+    (void)ops->connect_async("127.0.0.1", TEST_PORT + 6, "localhost", connect_cb, &st);
+    bool connected = wait_for_connect(&st, 5000u) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t rc_reconf = ops->configure(ca, NULL, NULL);
+    free(ca);
+    bool echoed = connected && echo_once(ops);
+    int  live_connected = hal_tls__live_sessions();
+
+    (void)ops->disconnect();
+    stop_echo_server();
+    alarm(0u);
+    int live_after = hal_tls__live_sessions();
+
+    printf("      connected=%d reconfigure=%d echoed=%d live_while_connected=%d "
+           "live_after_disconnect=%d\n", (int)connected, (int)rc_reconf, (int)echoed,
+           live_connected, live_after);
+    ASSERT(configured && connected && rc_reconf == EMBEDIQ_TLS_OK && echoed
+           && live_connected == 1 && live_after == 0,
+           "configure on a connected slot leaves the session working");
+}
+
+/* ---------------------------------------------------------------------------
+ * Configuration lifetime: the configuration a live session references is
+ * never modified or freed by configure(); a validated replacement is staged
+ * and becomes active on the next connect_async().
+ * ------------------------------------------------------------------------- */
+
+#define ROTATIONS        20
+#define NOT_A_PEM        "not a PEM certificate"
+
+/* Connect slot 0 to a fresh echo server on port; true once connected. */
+static bool connect_echo(const embediq_tls_ops_t *ops, int port, embediq_tls_err_t *result)
+{
+    start_echo_server(port, false);
+    cb_state_t st; cb_state_init(&st);
+    embediq_tls_err_t rc = ops->connect_async("127.0.0.1", (uint16_t)port, "localhost",
+                                              connect_cb, &st);
+    *result = (rc == EMBEDIQ_TLS_OK) ? wait_for_connect(&st, 5000u) : rc;
+    return *result == EMBEDIQ_TLS_OK;
+}
+
+static void end_echo(const embediq_tls_ops_t *ops)
+{
+    (void)ops->disconnect();
+    stop_echo_server();
+}
+
+static void test_reconfigure_while_connected_keeps_active_config_and_traffic(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t r1, r2;
+    bool connected = connect_echo(ops, TEST_PORT + 7, &r1);
+    hal_tls_debug_t d0, d1, d2;
+    hal_tls__debug(0u, &d0);
+    embediq_tls_err_t rc_reconf = ops->configure(ca, NULL, NULL);
+    hal_tls__debug(0u, &d1);
+    bool echoed = connected && echo_once(ops);
+    end_echo(ops);
+
+    bool reconnected = connect_echo(ops, TEST_PORT + 7, &r2) && echo_once(ops);
+    end_echo(ops);
+    hal_tls__debug(0u, &d2);
+    free(ca);
+    alarm(0u);
+
+    bool same_conf = d1.ssl_conf == d0.ssl_conf && d0.ssl_conf == d0.active_conf;
+    printf("      connected=%d reconfigure=%d ssl_conf_unchanged=%d active_ca=%d staged=%d "
+           "live_configs_connected=%d echoed=%d reconnected=%d live_configs_after=%d "
+           "live_sessions=%d\n", (int)connected, (int)rc_reconf, (int)same_conf,
+           (int)d1.active_ca_present, (int)d1.staged, d1.live_configs, (int)echoed,
+           (int)reconnected, d2.live_configs, d2.live_sessions);
+    ASSERT(configured && connected && rc_reconf == EMBEDIQ_TLS_OK && same_conf
+           && d1.active_ca_present && d1.staged && d1.live_configs == 2 && echoed
+           && reconnected && d2.live_configs == 1 && d2.live_sessions == 0,
+           "reconfigure while connected stages; the active set and traffic are untouched");
+}
+
+static void test_failed_reconfigure_while_connected_leaves_active_intact(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+    free(ca);
+
+    embediq_tls_err_t r1, r2;
+    bool connected = connect_echo(ops, TEST_PORT + 8, &r1);
+    hal_tls_debug_t d0, d1;
+    hal_tls__debug(0u, &d0);
+    embediq_tls_err_t rc_bad = ops->configure(NOT_A_PEM, NULL, NULL);
+    hal_tls__debug(0u, &d1);
+    bool echoed = connected && echo_once(ops);
+    end_echo(ops);
+
+    bool reconnected = connect_echo(ops, TEST_PORT + 8, &r2) && echo_once(ops);
+    end_echo(ops);
+    alarm(0u);
+
+    printf("      connected=%d failed_configure=%d ssl_conf_unchanged=%d active_ca=%d "
+           "staged=%d echoed=%d reconnect_with_old=%d\n", (int)connected, (int)rc_bad,
+           (int)(d1.ssl_conf == d0.ssl_conf), (int)d1.active_ca_present, (int)d1.staged,
+           (int)echoed, (int)reconnected);
+    ASSERT(configured && connected && rc_bad != EMBEDIQ_TLS_OK
+           && d1.ssl_conf == d0.ssl_conf && d1.active_ca_present && !d1.staged
+           && echoed && reconnected,
+           "a rejected reconfigure leaves the active configuration and session intact");
+}
+
+static void test_staged_replacement_is_used_by_next_connection(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca    = read_pem_file(CERT_DIR "/ca.crt");
+    char *other = read_pem_file(CERT_DIR "/client.crt");   /* does not sign the server */
+    ASSERT(ca != NULL && other != NULL, "CA and client certs must exist");
+    if (!ca || !other) { free(ca); free(other); return; }
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t r1, r_other, r_good;
+    bool connected = connect_echo(ops, TEST_PORT + 9, &r1);
+    embediq_tls_err_t rc_other = ops->configure(other, NULL, NULL);
+    hal_tls_debug_t d1;
+    hal_tls__debug(0u, &d1);
+    bool echoed = connected && echo_once(ops);
+    end_echo(ops);
+
+    (void)connect_echo(ops, TEST_PORT + 9, &r_other);   /* uses the replacement */
+    end_echo(ops);
+
+    embediq_tls_err_t rc_good = ops->configure(ca, NULL, NULL);   /* no session: applied now */
+    hal_tls_debug_t d2;
+    hal_tls__debug(0u, &d2);
+    bool good = connect_echo(ops, TEST_PORT + 9, &r_good) && echo_once(ops);
+    end_echo(ops);
+    free(ca); free(other);
+    alarm(0u);
+
+    printf("      connected=%d configure_other=%d staged=%d echoed=%d next_connect=%d "
+           "configure_good=%d staged_after=%d good_connect=%d\n", (int)connected,
+           (int)rc_other, (int)d1.staged, (int)echoed, (int)r_other, (int)rc_good,
+           (int)d2.staged, (int)good);
+    ASSERT(configured && connected && rc_other == EMBEDIQ_TLS_OK && d1.staged && echoed
+           && r_other == EMBEDIQ_TLS_ERR_CERT_VERIFY && rc_good == EMBEDIQ_TLS_OK
+           && !d2.staged && good,
+           "the staged replacement is the configuration of the next connection");
+}
+
+static void test_config_rotation_releases_everything_once(void)
+{
+    alarm(HANG_GUARD_S * 2u);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool ok = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    int connects = 0, echoes = 0;
+    for (int i = 0; i < ROTATIONS; i++) {
+        embediq_tls_err_t r;
+        if (connect_echo(ops, TEST_PORT + 10, &r)) connects++;
+        embediq_tls_err_t rc = (i % 2 == 0) ? ops->configure(ca, NULL, NULL)
+                                            : ops->configure(NOT_A_PEM, NULL, NULL);
+        ok = ok && ((i % 2 == 0) == (rc == EMBEDIQ_TLS_OK));
+        if (echo_once(ops)) echoes++;
+        end_echo(ops);
+    }
+    embediq_tls_err_t r_final;
+    bool final_ok = connect_echo(ops, TEST_PORT + 10, &r_final);
+    end_echo(ops);
+    free(ca);
+    alarm(0u);
+
+    hal_tls_debug_t d;
+    hal_tls__debug(0u, &d);
+    printf("      rotations=%d connects=%d echoes=%d configure_results_ok=%d final_connect=%d "
+           "live_sessions=%d live_configs=%d\n", ROTATIONS, connects, echoes, (int)ok,
+           (int)r_final, d.live_sessions, d.live_configs);
+    ASSERT(ok && connects == ROTATIONS && echoes == ROTATIONS && final_ok
+           && d.live_sessions == 0 && d.live_configs == 1,
+           "rotations, rejections and reconnects release every set and session once");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -510,6 +980,14 @@ int main(void)
     test_slot_isolation();
 #endif
     test_async_connect_mutex_ownership();
+    test_async_completion_belongs_to_its_attempt();
+    test_connect_async_refused_on_connected_slot();
+    test_reconnect_after_peer_close_releases_session();
+    test_configure_while_connected_keeps_session();
+    test_reconfigure_while_connected_keeps_active_config_and_traffic();
+    test_failed_reconfigure_while_connected_leaves_active_intact();
+    test_staged_replacement_is_used_by_next_connection();
+    test_config_rotation_releases_everything_once();
 
     printf("\n%d/%d tests passed.\n",
            g_tests_run - g_tests_failed, g_tests_run);

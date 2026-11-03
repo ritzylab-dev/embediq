@@ -268,7 +268,10 @@ extern "C" {
                                                           source_fb_id: fb_nvm endpoint index.
                                                           state_or_flag: 0=magic_fail
                                                                          1=crc_fail
-                                                                         2=major_version_mismatch.
+                                                                         2=major_version_mismatch
+                                                                         3=flash_read_fail (the
+                                                                           store refuses to persist
+                                                                           until flush re-reads it).
                                                           msg_id: 0 (no message context). */
 #define EMBEDIQ_OBS_EVT_CFG_MUTABILITY_REJECT 0x69u /**< Fleet push attempted to overwrite
                                                           a factory or user-class config key.
@@ -279,7 +282,23 @@ extern "C" {
                                                             rejected key (0=factory 2=user).
                                                           msg_id: low 16 bits of key name CRC32
                                                             (key name itself is never logged). */
-/* 0x6A–0x6F reserved */
+/* 0x6A reserved: STREAM_FAULT (ARCHITECTURE.md "Streaming Data Plane") */
+#define EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL      0x6Bu /**< NVM table write to flash failed.
+                                                          The change stays in RAM; the next
+                                                          successful persist carries it.
+                                                          One event per failed write.
+                                                          source_fb_id: 0. target_fb_id: 0.
+                                                          state_or_flag: HAL return value
+                                                            truncated to uint8_t (HAL errors
+                                                            are -127..-1: 0x81..0xFF), or
+                                                            EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE.
+                                                          msg_id: low 16 bits of the table
+                                                            generation that failed to persist. */
+/** NVM_PERSIST_FAIL state: nothing was written because flash could not be
+ *  read at boot (contents unknown); the change was refused and RAM is
+ *  unchanged. 0x80 is outside the truncated HAL error range. */
+#define EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE  0x80u
+/* 0x6C–0x6F reserved */
 
 /* FUNCTION family (0x70–0x7F) --------------------------------------------- */
 

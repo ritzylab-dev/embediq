@@ -23,9 +23,13 @@
  * no global mutable state of its own — the getter / setter calls pass
  * straight through to embediq_nvm_get / _set / _delete.
  *
- * Durability: fb_nvm persists at its own cadence. Callers that must
- * guarantee a value is flushed to storage before continuing should call
- * embediq_nvm_flush() explicitly (for example, before MSG_SYS_OTA_READY).
+ * Durability: every mutation persists synchronously and returns whether the
+ * change reached flash; embediq_nvm_flush() rewrites the current table (use
+ * it after a failed mutation to retry). If flash cannot be read at boot the
+ * store starts empty and every setter and delete returns false, leaving the
+ * stored values unchanged, until embediq_nvm_flush() re-reads it
+ * successfully; an invalid blob (bad magic or CRC) is replaced by the first
+ * successful write.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -71,7 +75,10 @@ size_t   embediq_cfg_get_str  (const char *key, char *buf,
 
 /* ---------------------------------------------------------------------------
  * Typed setters — persist the value under `key`. Return true on success,
- * false on NVM error, over-long key, or store full.
+ * false on NVM error, over-long key, or store full. false also when the
+ * value could not be persisted; in that case the new value IS in RAM
+ * (getters return it) and reaches flash with the next successful persist —
+ * unlike every other false, which leaves the old value.
  *
  * Calling context: any thread. A setter writes to flash and may wait for
  * another writer's persist in flight (see embediq_nvm.h).
@@ -84,8 +91,14 @@ bool     embediq_cfg_set_bool (const char *key, bool     value);
 bool     embediq_cfg_set_str  (const char *key, const char *value);
 
 /**
- * Remove the entry for the given key. Returns true on success or if the
- * key was already absent (fb_nvm makes delete idempotent).
+ * Remove the entry for the given key. Returns true on success.
+ * Idempotent: deleting an absent key returns true only once the current
+ * table — which includes the absence of that key — is on flash; false if the
+ * table could not be written, including when the pending change is another
+ * key's.
+ * false also when the removal could not be persisted; in that case the key
+ * IS gone from RAM and the removal reaches flash with the next successful
+ * persist.
  *
  * Calling context: any thread. May wait for a persist in flight.
  */
