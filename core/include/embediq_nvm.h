@@ -29,6 +29,11 @@
  * replaces the table with the flash contents; a change made concurrently by
  * another thread would be discarded and its persist skipped. Reloading at
  * runtime is not supported.
+ * If flash cannot be read at boot the store starts empty and refuses to
+ * persist (every mutation returns EMBEDIQ_ERR with an NVM_PERSIST_FAIL event,
+ * state FLASH_UNREADABLE, and leaves the table unchanged) until
+ * embediq_nvm_flush() re-reads it successfully. An invalid blob (bad magic or
+ * CRC) is replaced by the first successful write.
  *
  * Constraints (v1):
  *   - Keys are NUL-terminated strings up to EMBEDIQ_NVM_KEY_MAX bytes.
@@ -103,8 +108,10 @@ embediq_err_t embediq_nvm_get(const char *key, void *val, uint32_t *len);
 
 /**
  * Remove the entry for the given key.
- * Idempotent: deleting an absent key returns EMBEDIQ_OK only once the table
- * without that key is on flash, retrying a persist that previously failed.
+ * Idempotent: deleting an absent key returns EMBEDIQ_OK only once the
+ * current table — which includes the absence of that key — is on flash;
+ * EMBEDIQ_ERR if the table could not be written, including when the pending
+ * change is another key's.
  * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
  * the change and the next successful persist (any later write, or flush)
  * carries it.
@@ -117,8 +124,10 @@ embediq_err_t embediq_nvm_delete(const char *key);
  * embediq_nvm_provision — write-once provisioning write.
  * Semantics: if key is absent or empty, write value and return EMBEDIQ_OK.
  *            Idempotent: a second call with the key already provisioned does
- *            not change the value; it returns EMBEDIQ_OK only once that value
- *            is on flash, retrying a persist that previously failed.
+ *            not change the value; it returns EMBEDIQ_OK only once the
+ *            current table — which includes that value — is on flash;
+ *            EMBEDIQ_ERR if the table could not be written, including when
+ *            the pending change is another key's.
  * Returns EMBEDIQ_ERR if the flash write failed; the in-memory table keeps
  * the change and the next successful persist (any later write, or flush)
  * carries it.
@@ -140,8 +149,13 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value);
  * the change and the next successful persist (any later write, or flush)
  * carries it.
  *
- * Calling context: any thread. Always writes the current table; may wait for
- * a persist in flight.
+ * If flash was unreadable at boot, flush re-reads it instead of writing: on
+ * success the flash contents replace the (empty) table and persisting
+ * resumes; on failure it returns EMBEDIQ_ERR with an NVM_PERSIST_FAIL event.
+ * flush is the only call that performs this retry.
+ *
+ * Calling context: any thread. Otherwise always writes the current table;
+ * may wait for a persist in flight.
  */
 embediq_err_t embediq_nvm_flush(void);
 

@@ -29,6 +29,7 @@
  * close seen by recv(), a failed attempt and disconnect() each free the
  * session; connect_async() frees any session still live before it re-inits,
  * so a session is never re-initialised over and never freed twice.
+ * configure() frees only a session that is no longer connected.
  *
  * Phase 3 note: FreeRTOS implementation uses mbedTLS with OSAL primitives
  * instead of pthreads. The ops table contract is identical.
@@ -260,8 +261,10 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
         return EMBEDIQ_TLS_ERR_BUSY;   /* connect thread owns the slot */
     }
 
-    /* Free any previous session and configuration */
-    if (s->session_live) {
+    /* A dead session (peer-closed, not yet reconnected) is released here; a
+     * live one is untouched — the new credentials apply on the next
+     * connect_async() after disconnect(). */
+    if (s->session_live && !s->connected) {
         slot_session_free(s);
     }
     slot_free_certs(s);
@@ -277,7 +280,9 @@ static embediq_tls_err_t slot_configure(uint8_t idx,
     mbedtls_pk_init(&s->client_key);
     mbedtls_ctr_drbg_init(&s->ctr_drbg);
     mbedtls_entropy_init(&s->entropy);
-    mbedtls_net_init(&s->net);
+    /* The socket belongs to the session, not the configuration: connect_async()
+     * initialises it and slot_session_free() releases it, so a connected
+     * session keeps its socket across configure(). */
 
     /* Seed DRBG from /dev/urandom (POSIX platform) */
     rc = mbedtls_ctr_drbg_seed(&s->ctr_drbg, mbedtls_entropy_func,

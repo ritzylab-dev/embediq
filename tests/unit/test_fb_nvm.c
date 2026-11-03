@@ -576,9 +576,6 @@ static uint32_t count_events(uint8_t type, uint8_t state)
 }
 
 #define BLOB_STATE_READ_FAIL   3u   /* CFG_BLOB_INVALID state: flash could not be read */
-#ifndef EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE
-#define EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE 0x80u
-#endif
 
 /* test_unreadable_flash_refuses_to_persist_until_flush_reloads
  * k persisted. A boot whose flash read fails: RAM empty, one CFG_BLOB_INVALID

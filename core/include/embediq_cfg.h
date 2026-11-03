@@ -25,7 +25,11 @@
  *
  * Durability: every mutation persists synchronously and returns whether the
  * change reached flash; embediq_nvm_flush() rewrites the current table (use
- * it after a failed mutation to retry).
+ * it after a failed mutation to retry). If flash cannot be read at boot the
+ * store starts empty and every setter and delete returns false, leaving the
+ * stored values unchanged, until embediq_nvm_flush() re-reads it
+ * successfully; an invalid blob (bad magic or CRC) is replaced by the first
+ * successful write.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -88,8 +92,10 @@ bool     embediq_cfg_set_str  (const char *key, const char *value);
 
 /**
  * Remove the entry for the given key. Returns true on success.
- * Idempotent: deleting an absent key returns true only once the table
- * without that key is on flash, retrying a persist that previously failed.
+ * Idempotent: deleting an absent key returns true only once the current
+ * table — which includes the absence of that key — is on flash; false if the
+ * table could not be written, including when the pending change is another
+ * key's.
  * false also when the removal could not be persisted; in that case the key
  * IS gone from RAM and the removal reaches flash with the next successful
  * persist.

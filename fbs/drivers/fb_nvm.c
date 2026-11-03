@@ -144,6 +144,10 @@ static uint32_t g_generation    = 0u;
  * Invariant: g_persisted_gen <= g_generation (modulo 2^32) — it only ever
  * takes a value g_generation has had. */
 static uint32_t g_persisted_gen = 0u;
+/* Flash could not be read when the table was loaded: its contents are
+ * unknown, so nothing is written over them until embediq_nvm_flush() re-reads
+ * them. Written with both locks held; read under either. */
+static bool     s_flash_unreadable = false;
 
 /**
  * Composite persist buffer — header + payload in one allocation.
@@ -195,14 +199,26 @@ static uint8_t find_free_slot(void)
 #define NVM_LOAD_OK          0xFFu   /* no event */
 #define NVM_LOAD_MAGIC_FAIL  0u
 #define NVM_LOAD_CRC_FAIL    1u
+#define NVM_LOAD_READ_FAIL   3u   /* 2 is documented for a major version mismatch */
+
+/* A persist refused because flash was unreadable at load: one NVM_PERSIST_FAIL
+ * with state FLASH_UNREADABLE. Caller holds neither lock. */
+static embediq_err_t persist_refused(uint32_t gen)
+{
+    EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL, 0u, 0u,
+                           (uint8_t)EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE,
+                           (uint16_t)(gen & 0xFFFFu));
+    return EMBEDIQ_ERR;
+}
 
 /**
  * Write the table to flash unless a table at least as new as `gen` is already
  * there (`force` writes regardless — used by embediq_nvm_flush()).
  * Returns EMBEDIQ_OK when generation `gen` (or newer) is on flash after the
  * call; EMBEDIQ_ERR when the flash write failed (g_persisted_gen unchanged;
- * one NVM_PERSIST_FAIL emitted) or a lock could not be taken (the OSAL
- * observes that; no event here).
+ * one NVM_PERSIST_FAIL emitted), when flash was unreadable at load (nothing
+ * written; one NVM_PERSIST_FAIL, state FLASH_UNREADABLE) or a lock could not
+ * be taken (the OSAL observes that; no event here).
  * Calling context: any thread; the caller holds neither lock. Takes the
  * persist lock, then the table lock only for the skip test and the snapshot
  * memcpy.
@@ -222,6 +238,11 @@ static embediq_err_t nvm_persist(uint32_t gen, bool force)
      * (persisted falling ever further behind) never wraps into a false skip,
      * which a signed difference between gen and persisted would after 2^31. */
     uint32_t cur = g_generation;
+    if (s_flash_unreadable) {
+        embediq_osal_mutex_unlock(g_mutex);
+        embediq_osal_mutex_unlock(g_persist_mutex);
+        return persist_refused(cur);
+    }
     if (!force && (uint32_t)(cur - g_persisted_gen) <= (uint32_t)(cur - gen)) {
         embediq_osal_mutex_unlock(g_mutex);
         embediq_osal_mutex_unlock(g_persist_mutex);   /* this change is on flash */
@@ -274,23 +295,27 @@ static embediq_err_t nvm_persist(uint32_t gen, bool force)
     return EMBEDIQ_OK;
 }
 
-/**
- * Load the table from flash (boot, or a simulated power-on in tests).
- * nvm_load() runs only at boot, before any other caller exists (and from the
- * host test hook with no concurrent callers). It replaces the table with the
- * flash contents; a change made concurrently by another thread would be
- * discarded and its persist skipped. Reloading at runtime is not supported.
- * Takes the persist lock, then the table lock. Observatory events are emitted
- * after both locks are released.
+/*
+ * Unreadable flash and invalid flash are different facts. A failed read means
+ * the contents are unknown: RAM starts empty, nothing is persisted over them,
+ * and only embediq_nvm_flush() re-reads them. A blob with bad magic or CRC is
+ * known to be invalid: RAM empty is the truth and the first write replaces it.
  */
-static void nvm_load(void)
-{
-    if (!g_mutex || !g_persist_mutex) return;   /* APIs report EMBEDIQ_ERR */
-    if (embediq_osal_mutex_lock(g_persist_mutex, UINT32_MAX) != EMBEDIQ_OK) return;
 
+/**
+ * Replace the table with the flash contents. Caller holds the persist lock;
+ * takes the table lock. Returns the load outcome (NVM_LOAD_OK when valid) and
+ * the current generation in *gen. Emits nothing.
+ */
+static uint8_t nvm_load_locked(uint32_t *gen)
+{
     /* Read the full blob (header + payload) in a single call. */
-    uint8_t outcome = NVM_LOAD_OK;
-    bool    valid   = hal_flash_read(0u, &s_persist_buf, sizeof(s_persist_buf)) == HAL_OK;
+    uint8_t outcome  = NVM_LOAD_OK;
+    bool    readable = hal_flash_read(0u, &s_persist_buf, sizeof(s_persist_buf)) == HAL_OK;
+    bool    valid    = readable;
+    if (!readable) {
+        outcome = NVM_LOAD_READ_FAIL;
+    }
 
     /* Verify magic — catches erased flash, pre-PR-D blobs, and corrupt files. */
     if (valid && memcmp(s_persist_buf.hdr.magic, k_nvm_blob_magic,
@@ -306,20 +331,44 @@ static void nvm_load(void)
         valid   = false;
     }
 
+    *gen = 0u;
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) == EMBEDIQ_OK) {
         if (valid) {
             memcpy(g_nvm, s_persist_buf.entries, sizeof(g_nvm));   /* blob valid */
         } else {
             memset(g_nvm, 0, sizeof(g_nvm));   /* start with defaults (empty store) */
         }
-        g_persisted_gen = g_generation;   /* the table now matches what boot saw */
+        s_flash_unreadable = !readable;
+        if (readable) {
+            g_persisted_gen = g_generation;   /* the table now matches flash */
+        }
+        *gen = g_generation;
         embediq_osal_mutex_unlock(g_mutex);
     }
+    return outcome;
+}
+
+/**
+ * Load the table from flash (boot, or a simulated power-on in tests).
+ * nvm_load() runs only at boot, before any other caller exists (and from the
+ * host test hook with no concurrent callers). It replaces the table with the
+ * flash contents; a change made concurrently by another thread would be
+ * discarded and its persist skipped. Reloading at runtime is not supported.
+ * Takes the persist lock, then the table lock. Observatory events are emitted
+ * after both locks are released.
+ */
+static void nvm_load(void)
+{
+    if (!g_mutex || !g_persist_mutex) return;   /* APIs report EMBEDIQ_ERR */
+    if (embediq_osal_mutex_lock(g_persist_mutex, UINT32_MAX) != EMBEDIQ_OK) return;
+
+    uint32_t gen;
+    uint8_t  outcome = nvm_load_locked(&gen);
     embediq_osal_mutex_unlock(g_persist_mutex);
 
     if (outcome != NVM_LOAD_OK) {
         EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
-                               0u, 0u, outcome, 0u);   /* 0 = magic_fail, 1 = crc_fail */
+                               0u, 0u, outcome, 0u);   /* 0 = magic, 1 = crc, 3 = read */
     }
 }
 
@@ -393,6 +442,12 @@ embediq_err_t embediq_nvm_set(const char *key, const void *val, uint32_t len)
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
+    if (s_flash_unreadable) {   /* contents unknown: change nothing, write nothing */
+        uint32_t cur = g_generation;
+        embediq_osal_mutex_unlock(g_mutex);
+        return persist_refused(cur);
+    }
+
     uint8_t slot = find_slot(key);
     if (slot == NVM_MAX_KEYS) {
         slot = find_free_slot();
@@ -438,6 +493,12 @@ embediq_err_t embediq_nvm_provision(const char *key, const char *value)
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) {
         EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, 0u, 0u, 3u, 0u);
         return EMBEDIQ_ERR;
+    }
+
+    if (s_flash_unreadable) {   /* contents unknown: change nothing, write nothing */
+        uint32_t cur = g_generation;
+        embediq_osal_mutex_unlock(g_mutex);
+        return persist_refused(cur);
     }
 
     /* Write-once: a non-empty existing value means already provisioned.
@@ -503,6 +564,12 @@ embediq_err_t embediq_nvm_delete(const char *key)
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
 
+    if (s_flash_unreadable) {   /* contents unknown: change nothing, write nothing */
+        uint32_t cur = g_generation;
+        embediq_osal_mutex_unlock(g_mutex);
+        return persist_refused(cur);
+    }
+
     /* Absent key: idempotent on durability, not on having tried. Return OK
      * only once the table without the key is on flash — a no-op when it is,
      * a real retry when an earlier delete's persist failed. */
@@ -524,6 +591,26 @@ embediq_err_t embediq_nvm_flush(void)
 {
     if (!g_mutex || !g_persist_mutex) return EMBEDIQ_ERR;
 
+    /* Flush makes flash and table agree. If flash was unreadable at load, that
+     * means re-reading it: the RAM table holds nothing durable (every mutation
+     * was refused), so the loaded table replaces it. Only flush retries. */
+    if (embediq_osal_mutex_lock(g_persist_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
+    if (s_flash_unreadable) {
+        uint32_t gen;
+        uint8_t  outcome = nvm_load_locked(&gen);
+        bool     still   = s_flash_unreadable;
+        embediq_osal_mutex_unlock(g_persist_mutex);
+        if (still) {
+            return persist_refused(gen);
+        }
+        if (outcome != NVM_LOAD_OK) {
+            EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID,
+                                   0u, 0u, outcome, 0u);   /* readable, but invalid */
+        }
+        return EMBEDIQ_OK;
+    }
+    embediq_osal_mutex_unlock(g_persist_mutex);
+
     return nvm_persist(0u, true);
 }
 
@@ -532,6 +619,12 @@ embediq_err_t embediq_nvm_reset(void)
     if (!g_mutex || !g_persist_mutex) return EMBEDIQ_ERR;
 
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return EMBEDIQ_ERR;
+
+    if (s_flash_unreadable) {   /* contents unknown: change nothing, write nothing */
+        uint32_t cur = g_generation;
+        embediq_osal_mutex_unlock(g_mutex);
+        return persist_refused(cur);
+    }
     memset(g_nvm, 0, sizeof(g_nvm));
     uint32_t gen = ++g_generation;
     embediq_osal_mutex_unlock(g_mutex);
