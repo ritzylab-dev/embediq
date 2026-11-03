@@ -741,6 +741,43 @@ static void test_reconnect_after_peer_close_releases_session(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * configure() on a connected slot stores credentials for the next connect and
+ * leaves the live session alone: it still echoes, and disconnect releases it.
+ * ------------------------------------------------------------------------- */
+
+static void test_configure_while_connected_keeps_session(void)
+{
+    alarm(HANG_GUARD_S);
+    char *ca = read_pem_file(CERT_DIR "/ca.crt");
+    ASSERT(ca != NULL, "CA cert must exist");
+    if (!ca) return;
+    const embediq_tls_ops_t *ops = hal_tls_posix_ops_slot(0u);
+    bool configured = ops->configure(ca, NULL, NULL) == EMBEDIQ_TLS_OK;
+
+    start_echo_server(TEST_PORT + 6, false);
+    cb_state_t st; cb_state_init(&st);
+    (void)ops->connect_async("127.0.0.1", TEST_PORT + 6, "localhost", connect_cb, &st);
+    bool connected = wait_for_connect(&st, 5000u) == EMBEDIQ_TLS_OK;
+
+    embediq_tls_err_t rc_reconf = ops->configure(ca, NULL, NULL);
+    free(ca);
+    bool echoed = connected && echo_once(ops);
+    int  live_connected = hal_tls__live_sessions();
+
+    (void)ops->disconnect();
+    stop_echo_server();
+    alarm(0u);
+    int live_after = hal_tls__live_sessions();
+
+    printf("      connected=%d reconfigure=%d echoed=%d live_while_connected=%d "
+           "live_after_disconnect=%d\n", (int)connected, (int)rc_reconf, (int)echoed,
+           live_connected, live_after);
+    ASSERT(configured && connected && rc_reconf == EMBEDIQ_TLS_OK && echoed
+           && live_connected == 1 && live_after == 0,
+           "configure on a connected slot leaves the session working");
+}
+
+/* ---------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
 
@@ -767,6 +804,7 @@ int main(void)
     test_async_completion_belongs_to_its_attempt();
     test_connect_async_refused_on_connected_slot();
     test_reconnect_after_peer_close_releases_session();
+    test_configure_while_connected_keeps_session();
 
     printf("\n%d/%d tests passed.\n",
            g_tests_run - g_tests_failed, g_tests_run);

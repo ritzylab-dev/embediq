@@ -52,6 +52,7 @@ static char s_tmp_path[PATH_BUF];
  * thread between operations; the NVM persist lock serialises the writers. */
 static uint32_t s_write_calls  = 0u;
 static uint32_t s_fail_writes  = 0u;
+static uint32_t s_fail_reads   = 0u;   /* next n hal_flash_read calls fail */
 #endif
 
 /**
@@ -132,6 +133,13 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
 {
     if (!buf) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     resolve_paths();
+#ifdef EMBEDIQ_PLATFORM_HOST
+    if (s_fail_reads > 0u) {
+        s_fail_reads--;
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+#endif
 
     /* Start with zeroed buffer (simulates erased flash). */
     memset(buf, 0, len);
@@ -207,6 +215,12 @@ uint32_t hal_flash_page_size(void)
 void hal_flash__fail_next_write(uint32_t n)
 {
     s_fail_writes = n;
+}
+
+/** The next n hal_flash_read calls fail with HAL_ERR_IO (0 = none; test use only). */
+void hal_flash__fail_next_read(uint32_t n)
+{
+    s_fail_reads = n;
 }
 
 /** hal_flash_write calls attempted since the process started (test use only). */

@@ -11,7 +11,7 @@
  * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 30 tests passed. (0 failed)"
+ * Expected: "All 31 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -48,6 +48,7 @@ extern void        nvm__set_persist_delay_ms(uint32_t ms);
 
 /* Host-only flash failure injection (hal/posix/peripherals/hal_flash_posix.c). */
 extern void        hal_flash__fail_next_write(uint32_t n);
+extern void        hal_flash__fail_next_read(uint32_t n);
 extern uint32_t    hal_flash__write_calls(void);
 
 /* Observatory host-only ring access (core/src/observatory/obs.c). */
@@ -564,6 +565,73 @@ static uint32_t count_persist_fail_events(void)
     return n;
 }
 
+static uint32_t count_events(uint8_t type, uint8_t state)
+{
+    uint32_t n = 0u;
+    EmbedIQ_Event_t e;
+    for (uint32_t i = 0u; obs__ring_read(i, &e); i++) {
+        if (e.event_type == type && e.state_or_flag == state) n++;
+    }
+    return n;
+}
+
+#define BLOB_STATE_READ_FAIL   3u   /* CFG_BLOB_INVALID state: flash could not be read */
+#ifndef EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE
+#define EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE 0x80u
+#endif
+
+/* test_unreadable_flash_refuses_to_persist_until_flush_reloads
+ * k persisted. A boot whose flash read fails: RAM empty, one CFG_BLOB_INVALID
+ * (read failure). delete(k) and set(j) → ERR, each with NVM_PERSIST_FAIL state
+ * FLASH_UNREADABLE, and nothing is written. flush with the read still failing
+ * → ERR. Read recovers: flush → OK and RAM holds k, not j; after a reload k is
+ * present and j absent.
+ */
+static void test_unreadable_flash_refuses_to_persist_until_flush_reloads(void)
+{
+    setup();
+    uint32_t k = 0x4Bu, j = 0x4Au, got = 0u;
+    embediq_err_t rc_seed = embediq_nvm_set("persist.kept", &k, sizeof(k));
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    nvm__init_state();
+    hal_flash__fail_next_read(UINT32_MAX);
+    nvm__load_state();
+    bool     empty      = !get_u32("persist.kept", &got);
+    uint32_t read_fails = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, BLOB_STATE_READ_FAIL);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_del   = embediq_nvm_delete("persist.kept");
+    embediq_err_t rc_set   = embediq_nvm_set("persist.unsaved", &j, sizeof(j));
+    embediq_err_t rc_flush = embediq_nvm_flush();
+    uint32_t writes  = hal_flash__write_calls() - before;
+    uint32_t refused = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL,
+                                    (uint8_t)EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE);
+
+    hal_flash__fail_next_read(0u);
+    embediq_err_t rc_reload = embediq_nvm_flush();
+    bool k_in_ram = get_u32("persist.kept", &got) && got == k;
+    bool j_in_ram = get_u32("persist.unsaved", &got);
+
+    reload_from_flash();
+    bool k_after = get_u32("persist.kept", &got) && got == k;
+    bool j_after = get_u32("persist.unsaved", &got);
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    printf("      seed=%d empty=%d read_fail_events=%u delete=%d set=%d flush_unreadable=%d "
+           "flash_writes=%u refused_events=%u | flush_recovered=%d k_in_ram=%d j_in_ram=%d "
+           "k_after_reload=%d j_after_reload=%d\n",
+           (int)rc_seed, (int)empty, (unsigned)read_fails, (int)rc_del, (int)rc_set,
+           (int)rc_flush, (unsigned)writes, (unsigned)refused, (int)rc_reload,
+           (int)k_in_ram, (int)j_in_ram, (int)k_after, (int)j_after);
+    ASSERT(rc_seed == EMBEDIQ_OK && empty && read_fails == 1u
+           && rc_del == EMBEDIQ_ERR && rc_set == EMBEDIQ_ERR && rc_flush == EMBEDIQ_ERR
+           && writes == 0u && refused == 3u
+           && rc_reload == EMBEDIQ_OK && k_in_ram && !j_in_ram && k_after && !j_after,
+           "unreadable flash is never overwritten; flush re-reads it and restores the table");
+}
+
 /* test_set_reports_persist_failure
  * A set whose flash write fails returns EMBEDIQ_ERR and emits one
  * NVM_PERSIST_FAIL; the value is readable from RAM. The next set (write
@@ -757,6 +825,7 @@ int main(void)
     test_set_reports_persist_failure();
     test_provision_retry_reestablishes_durability();
     test_delete_retry_reestablishes_durability();
+    test_unreadable_flash_refuses_to_persist_until_flush_reloads();
     test_flush_reports_failure();
     test_skip_rule_never_skips_an_unpersisted_change();
 
