@@ -15,6 +15,8 @@
  *         connect_async() is in flight. No field change; EMBEDIQ_TLS_OPS_VERSION stays 2.
  *   v2 (additive) — connect_async() on a connected slot also returns
  *         EMBEDIQ_TLS_ERR_BUSY. No field change; EMBEDIQ_TLS_OPS_VERSION stays 2.
+ *   v2 (additive) — configure() stages while connected. No field change;
+ *         EMBEDIQ_TLS_OPS_VERSION stays 2.
  *
  * Context safety: INSTANCE-SAFE — each ops table slot represents one
  * independent TLS connection context. Concurrent use of distinct slots
@@ -115,10 +117,15 @@ typedef struct {
      * Must be called before the first connect_async(). Calling connect_async()
      * without a prior configure() returns EMBEDIQ_TLS_ERR_NOT_CONFIGURED.
      *
-     * May be called again while connected — the new credentials are stored
-     * and applied on the NEXT connect_async() after disconnect(). The current
-     * session is unaffected. This enables certificate rotation without
-     * connection downtime.
+     * May be called while connected: the replacement is validated and
+     * staged; the current session is unaffected — the active session and the
+     * configuration it references are untouched; the replacement becomes
+     * active on the next connect_async(). A rejected replacement (bad PEM, no
+     * CA) leaves the active configuration and any session intact and returns
+     * the error; a previously staged replacement is discarded. With no live
+     * session a validated replacement becomes active at once. This enables
+     * certificate rotation without connection downtime.
+     * Memory: the HAL holds at most two configurations per slot.
      *
      * ca_cert_pem:     NUL-terminated PEM string of the CA certificate used to
      *                  verify the server. Must not be NULL.
