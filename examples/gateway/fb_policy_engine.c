@@ -112,9 +112,9 @@ static void policy_run(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb_data; (void)subfn_data;
 
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
+    /* msg points at the MSG_FIELD_READING payload bytes. */
     MSG_FIELD_READING_Payload_t reading;
-    memcpy(&reading, m->payload, sizeof(reading));
+    memcpy(&reading, msg, sizeof(reading));
 
     uint8_t sid = reading.sensor_id;
     if (sid >= SENSOR_COUNT) { return; }

@@ -29,7 +29,7 @@ Every line follows this format:
 | Field | Meaning |
 |-------|---------|
 | `timestamp_us` | Microseconds since system boot. uint32 — wraps at ~71 min. |
-| `TYPE` | `LC` = lifecycle, `FSM` = state transition, `TX` = message sent, `FLT` = fault, `DRP` = queue drop |
+| `TYPE` | `LC` = lifecycle, `FSM` = state transition, `TX` = message sent, `FLT` = fault, `DRP` = queue drop, `APP` = application-defined event (`code=` and `val=` are documented by the emitting FB) |
 | `source → target` | Which FB emitted the event. `N/A` = no specific target. |
 | `seq=N` | Monotonic sequence counter. A gap means the Observatory ring buffer overflowed. |
 

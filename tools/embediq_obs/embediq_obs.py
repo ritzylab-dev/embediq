@@ -72,6 +72,9 @@ EVENT_NAMES = {
     0x30: 'LIFECYCLE',
     0x31: 'FSM_TRANS',
     0x60: 'FAULT',
+    0x70: 'TEST_START',
+    0x71: 'TEST_END',
+    0x72: 'APP',
 }
 
 PLATFORM_NAMES = {

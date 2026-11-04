@@ -10,7 +10,7 @@
  *   WARNING  → CRITICAL  when temperature > 85 °C
  *   CRITICAL → NORMAL    when temperature < 70 °C
  *
- * State-entry actions use embediq_obs_emit() — never printf (R-sub-04).
+ * State-entry actions use embediq_obs_emit() — never printf (R-stdio).
  * The controller calls embediq_wdg_checkin() on every temperature reading,
  * proving liveness to the watchdog (registered with 5 000 ms timeout).
  *

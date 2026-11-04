@@ -309,7 +309,18 @@ extern "C" {
 #define EMBEDIQ_OBS_EVT_TEST_END            0x71u /**< Certification test case end.
                                                         state_or_flag: 0=pass, 1=fail, 2=inconclusive. */
 
-/* 0x72–0x7F: reserved — future FUNCTION band expansion */
+/* The FUNCTION band holds events whose meaning is defined outside the framework
+ * core (certification tests, applications); the VENDOR band (0x90–0xFF) stays
+ * for vendor extensions. */
+#define EMBEDIQ_OBS_EVT_APP                 0x72u /**< Application-defined event.
+                                                        source = emitting FB, target = 0xFF
+                                                        or a peer FB, state_or_flag =
+                                                        application-defined code (documented
+                                                        by the FB), msg_id = application-
+                                                        defined 16-bit value. The framework
+                                                        assigns no meaning. */
+
+/* 0x73–0x7F: reserved — future FUNCTION band expansion */
 
 /*
  * AI EVENT FAMILY BAND — PHASE 3 RESERVATION

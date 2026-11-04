@@ -91,6 +91,9 @@ int main(void)
      * setvbuf() is C89 — no additional include needed. */
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_STDOUT);
+    embediq_obs_set_level(2u);   /* level 2 shows application events (FUNCTION band) */
+
     printf("\n");
     printf("╔══════════════════════════════════════════════════╗\n");
     printf("║   EmbedIQ Environmental Monitor — Cloud Demo    ║\n");

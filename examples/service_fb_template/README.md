@@ -67,7 +67,7 @@ fields and the CI staleness policy.
 | Check                    | Rule                | What it looks for                                  |
 |--------------------------|---------------------|----------------------------------------------------|
 | `boundary_checker.py`    | Layer boundaries    | Out-of-layer `#include`s                           |
-| `check_fb_calls.py`      | I-07, R-02, R-sub-03| `malloc`, `usleep`, direct OSAL / POSIX threading  |
+| `check_fb_calls.py`      | I-07, R-02, R-sub-03, R-sub-03a, R-stdio | `malloc`, `usleep`, direct OSAL / POSIX threading, `printf` and other stdio output — scans `examples/` too; only the host programs `examples/*/main.c` may print and sleep |
 | `licence_check.py`       | SPDX                | Missing `SPDX-License-Identifier` header           |
 | `ops_version_check.py`   | R-lib-4, D-LIB-5    | Ops headers in `core/include/ops/` only (template is outside that scope, but follows the same convention) |
 

@@ -1,6 +1,6 @@
 # EmbedIQ Industrial Edge Gateway Demo
 
-**What an observable, resilient edge gateway looks like from the inside — structured, deterministic, and traceable without a single printf in application code.**
+**What an observable, resilient edge gateway looks like from the inside — structured, deterministic, and traceable through the Observatory. No Functional Block prints; only the host program (`main.c`) writes to the console.**
 
 ---
 
@@ -18,7 +18,7 @@ Three application FBs form a complete edge-to-cloud pipeline:
 
 - **fb_field_receiver** — polls field sensors every second, publishes `MSG_FIELD_READING`
 - **fb_policy_engine** — applies threshold rules, publishes `MSG_ALERT` (on state change only, no duplicates) + `MSG_TELEMETRY` (throttled 2:1)
-- **fb_north_bridge** — sends telemetry north to cloud (stdout) or buffers locally when offline. First FB in the repo with two sub-functions: `north_timer` (connectivity FSM) and `north_rx` (data handler)
+- **fb_north_bridge** — sends telemetry north to cloud (simulated: each send is an Observatory event) or buffers locally when offline. Three sub-functions: `north_timer` (connectivity FSM), `north_telemetry` and `north_alert` (one per message type)
 
 Supporting FBs: `fb_timer`, `fb_nvm`, `fb_watchdog` (from `fbs/drivers/`).
 
@@ -28,7 +28,7 @@ Supporting FBs: `fb_timer`, `fb_nvm`, `fb_watchdog` (from `fbs/drivers/`).
 
 - **Protocol-independent architecture** — field protocol (RS-485/Modbus) and cloud protocol (MQTT/TCP) are completely decoupled through the message bus. Change either without touching the other.
 - **Offline resilience** — fb_north_bridge buffers telemetry locally during a 10-second connectivity outage and automatically flushes on reconnect. Alerts always go through (never buffered).
-- **Observable by default** — every message, every FSM transition, every lifecycle event is captured by the Observatory. Zero instrumentation code in any application FB.
+- **Observable by default** — every message, every FSM transition, every lifecycle event is captured by the Observatory automatically. fb_north_bridge adds one application-defined event (`APP`) per simulated send, buffer and link change — no print statements.
 - **Runs on Linux today** — no hardware required. Same `cmake -B build` command as the thermostat.
 - **IEC 62443 SL1/2 ready** — `SECURITY_INCIDENT` (0x61) and `AUTH_EVENT` (0x62) Observatory events are defined for industrial cybersecurity audit trail requirements. The edge gateway pattern is a natural IEC 62443 zone/conduit boundary. See `COMPLIANCE.md §2`.
 - **India / AIS-190 alignment** — Industrial edge gateways are a primary deployment target for India's manufacturing and water/energy sectors. The gateway's tamper-evident Observatory output satisfies AIS-190 (aligned ISO 26262 ASIL A/B) audit logging requirements for connected systems. See `COMPLIANCE.md §2`.
@@ -73,25 +73,41 @@ python3 tools/embediq_obs/embediq_obs.py obs stats /tmp/gateway.iqtrace
 
 ## How to read the output
 
+The demo runs at Observatory level 2 with the STDOUT transport. Every line from
+fb_north_bridge is an application-defined event:
+
 ```
-[-> CLOUD] TELEMETRY  Tank_Temp         value=23.10  seq=0     # Normal: telemetry sent north
-[-> CLOUD] ALERT ***  Tank_Pressure     value=9.20  threshold=8.50  ACTIVE   # Alert fires
-[-> CLOUD] ALERT clr  Tank_Pressure     value=7.50  threshold=8.50  cleared  # Alert clears
-
-[NORTH] *** Link down at t=12s — buffering telemetry locally ***
-
-[BUFFER] Tank_Temp         seq=5  buffered=1/10     # Buffered during outage
-[BUFFER] Tank_Pressure     seq=5  buffered=2/10
-
-[NORTH] Link restored at t=23s — flushing 10 buffered records
-
-  [-> CLOUD buffered] TELEMETRY  Tank_Temp         value=23.50  seq=5   # Flushed on reconnect
+[  23420154] APP fb_north_bridge → N/A  code=16 val=2310  seq=31    # TELEMETRY Tank_Temp 23.10 sent north
+[  27420075] APP fb_north_bridge → N/A  code=81 val=920  seq=75     # ALERT_ON Tank_Pressure value 9.20
+[  27420079] APP fb_north_bridge → N/A  code=113 val=850  seq=76    # ALERT_THRESHOLD Tank_Pressure 8.50
+[  33420241] APP fb_north_bridge → N/A  code=1 val=12  seq=146      # LINK_DOWN at tick 12
+[  33420276] APP fb_north_bridge → N/A  code=48 val=5  seq=148      # BUFFERED Tank_Temp seq 5
+[  43420155] APP fb_north_bridge → N/A  code=2 val=22  seq=262      # LINK_RECONNECTING at tick 22
+[  44420260] APP fb_north_bridge → N/A  code=4 val=10  seq=292      # FLUSH_COUNT 10 records
+[  44420267] APP fb_north_bridge → N/A  code=3 val=23  seq=294      # LINK_RESTORED at tick 23
+[  44420268] APP fb_north_bridge → N/A  code=32 val=2350  seq=296   # TELEMETRY_FLUSHED Tank_Temp 23.50
 ```
 
-- `[-> CLOUD]` — sent to cloud (stdout simulation)
-- `[BUFFER]` — buffered locally during offline window
-- `[-> CLOUD buffered]` — flushed from local buffer after reconnect
-- `[NORTH]` — connectivity FSM state changes
+`code` is the event code and `val` its value, as defined in `fb_north_bridge.c`.
+Per-sensor codes are a base plus the sensor id (0 = Tank_Temp, 1 = Tank_Pressure,
+2 = Pump_Flow):
+
+| Code (decimal) | Event | `val` |
+| -------------- | ----- | ----- |
+| 1 | LINK_DOWN — telemetry is buffered | tick |
+| 2 | LINK_RECONNECTING | tick |
+| 3 | LINK_RESTORED — buffer flushed | tick |
+| 4 | FLUSH_COUNT (just before LINK_RESTORED) | records to flush |
+| 16 + sensor | TELEMETRY sent north | value × 100 |
+| 32 + sensor | TELEMETRY_FLUSHED after reconnect | value × 100 |
+| 48 + sensor | BUFFERED while offline | seq |
+| 64 + sensor | BUFFER_FULL_DROP | seq |
+| 80 + sensor | ALERT_ON | value × 100 |
+| 96 + sensor | ALERT_OFF | value × 100 |
+| 112 + sensor | ALERT_THRESHOLD (after ALERT_ON / ALERT_OFF) | threshold × 100 |
+
+Values are fixed-point and saturate at 0 and 65535. The trace tool names the
+event `APP` in a capture (`--capture`, then `embediq_obs.py obs decode`).
 
 ---
 

@@ -51,6 +51,7 @@ Any PR violating these will be rejected.
 | R-11 | All sizing in `embediq_config.h`. Validated by `validator.py` at build.                                                                   |             |
 | R-12 | Sub-function registrations only inside FB `init_fn`.                                                                                      |             |
 | R-15 | Sub-function execution order when multiple sub-fns match same message = registration order (init_order ascending). Must be deterministic. | Code review |
+| R-stdio | Functional Blocks never write to stdout/stderr. They report through the Observatory. | `check_fb_calls.py` |
 
 ---
 
@@ -123,6 +124,24 @@ EMBEDIQ_SUBS(my_subs, MSG_TIMER_100MS);
 // ✗ WRONG — blocks the dispatch thread for this FB
 usleep(100 * 1000);
 embediq_osal_delay_ms(100);
+```
+
+---
+
+### R-stdio · Functional Blocks never write to stdout/stderr
+
+**Enforcement:** CI — `tools/ci/check_fb_calls.py` (hard failure)
+
+Functional Blocks never write to stdout/stderr (printf, fprintf, puts, fputs, fputc, putc,
+putchar, perror, vprintf). They report through the Observatory. Host entry programs under
+examples/*/main.c are exempt by exact path. Enforced by tools/ci/check_fb_calls.py.
+
+```c
+// ✓ CORRECT — an application-defined Observatory event; the FB documents code and value
+embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu, BLINK_EVT_LEVEL, value);
+
+// ✗ WRONG — there is no stdout on an MCU target
+printf("[blink_led] level=%u\n", level);
 ```
 
 ---
