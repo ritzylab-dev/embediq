@@ -2,16 +2,22 @@
 """
 check_fb_calls.py — FB layer forbidden function call and header checker.
 
-Enforces the following rules across fbs/drivers/, fbs/services/, core/src/:
+Enforces the following rules across fbs/drivers/, fbs/services/, core/src/,
+examples/:
   I-07   — No malloc/free/calloc/realloc in Layer 1 or Layer 2
   R-02   — No dynamic allocation in Layer 1 or Core
   R-sub-03  — No direct OSAL, RTOS, or POSIX calls from FB code
   R-sub-03a — No blocking calls (sleep/delay) in dispatch threads
+  R-stdio   — Functional Blocks never write to stdout/stderr
+
+Host entry programs (examples/*/main.c) may print and sleep; the Functional
+Blocks they start may not. RULE_ALLOW grants those two rules to each host
+program by exact path — every other rule still applies to it.
 
 Exits 0 on clean scan. Exits 1 on any violation.
 
 Usage:
-  python3 tools/ci/check_fb_calls.py [--strict]
+  python3 tools/ci/check_fb_calls.py [--strict] [--root <repo_root>]
 
 The --strict flag is always implied for CI. The script exits non-zero on
 any violation regardless of flags.
@@ -55,11 +61,24 @@ ALLOWLIST_PATHS = [
                                 # Framework infrastructure, not a Service FB or Driver FB.
 ]
 
+# ── Per-rule allowances for host entry programs ─────────────────────────
+# Host programs may print and sleep; the Functional Blocks they start may not.
+# Keys are repo-relative paths with '/' separators, matched by equality (never
+# by prefix or suffix — a suffix match on "main.c" would exempt every main.c).
+# Values are the rule ids allowed in that file; every other rule still applies.
+RULE_ALLOW = {
+    'examples/env_monitor/main.c': {'R-stdio', 'R-sub-03a'},
+    'examples/gateway/main.c':     {'R-stdio', 'R-sub-03a'},
+    'examples/gpio_blink/main.c':  {'R-stdio', 'R-sub-03a'},
+    'examples/thermostat/main.c':  {'R-stdio', 'R-sub-03a'},
+}
+
 # ── Directories to scan (relative to repo root) ─────────────────────────
 SCAN_DIRS = [
     'fbs/drivers',
     'fbs/services',
     'core/src',
+    'examples',
 ]
 
 # ── Forbidden function call patterns ────────────────────────────────────
@@ -119,14 +138,14 @@ FORBIDDEN_CALLS = [
     (r'\bembediq_osal_atomic32_\w+\s*\(',
      'R-sub-03', 'FB code must not use OSAL atomics — framework-internal'),
     # stdio output functions — R-stdio
-    # Service FBs and Driver FBs are platform-agnostic: they run on Linux, FreeRTOS,
+    # Functional Blocks are platform-agnostic: they run on Linux, FreeRTOS,
     # and ESP32. None of those targets have a universal stdout. printf/fprintf/puts/etc.
     # write to stdout, which does not exist on MCU targets.
     # Use embediq_obs_emit() for diagnostics instead.
     # NOTE: snprintf() writes to a char buffer and is NOT forbidden — only output functions.
-    (r'\b(printf|fprintf|puts|fputs|fputc|putc|putchar)\s*\(',
-     'R-stdio', 'stdio output in fbs/ — Service/Driver FBs are platform-agnostic; '
-                'no stdout on MCU targets — use embediq_obs_emit() instead'),
+    (r'\b(printf|fprintf|puts|fputs|fputc|putc|putchar|perror|vprintf)\s*\(',
+     'R-stdio', 'stdio output in a Functional Block — no stdout on MCU targets — '
+                'use embediq_obs_emit() instead'),
 ]
 
 # ── Forbidden system headers in FB layers ───────────────────────────────
@@ -158,24 +177,27 @@ def is_comment_line(line: str) -> bool:
     return s.startswith('//') or s.startswith('*') or s.startswith('/*')
 
 
-def scan_file(path: Path) -> list:
+def scan_file(path: Path, rel: str, allowed: list) -> list:
+    """Scan one file. rel is its repo-relative path ('/' separators).
+
+    A hit whose (rel, rule) is in RULE_ALLOW is appended to allowed as one
+    'allowed: <rel>:<line> <rule>' note and is not a violation.
+    """
     violations = []
     try:
         lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
     except Exception as exc:
         return [f'{path}:0: [ERROR] Cannot read file: {exc}']
 
+    allowed_rules = RULE_ALLOW.get(rel, set())
     for lineno, line in enumerate(lines, 1):
         if is_comment_line(line):
             continue
-        for pattern, rule, message in FORBIDDEN_CALLS:
+        for pattern, rule, message in FORBIDDEN_CALLS + FORBIDDEN_HEADERS:
             if re.search(pattern, line):
-                violations.append(
-                    f'{path}:{lineno}: [{rule}] {message}\n'
-                    f'    {line.strip()}'
-                )
-        for pattern, rule, message in FORBIDDEN_HEADERS:
-            if re.search(pattern, line):
+                if rule in allowed_rules:
+                    allowed.append(f'allowed: {rel}:{lineno} {rule}')
+                    continue
                 violations.append(
                     f'{path}:{lineno}: [{rule}] {message}\n'
                     f'    {line.strip()}'
@@ -185,7 +207,10 @@ def scan_file(path: Path) -> list:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent.parent
+    if '--root' in sys.argv:
+        repo_root = Path(sys.argv[sys.argv.index('--root') + 1]).resolve()
     all_violations = []
+    allowed = []
     files_scanned = 0
 
     for scan_dir in SCAN_DIRS:
@@ -196,7 +221,11 @@ def main() -> int:
             if is_allowlisted(src_file, repo_root):
                 continue
             files_scanned += 1
-            all_violations.extend(scan_file(src_file))
+            rel = str(src_file.relative_to(repo_root)).replace('\\', '/')
+            all_violations.extend(scan_file(src_file, rel, allowed))
+
+    for note in allowed:
+        print(note)
 
     if all_violations:
         print(
@@ -207,7 +236,7 @@ def main() -> int:
             print(f'  {v}')
         print(
             f'\nAll violations must be fixed before merging.\n'
-            f'See CODING_RULES.md: I-07, R-02, R-sub-03, R-sub-03a.'
+            f'See CODING_RULES.md: I-07, R-02, R-sub-03, R-sub-03a, R-stdio.'
         )
         return 1
 
