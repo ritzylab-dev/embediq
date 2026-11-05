@@ -42,6 +42,12 @@ extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 /* The largest store hal_flash_posix.c holds (its HAL_FLASH_POSIX_MAX_SIZE). */
 #define TEST_FLASH_MAX_SIZE  (64u * 1024u)
 
+/* Buffer and store sizes used by the tests. */
+#define TEST_READ_LEN    64u   /* one read of an absent or unreadable store */
+#define TEST_STORE_LEN   32u   /* a seeded store                            */
+#define TEST_REGION_LEN  16u   /* the erase and short-read stores           */
+#define TEST_SHORT_LEN    8u   /* a store shorter than the read             */
+
 /* ---------------------------------------------------------------------------
  * Minimal test harness
  * ------------------------------------------------------------------------- */
@@ -140,7 +146,7 @@ static void fill_pattern(uint8_t *buf, size_t len)
 static void test_absent_store_reads_empty_ok(void)
 {
     setup();
-    uint8_t buf[64];
+    uint8_t buf[TEST_READ_LEN];
     memset(buf, 0xAA, sizeof(buf));
     int rc = hal_flash_read(0u, buf, sizeof(buf));
     bool zeros = true;
@@ -156,7 +162,7 @@ static void test_unreadable_store_read_returns_error(void)
     setup();
     (void)mkdir(g_dirstore, 0755);
     setenv("EMBEDIQ_NVM_PATH", g_dirstore, 1);
-    uint8_t buf[64];
+    uint8_t buf[TEST_READ_LEN];
     int rc = hal_flash_read(0u, buf, sizeof(buf));
     uint32_t faults = flash_fault_count();
     printf("      read(directory store) rc=%d faults=%u\n", rc, (unsigned)faults);
@@ -172,7 +178,7 @@ static void test_unreadable_store_write_does_not_replace_it(void)
         return;
     }
     setup();
-    uint8_t orig[32];
+    uint8_t orig[TEST_STORE_LEN];
     fill_pattern(orig, sizeof(orig));
     bool seeded = hal_flash_write(0u, orig, sizeof(orig)) == HAL_OK;
 
@@ -184,19 +190,19 @@ static void test_unreadable_store_write_does_not_replace_it(void)
     (void)chmod(g_store, 0644);
     uint32_t faults = flash_fault_count();
 
-    uint8_t back[32];
+    uint8_t back[TEST_STORE_LEN];
     memset(back, 0, sizeof(back));
     int rc_read = hal_flash_read(0u, back, sizeof(back));
     long size   = file_size(g_store);
     printf("      write=%d erase=%d faults=%u | size after=%ld\n",
            rc_write, rc_erase, (unsigned)faults, size);
 
-    ASSERT(seeded, "the store was seeded with 32 bytes");
+    ASSERT(seeded, "the store was seeded");
     ASSERT(rc_write == HAL_ERR_IO, "write to an unreadable store returns HAL_ERR_IO");
     ASSERT(rc_erase == HAL_ERR_IO, "erase of an unreadable store returns HAL_ERR_IO");
     ASSERT(faults == 2u, "one HAL fault observed per failed call");
-    ASSERT(rc_read == HAL_OK && size == 32L && memcmp(back, orig, sizeof(orig)) == 0,
-           "the original 32 bytes are intact");
+    ASSERT(rc_read == HAL_OK && size == (long)TEST_STORE_LEN && memcmp(back, orig, sizeof(orig)) == 0,
+           "the original store is intact");
     ASSERT(!exists(g_store_tmp), "no temp file is left behind");
     teardown();
 }
@@ -208,7 +214,7 @@ static void test_oversized_store_is_refused_not_truncated(void)
     fill_pattern(big, sizeof(big));
     bool seeded = write_raw(g_store, big, sizeof(big));
 
-    uint8_t buf[64];
+    uint8_t buf[TEST_READ_LEN];
     int rc_read  = hal_flash_read(0u, buf, sizeof(buf));
     const uint8_t data[4] = { 1u, 2u, 3u, 4u };
     int rc_write = hal_flash_write(0u, data, sizeof(data));
@@ -230,7 +236,7 @@ static void test_write_failure_leaves_store_and_no_tmp(void)
         return;
     }
     setup();
-    uint8_t orig[32];
+    uint8_t orig[TEST_STORE_LEN];
     fill_pattern(orig, sizeof(orig));
     bool seeded = hal_flash_write(0u, orig, sizeof(orig)) == HAL_OK;
 
@@ -239,13 +245,13 @@ static void test_write_failure_leaves_store_and_no_tmp(void)
     int rc_write = hal_flash_write(0u, data, sizeof(data));
     (void)chmod(g_dir, 0755);
 
-    uint8_t back[32];
+    uint8_t back[TEST_STORE_LEN];
     memset(back, 0, sizeof(back));
     int rc_read = hal_flash_read(0u, back, sizeof(back));
 
-    ASSERT(seeded, "the store was seeded with 32 bytes");
+    ASSERT(seeded, "the store was seeded");
     ASSERT(rc_write == HAL_ERR_IO, "a write whose temp file cannot be created returns HAL_ERR_IO");
-    ASSERT(rc_read == HAL_OK && file_size(g_store) == 32L &&
+    ASSERT(rc_read == HAL_OK && file_size(g_store) == (long)TEST_STORE_LEN &&
            memcmp(back, orig, sizeof(orig)) == 0, "the store is intact");
     ASSERT(!exists(g_store_tmp), "no temp file is left behind");
     teardown();
@@ -254,11 +260,11 @@ static void test_write_failure_leaves_store_and_no_tmp(void)
 static void test_erased_region_reads_erased_value(void)
 {
     setup();
-    uint8_t orig[16];
+    uint8_t orig[TEST_REGION_LEN];
     fill_pattern(orig, sizeof(orig));
     int rc_w = hal_flash_write(0u, orig, sizeof(orig));
     int rc_e = hal_flash_erase(4u, 4u);
-    uint8_t back[16];
+    uint8_t back[TEST_REGION_LEN];
     int rc_r = hal_flash_read(0u, back, sizeof(back));
 
     bool ok = (rc_w == HAL_OK) && (rc_e == HAL_OK) && (rc_r == HAL_OK);
@@ -273,16 +279,16 @@ static void test_erased_region_reads_erased_value(void)
 static void test_short_store_reads_zero_beyond_length(void)
 {
     setup();
-    uint8_t orig[8];
+    uint8_t orig[TEST_SHORT_LEN];
     fill_pattern(orig, sizeof(orig));
     bool seeded = write_raw(g_store, orig, sizeof(orig));
-    uint8_t back[16];
+    uint8_t back[TEST_REGION_LEN];
     memset(back, 0xAA, sizeof(back));
     int rc = hal_flash_read(0u, back, sizeof(back));
 
     bool ok = seeded && (rc == HAL_OK) && memcmp(back, orig, sizeof(orig)) == 0;
     for (size_t i = sizeof(orig); i < sizeof(back); i++) if (back[i] != 0u) ok = false;
-    ASSERT(ok, "the stored 8 bytes, then zeros, HAL_OK");
+    ASSERT(ok, "the stored bytes, then zeros, HAL_OK");
     teardown();
 }
 

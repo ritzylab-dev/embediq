@@ -7,8 +7,18 @@
  * filesystem.  Storage path is controlled by the EMBEDIQ_NVM_PATH env var;
  * if unset, defaults to $HOME/.embediq/nvm_store.bin.
  *
- * Writes are atomic: data is written to <path>.tmp first, then rename(2)
- * moves it over the original.
+ * The store is one flat backing file holding the whole partition: a read
+ * copies bytes out of it, and a write or erase reads the whole file, changes
+ * the region and writes the whole file back. Writes are atomic: data is
+ * written to <path>.tmp, flushed and fsync'd, then rename(2) moves it over
+ * the original; on any failure the temp file is removed and the original is
+ * untouched. An absent backing file (ENOENT) is an empty store and reads as
+ * zeros; any other open or read failure is HAL_ERR_IO, and a backing file
+ * larger than HAL_FLASH_POSIX_MAX_SIZE is HAL_ERR_INVALID — a write or erase
+ * then fails without touching the store. To exercise the failures: point
+ * EMBEDIQ_NVM_PATH at a directory for a real read error (fopen succeeds,
+ * fread fails), or use the host hooks below (hal_flash__fail_next_read /
+ * hal_flash__fail_next_write) for a counted number of failures.
  *
  * Only includes: hal_flash.h (core/include/hal) and C stdlib/POSIX headers.
  * Zero embediq_*.h includes — HAL has no knowledge of the framework.
@@ -24,8 +34,11 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
+#include <errno.h>      /* ENOENT */
 #include <stdlib.h>     /* getenv */
 #include <sys/stat.h>   /* mkdir  */
+#include <unistd.h>     /* fsync — POSIX HAL include */
 #include <limits.h>     /* PATH_MAX */
 
 /* ---------------------------------------------------------------------------
@@ -45,6 +58,10 @@
 
 static char s_path[PATH_BUF];
 static char s_tmp_path[PATH_BUF];
+
+/* True when the last resolve_paths() would have truncated a path: a truncated
+ * temp path could alias the store path, so every operation is refused. */
+static bool s_path_invalid = false;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 /* Test-only: hal_flash_write calls attempted, and how many of the next
@@ -72,16 +89,24 @@ static void ensure_parent_dir(const char *path)
     mkdir(dir, 0755);   /* ignore EEXIST */
 }
 
+/** True when snprintf's result rc means the output was cut short (or failed). */
+static bool truncated(int rc)
+{
+    return rc < 0 || (size_t)rc >= PATH_BUF;
+}
+
 /**
  * Resolve paths from EMBEDIQ_NVM_PATH env var (or default).
  * Re-reads the env var every call so tests can change it via setenv().
+ * Sets s_path_invalid when either path would not fit in PATH_BUF.
  */
 static void resolve_paths(void)
 {
     const char *env = getenv("EMBEDIQ_NVM_PATH");
     if (env && env[0] != '\0') {
-        snprintf(s_path,     PATH_BUF, "%s", env);
-        snprintf(s_tmp_path, PATH_BUF, "%s.tmp", env);
+        int rc_path = snprintf(s_path,     PATH_BUF, "%s", env);
+        int rc_tmp  = snprintf(s_tmp_path, PATH_BUF, "%s.tmp", env);
+        s_path_invalid = truncated(rc_path) || truncated(rc_tmp);
     } else {
         const char *home = getenv("HOME");
         if (!home) home = "/tmp";
@@ -92,8 +117,9 @@ static void resolve_paths(void)
         mkdir(dir, 0755);
 
         int dir_max = (int)(PATH_BUF - sizeof("/nvm_store.bin.tmp"));
-        snprintf(s_path,     PATH_BUF, "%.*s/nvm_store.bin",     dir_max, dir);
-        snprintf(s_tmp_path, PATH_BUF, "%.*s/nvm_store.bin.tmp", dir_max, dir);
+        int rc_path = snprintf(s_path,     PATH_BUF, "%.*s/nvm_store.bin",     dir_max, dir);
+        int rc_tmp  = snprintf(s_tmp_path, PATH_BUF, "%.*s/nvm_store.bin.tmp", dir_max, dir);
+        s_path_invalid = truncated(rc_path) || truncated(rc_tmp);
     }
 }
 
@@ -101,27 +127,65 @@ static void resolve_paths(void)
  * File helpers
  * ------------------------------------------------------------------------- */
 
-/** Read the entire backing file into buf (up to buf_size bytes).
- *  Returns the file size, or 0 if the file doesn't exist. */
-static size_t read_file(void *buf, size_t buf_size)
+/**
+ * Read the entire backing file into buf (up to buf_size bytes); *out_len is
+ * the number of bytes read.
+ * HAL_OK: the file was read in full, or does not exist (ENOENT: an empty
+ * store, *out_len = 0). HAL_ERR_IO: any other open failure, or a read error.
+ * HAL_ERR_INVALID: the file holds more than buf_size bytes, so a rewrite from
+ * buf would truncate it. Each failure emits its one HAL observation here.
+ */
+static int read_file(void *buf, size_t buf_size, size_t *out_len)
 {
+    *out_len = 0u;
     FILE *f = fopen(s_path, "rb");
-    if (!f) return 0u;
-    size_t n = fread(buf, 1u, buf_size, f);
-    fclose(f);
-    return n;
+    if (!f) {
+        if (errno == ENOENT) return HAL_OK;   /* absent store: empty */
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+    size_t n  = fread(buf, 1u, buf_size, f);
+    int    rc = HAL_OK;
+    if (ferror(f)) {
+        rc = HAL_ERR_IO;
+    } else if (n == buf_size) {
+        /* A full buffer: the store is too large if any byte remains. */
+        if (fgetc(f) != EOF)  rc = HAL_ERR_INVALID;
+        else if (ferror(f))   rc = HAL_ERR_IO;
+    }
+    (void)fclose(f);   /* read-only stream: nothing buffered to lose */
+    if (rc != HAL_OK) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, rc);
+        return rc;
+    }
+    *out_len = n;
+    return HAL_OK;
 }
 
-/** Atomically write buf[0..len) to the backing file (tmp + rename). */
+/**
+ * Atomically write buf[0..len) to the backing file: write <path>.tmp, flush,
+ * fsync and close it, then rename it over the store. A failure at any step
+ * removes the temp file and leaves the store as it was; it emits one HAL
+ * observation and returns HAL_ERR_IO.
+ */
 static int write_file(const void *buf, size_t len)
 {
     ensure_parent_dir(s_tmp_path);
     FILE *f = fopen(s_tmp_path, "wb");
     if (!f) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
-    size_t written = fwrite(buf, 1u, len, f);
-    fclose(f);
-    if (written != len) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
-    if (rename(s_tmp_path, s_path) != 0) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
+
+    /* A buffered write reports ENOSPC/EIO at flush or close, not at fwrite. */
+    bool ok = fwrite(buf, 1u, len, f) == len;
+    ok = ok && (fflush(f) == 0);
+    ok = ok && (fsync(fileno(f)) == 0);   /* durable before it replaces the store */
+    if (fclose(f) != 0) ok = false;
+    if (ok && rename(s_tmp_path, s_path) != 0) ok = false;
+
+    if (!ok) {
+        (void)remove(s_tmp_path);   /* never left behind, never renamed in */
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
     return HAL_OK;
 }
 
@@ -140,14 +204,17 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
         return HAL_ERR_IO;
     }
 #endif
+    if (s_path_invalid) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
 
-    /* Start with zeroed buffer (simulates erased flash). */
-    memset(buf, 0, len);
-
-    /* Read current file contents. */
+    /* Read current file contents. On failure buf is left unspecified;
+     * read_file emitted the one observation for it (hal_defs.h). */
     uint8_t file_buf[HAL_FLASH_POSIX_MAX_SIZE];   /* 64 KiB — generous for NVM store */
-    size_t file_len = read_file(file_buf, sizeof(file_buf));
+    size_t file_len = 0u;
+    int rc = read_file(file_buf, sizeof(file_buf), &file_len);
+    if (rc != HAL_OK) return rc;
 
+    /* Bytes beyond the stored length read as zeros. */
+    memset(buf, 0, len);
     if (file_len > (size_t)addr) {
         size_t avail = file_len - (size_t)addr;
         size_t copy  = (avail < len) ? avail : len;
@@ -169,11 +236,16 @@ int hal_flash_write(uint32_t addr, const void *buf, size_t len)
     }
 #endif
     resolve_paths();
+    if (s_path_invalid) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
 
-    /* Read current file (may be empty). */
+    /* Read current file (may be absent). A failed or oversized read returns
+     * without writing: the store is never rebuilt from what could not be
+     * read. read_file emitted the one observation for it (hal_defs.h). */
     uint8_t file_buf[HAL_FLASH_POSIX_MAX_SIZE];
     memset(file_buf, 0, sizeof(file_buf));
-    size_t file_len = read_file(file_buf, sizeof(file_buf));
+    size_t file_len = 0u;
+    int rc = read_file(file_buf, sizeof(file_buf), &file_len);
+    if (rc != HAL_OK) return rc;
 
     /* Compute required file size after this write. */
     size_t needed = (size_t)addr + len;
@@ -189,11 +261,15 @@ int hal_flash_write(uint32_t addr, const void *buf, size_t len)
 int hal_flash_erase(uint32_t addr, size_t len)
 {
     resolve_paths();
+    if (s_path_invalid) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
 
-    /* Read current file. */
+    /* Read current file; on failure return without writing, as in
+     * hal_flash_write. read_file emitted the one observation (hal_defs.h). */
     uint8_t file_buf[HAL_FLASH_POSIX_MAX_SIZE];
     memset(file_buf, 0, sizeof(file_buf));
-    size_t file_len = read_file(file_buf, sizeof(file_buf));
+    size_t file_len = 0u;
+    int rc = read_file(file_buf, sizeof(file_buf), &file_len);
+    if (rc != HAL_OK) return rc;
 
     /* Fill the erased region with 0xFF (real flash erase state). */
     size_t needed = (size_t)addr + len;
