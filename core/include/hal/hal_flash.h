@@ -35,9 +35,15 @@ extern "C" {
  *   when the store could not be read, and never performs a write or erase that
  *   depends on a read that failed or on a store it could not hold in full.
  *
+ *   Ranges (read, write and erase alike): addr + len must not exceed the
+ *   implementation's capacity; an out-of-range or wrapping range is
+ *   HAL_ERR_INVALID and touches nothing. len == 0 with addr within capacity
+ *   is HAL_OK and a no-op (a write or erase does not rewrite the store).
+ *
  *   POSIX: an absent backing file is an empty store; any other open or read
  *   failure is HAL_ERR_IO; a backing file larger than the implementation holds
- *   is HAL_ERR_INVALID.
+ *   is HAL_ERR_INVALID; a store path that does not fit the path buffer is
+ *   HAL_ERR_INVALID (it is refused, never shortened).
  */
 int      hal_flash_read(uint32_t addr, void *buf, size_t len);
 /**
@@ -49,12 +55,16 @@ int      hal_flash_read(uint32_t addr, void *buf, size_t len);
  *
  *   A write (and an erase) that must first read the store fails without
  *   modifying it if that read fails or the store exceeds the implementation's
- *   capacity. A failed flush, close or rename leaves the previous store intact
- *   and no temporary copy behind. The new contents are synced to the medium
- *   before success is reported.
+ *   capacity. The renamed file and its directory entry are synced to the
+ *   medium before success is reported. A failure before the rename leaves the
+ *   previous store intact and no temp file; a directory-sync failure after the
+ *   rename returns HAL_ERR_IO with the new contents possibly visible and their
+ *   durability not guaranteed.
  *
- *   POSIX: satisfied via write-to-tmp + fflush + fsync + rename(2) in
- *   hal_flash_posix.c; the temp file is removed on any failure.
+ *   POSIX: satisfied via write-to-tmp + fflush + fsync + rename(2) + fsync of
+ *   the containing directory in hal_flash_posix.c. The promise assumes that
+ *   directory already exists: it is created on first use as a convenience,
+ *   and the durability of its own entry is not promised.
  *   ESP32 / STM32: use sector-copy-before-erase or dual-bank write.
  *   This requirement MUST be documented in any RTOS/MCU HAL implementation
  *   comment before that implementation is submitted for review.
