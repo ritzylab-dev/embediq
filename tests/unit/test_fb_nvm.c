@@ -31,6 +31,8 @@
 #include <string.h>
 #include <stdlib.h>     /* setenv */
 #include <pthread.h>
+#include <unistd.h>     /* getpid, rmdir */
+#include <sys/stat.h>   /* mkdir */
 
 /* ---------------------------------------------------------------------------
  * Public NVM API (matches embediq_nvm.h contract)
@@ -629,6 +631,70 @@ static void test_unreadable_flash_refuses_to_persist_until_flush_reloads(void)
            "unreadable flash is never overwritten; flush re-reads it and restores the table");
 }
 
+/* test_real_read_failure_puts_store_in_unreadable_state
+ * The same protection without the injection hook: the backing path is a
+ * directory, so the flash read really fails. Load: one CFG_BLOB_INVALID
+ * (read failure). set(k) → ERR, one NVM_PERSIST_FAIL state FLASH_UNREADABLE,
+ * nothing written. The path is pointed at an absent file: flush → OK with one
+ * CFG_BLOB_INVALID state 0 (no blob yet — an empty store); set(k) → OK with
+ * one flash write; after a reload k is present.
+ */
+static void test_real_read_failure_puts_store_in_unreadable_state(void)
+{
+    setup();
+    char dir[96];
+    snprintf(dir, sizeof(dir), "/tmp/test_nvm_store_dir_%d", (int)getpid());
+    (void)mkdir(dir, 0755);
+    (void)remove(TEST_NVM_PATH);
+    uint32_t k = 0x5Bu, got = 0u;
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    setenv("EMBEDIQ_NVM_PATH", dir, 1);
+    nvm__init_state();
+    nvm__load_state();
+    uint32_t blob_events = 0u;
+    for (uint8_t st = 0u; st < 4u; st++) {
+        blob_events += count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, st);
+    }
+    uint32_t read_fails = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, BLOB_STATE_READ_FAIL);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_set = embediq_nvm_set("persist.real", &k, sizeof(k));
+    uint32_t writes  = hal_flash__write_calls() - before;
+    uint32_t refused = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL,
+                                    (uint8_t)EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE);
+    uint32_t persist_fails = count_persist_fail_events();
+
+    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);   /* absent: an empty store */
+    embediq_err_t rc_flush = embediq_nvm_flush();
+    uint32_t no_blob = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, 0u);
+
+    uint32_t before2 = hal_flash__write_calls();
+    embediq_err_t rc_set2 = embediq_nvm_set("persist.real", &k, sizeof(k));
+    uint32_t writes2 = hal_flash__write_calls() - before2;
+
+    reload_from_flash();
+    bool k_after = get_u32("persist.real", &got) && got == k;
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+    (void)rmdir(dir);
+    char dir_tmp[sizeof(dir) + 4u];
+    snprintf(dir_tmp, sizeof(dir_tmp), "%s.tmp", dir);
+    (void)remove(dir_tmp);   /* a temp file a failed write may have left */
+
+    printf("      blob_events=%u read_fail_events=%u set=%d flash_writes=%u "
+           "refused_events=%u persist_fail_events=%u | flush=%d no_blob_events=%u "
+           "set_after=%d writes_after=%u k_after_reload=%d\n",
+           (unsigned)blob_events, (unsigned)read_fails, (int)rc_set, (unsigned)writes,
+           (unsigned)refused, (unsigned)persist_fails, (int)rc_flush, (unsigned)no_blob,
+           (int)rc_set2, (unsigned)writes2, (int)k_after);
+    ASSERT(blob_events == 1u && read_fails == 1u
+           && rc_set == EMBEDIQ_ERR && writes == 0u && refused == 1u && persist_fails == 1u
+           && rc_flush == EMBEDIQ_OK && no_blob == 1u
+           && rc_set2 == EMBEDIQ_OK && writes2 == 1u && k_after,
+           "a real read failure makes the store unreadable; flush on a readable path recovers");
+}
+
 /* test_set_reports_persist_failure
  * A set whose flash write fails returns EMBEDIQ_ERR and emits one
  * NVM_PERSIST_FAIL; the value is readable from RAM. The next set (write
@@ -823,6 +889,7 @@ int main(void)
     test_provision_retry_reestablishes_durability();
     test_delete_retry_reestablishes_durability();
     test_unreadable_flash_refuses_to_persist_until_flush_reloads();
+    test_real_read_failure_puts_store_in_unreadable_state();
     test_flush_reports_failure();
     test_skip_rule_never_skips_an_unpersisted_change();
 
