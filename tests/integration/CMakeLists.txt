@@ -4,13 +4,18 @@
 # Thermostat observable integration test (P1-T5)
 # ---------------------------------------------------------------------------
 
-add_executable(test_thermostat_observable test_thermostat_observable.c)
+add_executable(test_thermostat_observable
+    test_thermostat_observable.c
+    ${CMAKE_SOURCE_DIR}/examples/thermostat/fb_temp_sensor.c
+    ${CMAKE_SOURCE_DIR}/examples/thermostat/fb_temp_controller.c
+)
 
 target_include_directories(test_thermostat_observable PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/examples/thermostat
 )
 
-target_link_libraries(test_thermostat_observable PRIVATE embediq_fb_engine)
+target_link_libraries(test_thermostat_observable PRIVATE embediq_driver_fbs)
 
 target_compile_options(test_thermostat_observable PRIVATE
     -Wall

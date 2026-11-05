@@ -8,6 +8,8 @@ Verifies that check_fb_calls.py:
   - Matches RULE_ALLOW paths by equality: a main.c at any other path is checked.
   - Reports stdio in a Functional Block that sits next to an allowed host program.
   - Exits 0 when the only hits are allowed ones, and prints one 'allowed:' line each.
+  - Reports a handler that reads msg as an envelope (cast or alias) in examples/
+    and fbs/, and not in core/src, an outgoing-message helper, or (void)msg.
 
 Each test builds a throwaway tree and runs the checker on it with --root.
 
@@ -54,6 +56,20 @@ def _check(name, condition, detail=""):
     else:
         print(f"FAIL: {name}" + (f" — {detail}" if detail else ""))
         _failed.append(name)
+
+
+# Handler bodies that read msg as an EmbedIQ_Msg_t envelope (R-sub-34).
+ENVELOPE_READS = [
+    ("cast",            'n = ((const EmbedIQ_Msg_t *)msg)->payload_len;'),
+    ("const_after",     'n = ((EmbedIQ_Msg_t const *)msg)->payload_len;'),
+    ("alias_cast",      'const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;'),
+    ("alias_plain",     'const EmbedIQ_Msg_t *m = msg;'),
+]
+
+
+def _handler(body_lines):
+    return ('static void run(void *fb, const void *msg, void *d, void *s)\n{\n'
+            + ''.join(f'    {b}\n' for b in body_lines) + '}\n')
 
 
 # ── Test 1 — host program: print and sleep are allowed, exit 0 ──────────────
@@ -144,17 +160,66 @@ def test_clean_tree_exits_zero():
                "allowed:" not in out, f"output: {out!r}")
 
 
+# ── Test 6 — envelope reads through msg are reported in examples/ ────────────
+
+def test_envelope_read_reported_in_examples():
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, line in ENVELOPE_READS:
+            _write(tmp, f"examples/demo/fb_{name}.c", _handler([line]))
+        rc, out = _run(tmp)
+        _check("envelope_read_reported_in_examples: exits 1",
+               rc == 1, f"got rc={rc}")
+        for name, _ in ENVELOPE_READS:
+            _check(f"envelope_read_reported_in_examples: {name} form",
+                   f"fb_{name}.c:3: [R-sub-34]" in out, f"output: {out!r}")
+        _check("envelope_read_reported_in_examples: one report per line",
+               out.count("[R-sub-34]") == len(ENVELOPE_READS), f"output: {out!r}")
+
+
+# ── Test 7 — the same text outside fbs/ and examples/ is not this rule ──────
+
+def test_envelope_read_out_of_scope_in_core():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/src/dispatcher/demo.c",
+               _handler([line for _, line in ENVELOPE_READS]))
+        rc, out = _run(tmp)
+        _check("envelope_read_out_of_scope_in_core: exits 0",
+               rc == 0, f"got rc={rc}, output: {out!r}")
+        _check("envelope_read_out_of_scope_in_core: not reported",
+               "[R-sub-34]" not in out, f"output: {out!r}")
+
+
+# ── Test 8 — an outgoing-message helper and (void)msg are not reported ──────
+
+def test_outgoing_envelope_and_void_msg_not_reported():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "fbs/services/fb_demo.c",
+               'static EmbedIQ_Msg_t g_msg;\n'
+               'static void publish(void)\n{\n'
+               '    EmbedIQ_Msg_t *out = &g_msg;\n'
+               '    out->payload_len = 4;\n'
+               '    out->payload[0] = 1u;\n'
+               '}\n'
+               + _handler(['(void)msg;']))
+        rc, out = _run(tmp)
+        _check("outgoing_envelope_and_void_msg_not_reported: exits 0",
+               rc == 0, f"got rc={rc}, output: {out!r}")
+
+
 if __name__ == '__main__':
     test_host_program_may_print_and_sleep()
     test_host_program_other_rules_still_apply()
     test_unlisted_main_is_checked()
     test_fb_beside_host_program_may_not_print()
     test_clean_tree_exits_zero()
+    test_envelope_read_reported_in_examples()
+    test_envelope_read_out_of_scope_in_core()
+    test_outgoing_envelope_and_void_msg_not_reported()
 
     print()
     if _failed:
         print(f"FAILED: {len(_failed)} check(s): {', '.join(_failed)}")
         sys.exit(1)
     else:
-        print("All 5 tests passed.")
+        print("All 8 tests passed.")
         sys.exit(0)

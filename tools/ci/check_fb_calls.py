@@ -9,6 +9,8 @@ examples/:
   R-sub-03  — No direct OSAL, RTOS, or POSIX calls from FB code
   R-sub-03a — No blocking calls (sleep/delay) in dispatch threads
   R-stdio   — Functional Blocks never write to stdout/stderr
+  R-sub-34  — A sub-function reads payload bytes, never the envelope
+              (fbs/ and examples/ only)
 
 Host entry programs (examples/*/main.c) may print and sleep; the Functional
 Blocks they start may not. RULE_ALLOW grants those two rules to each host
@@ -81,8 +83,13 @@ SCAN_DIRS = [
     'examples',
 ]
 
+_ENVELOPE_MSG = ('sub-function msg is payload bytes — the envelope is not passed; '
+                 'memcpy into the payload type (R-sub-34)')
+
 # ── Forbidden function call patterns ────────────────────────────────────
-# Format: (regex_pattern, rule_id, human_message)
+# Format: (regex_pattern, rule_id, human_message[, scope])
+# scope is a tuple of repo-relative path prefixes the entry applies to;
+# an entry without one applies to every file under SCAN_DIRS.
 FORBIDDEN_CALLS = [
     # Dynamic allocation — I-07, R-02
     (r'\b(malloc|free|calloc|realloc)\s*\(',
@@ -146,6 +153,17 @@ FORBIDDEN_CALLS = [
     (r'\b(printf|fprintf|puts|fputs|fputc|putc|putchar|perror|vprintf)\s*\(',
      'R-stdio', 'stdio output in a Functional Block — no stdout on MCU targets — '
                 'use embediq_obs_emit() instead'),
+
+    # Envelope reads through the handler parameter — R-sub-34
+    # A run_fn's msg points at payload bytes; nothing of the EmbedIQ_Msg_t
+    # envelope is passed. Two forms are matched: a cast of msg to an envelope
+    # pointer, and an envelope pointer initialised from msg. A pattern on
+    # ->payload / ->payload_len would flag valid outgoing-message helpers,
+    # so there is none; other misuse is caught in code review.
+    (r'\(\s*(const\s+)?EmbedIQ_Msg_t\s*(const\s*)?\*\s*\)\s*msg\b',
+     'R-sub-34', _ENVELOPE_MSG, ('fbs/', 'examples/')),
+    (r'\bEmbedIQ_Msg_t\s*(const\s*)?\*\s*(const\s*)?\w+\s*=\s*(\([^)]*\)\s*)?msg\b',
+     'R-sub-34', _ENVELOPE_MSG, ('fbs/', 'examples/')),
 ]
 
 # ── Forbidden system headers in FB layers ───────────────────────────────
@@ -193,8 +211,16 @@ def scan_file(path: Path, rel: str, allowed: list) -> list:
     for lineno, line in enumerate(lines, 1):
         if is_comment_line(line):
             continue
-        for pattern, rule, message in FORBIDDEN_CALLS + FORBIDDEN_HEADERS:
+        hit_rules = set()   # one report per rule per line
+        for entry in FORBIDDEN_CALLS + FORBIDDEN_HEADERS:
+            pattern, rule, message = entry[:3]
+            scope = entry[3] if len(entry) > 3 else ()
+            if scope and not rel.startswith(scope):
+                continue
+            if rule in hit_rules:
+                continue
             if re.search(pattern, line):
+                hit_rules.add(rule)
                 if rule in allowed_rules:
                     allowed.append(f'allowed: {rel}:{lineno} {rule}')
                     continue
@@ -236,7 +262,7 @@ def main() -> int:
             print(f'  {v}')
         print(
             f'\nAll violations must be fixed before merging.\n'
-            f'See CODING_RULES.md: I-07, R-02, R-sub-03, R-sub-03a, R-stdio.'
+            f'See CODING_RULES.md: I-07, R-02, R-sub-03, R-sub-03a, R-stdio, R-sub-34.'
         )
         return 1
 

@@ -522,3 +522,21 @@ target_compile_options(test_fb_bridge PRIVATE
 )
 
 add_test(NAME unit_fb_bridge COMMAND test_fb_bridge)
+
+# ---------------------------------------------------------------------------
+# Service FB template — fb_logger reads its payload bytes
+# ---------------------------------------------------------------------------
+
+add_executable(test_fb_logger_template test_fb_logger_template.c)
+
+target_link_libraries(test_fb_logger_template PRIVATE
+    embediq_fb_logger_template
+)
+
+target_compile_options(test_fb_logger_template PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_logger_template COMMAND test_fb_logger_template)
