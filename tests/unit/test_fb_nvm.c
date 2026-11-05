@@ -11,7 +11,7 @@
  * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 32 tests passed. (0 failed)"
+ * Expected: "All 33 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -51,6 +51,7 @@ extern void        nvm__set_persist_delay_ms(uint32_t ms);
 /* Host-only flash failure injection (hal/posix/peripherals/hal_flash_posix.c). */
 extern void        hal_flash__fail_next_write(uint32_t n);
 extern void        hal_flash__fail_next_read(uint32_t n);
+extern void        hal_flash__fail_next_dir_fsync(uint32_t n);
 extern uint32_t    hal_flash__write_calls(void);
 
 /* Observatory host-only ring access (core/src/observatory/obs.c). */
@@ -726,6 +727,75 @@ static void test_set_reports_persist_failure(void)
            "failed persist returned and observed; the next persist carries the change");
 }
 
+/* The value stored on flash for key, read through the HAL, not through NVM:
+ * an entry is the key field (EMBEDIQ_NVM_KEY_SIZE bytes, NUL-padded) followed
+ * by its value bytes. Returns false if the key is not in the image. */
+static bool flash_u32(const char *key, uint32_t *out)
+{
+    static uint8_t img[EMBEDIQ_NVM_MAX_KEYS * (EMBEDIQ_NVM_KEY_SIZE + EMBEDIQ_NVM_VAL_SIZE) * 2u];
+    if (hal_flash_read(0u, img, sizeof(img)) != HAL_OK) return false;
+    size_t klen = strlen(key) + 1u;   /* with its NUL */
+    for (size_t i = 0u; i + EMBEDIQ_NVM_KEY_SIZE + sizeof(*out) <= sizeof(img); i++) {
+        if (memcmp(img + i, key, klen) == 0) {
+            memcpy(out, img + i + EMBEDIQ_NVM_KEY_SIZE, sizeof(*out));
+            return true;
+        }
+    }
+    return false;
+}
+
+/* test_set_after_directory_sync_failure_retries_and_persists
+ * A directory-sync failure after the rename: the HAL reports HAL_ERR_IO with
+ * the new store already published. set(k=2) → ERR, one NVM_PERSIST_FAIL with
+ * the HAL code; RAM and the store both hold 2; one flash write. The next
+ * set(j) → OK with one more write; after a reload k == 2 and j == 5. The
+ * flush path: a failed directory sync fails the flush; the next flush is OK.
+ */
+static void test_set_after_directory_sync_failure_retries_and_persists(void)
+{
+    setup();
+    uint32_t k1 = 1u, k2 = 2u, j = 5u, got = 0u, on_flash = 0u;
+    embediq_err_t rc_seed = embediq_nvm_set("persist.dirsync_k", &k1, sizeof(k1));
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    uint32_t before = hal_flash__write_calls();
+    hal_flash__fail_next_dir_fsync(1u);
+    embediq_err_t rc_fail = embediq_nvm_set("persist.dirsync_k", &k2, sizeof(k2));
+    uint32_t writes   = hal_flash__write_calls() - before;
+    uint32_t fails    = count_persist_fail_events();
+    uint32_t hal_code = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL, (uint8_t)HAL_ERR_IO);
+    bool in_ram       = get_u32("persist.dirsync_k", &got) && got == k2;
+    bool published    = flash_u32("persist.dirsync_k", &on_flash) && on_flash == k2;
+
+    uint32_t before2 = hal_flash__write_calls();
+    embediq_err_t rc_next = embediq_nvm_set("persist.dirsync_j", &j, sizeof(j));
+    uint32_t writes2 = hal_flash__write_calls() - before2;
+
+    reload_from_flash();
+    uint32_t got_k = 0u, got_j = 0u;
+    bool both = get_u32("persist.dirsync_k", &got_k) && got_k == k2
+             && get_u32("persist.dirsync_j", &got_j) && got_j == j;
+
+    hal_flash__fail_next_dir_fsync(1u);
+    embediq_err_t rc_flush_fail = embediq_nvm_flush();
+    embediq_err_t rc_flush_ok   = embediq_nvm_flush();
+    hal_flash__fail_next_dir_fsync(0u);
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    printf("      seed=%d failed_set=%d flash_writes=%u persist_fail_events=%u with_hal_code=%u "
+           "in_ram=%d published=%d | next_set=%d next_writes=%u both_after_reload=%d | "
+           "flush_fail=%d flush_ok=%d\n",
+           (int)rc_seed, (int)rc_fail, (unsigned)writes, (unsigned)fails, (unsigned)hal_code,
+           (int)in_ram, (int)published, (int)rc_next, (unsigned)writes2, (int)both,
+           (int)rc_flush_fail, (int)rc_flush_ok);
+    ASSERT(rc_seed == EMBEDIQ_OK && rc_fail == EMBEDIQ_ERR && writes == 1u
+           && fails == 1u && hal_code == 1u && in_ram && published
+           && rc_next == EMBEDIQ_OK && writes2 == 1u && both
+           && rc_flush_fail == EMBEDIQ_ERR && rc_flush_ok == EMBEDIQ_OK,
+           "a directory-sync failure fails the persist; the next persist carries the change");
+}
+
 /* test_provision_retry_reestablishes_durability
  * Seed; flash fails: provision → ERR, flush → ERR. Flash recovers: provision
  * again → OK with exactly one flash write; after a reload the identity is
@@ -890,6 +960,7 @@ int main(void)
     test_delete_retry_reestablishes_durability();
     test_unreadable_flash_refuses_to_persist_until_flush_reloads();
     test_real_read_failure_puts_store_in_unreadable_state();
+    test_set_after_directory_sync_failure_retries_and_persists();
     test_flush_reports_failure();
     test_skip_rule_never_skips_an_unpersisted_change();
 
