@@ -17,7 +17,7 @@ A water treatment plant edge gateway monitoring three field sensors via a simula
 Three application FBs form a complete edge-to-cloud pipeline:
 
 - **fb_field_receiver** — polls field sensors every second, publishes `MSG_FIELD_READING`
-- **fb_policy_engine** — applies threshold rules, publishes `MSG_ALERT` (on state change only, no duplicates) + `MSG_TELEMETRY` (throttled 2:1)
+- **fb_policy_engine** — applies threshold rules, publishes `MSG_ALERT` + `MSG_TELEMETRY` (throttled 2:1). `MSG_ALERT` is published HIGH on state change only — no duplicates
 - **fb_north_bridge** — sends telemetry north to cloud (simulated: each send is an Observatory event) or buffers locally when offline. Three sub-functions: `north_timer` (connectivity FSM), `north_telemetry` and `north_alert` (one per message type)
 
 Supporting FBs: `fb_timer`, `fb_nvm`, `fb_watchdog` (from `fbs/drivers/`).
@@ -90,7 +90,7 @@ fb_north_bridge is an application-defined event:
 
 `code` is the event code and `val` its value, as defined in `fb_north_bridge.c`.
 Per-sensor codes are a base plus the sensor id (0 = Tank_Temp, 1 = Tank_Pressure,
-2 = Pump_Flow):
+2 = Pump_Flow). A sensor id outside that range is reported as base + 15 (0x0F):
 
 | Code (decimal) | Event | `val` |
 | -------------- | ----- | ----- |

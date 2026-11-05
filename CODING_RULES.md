@@ -450,6 +450,26 @@ Enforcement: code review — any `embediq_publish()` reachable from a `fault_fn`
 
 ---
 
+### R-sub-34 · A sub-function reads payload bytes, never the envelope
+
+**R-sub-34 — A sub-function reads payload bytes, never the envelope.** A `run_fn`'s `msg` is a
+borrowed pointer to the message's payload bytes, never to the `EmbedIQ_Msg_t` envelope: there is
+no header, no `payload_len` and no source endpoint behind it. Its readable extent is the layout
+the message type defines (its `.iq` catalogue, or the FB's documented layout for a placeholder
+type); the handler reads only that layout and copies it out with `memcpy` (alignment is not
+guaranteed). The pointer is valid only for the duration of the call and is never retained. In
+engine dispatch it points at the envelope's inline payload storage and is never NULL. A direct
+delivery (`fb_engine__deliver_msg`, host test harness) passes the caller's payload storage for
+that message type, or NULL, so a handler that reads a payload checks `msg == NULL` first. A
+handler whose message carries no payload does not dereference `msg` (`(void)msg;`).
+✓ Check `msg == NULL`; `memcpy` into the payload type; read only that layout.
+✗ Reinterpreting the pointer as `EmbedIQ_Msg_t`, or reading `payload_len` or the source through
+it — nothing of the envelope is passed.
+Enforcement: checked by `tools/ci/check_fb_calls.py` for the envelope-cast and envelope-alias
+forms; other misuse is caught in code review.
+
+---
+
 ## 4. C11 Style Guide
 
 ### Naming

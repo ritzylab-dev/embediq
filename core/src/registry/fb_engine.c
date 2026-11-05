@@ -1033,7 +1033,10 @@ uint32_t fb_engine__obs_event_count(void)
 }
 
 /** Directly dispatch a message to an FB's sub-fns, bypassing the queue.
- *  Used by unit tests to verify dispatch order without OSAL task infrastructure. */
+ *  Used by unit tests to verify dispatch order without OSAL task infrastructure.
+ *  msg is the payload storage for msg_id's layout (a typed payload or a
+ *  full-array text payload as that message defines), or NULL; the engine does
+ *  not copy or pad it. */
 void fb_engine__deliver_msg(EmbedIQ_FB_Handle_t handle, uint16_t msg_id,
                              const void *msg)
 {

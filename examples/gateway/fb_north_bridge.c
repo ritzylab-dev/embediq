@@ -233,6 +233,8 @@ static void north_telemetry(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
 
+    if (msg == NULL) return;   /* direct delivery without a payload */
+
     MSG_TELEMETRY_Payload_t telem;
     memcpy(&telem, msg, sizeof(telem));
 
@@ -265,6 +267,8 @@ static void north_alert(EmbedIQ_FB_Handle_t fb, const void *msg,
                         void *fb_data, void *subfn_data)
 {
     (void)fb; (void)fb_data; (void)subfn_data;
+
+    if (msg == NULL) return;   /* direct delivery without a payload */
 
     MSG_ALERT_Payload_t alert;
     memcpy(&alert, msg, sizeof(alert));

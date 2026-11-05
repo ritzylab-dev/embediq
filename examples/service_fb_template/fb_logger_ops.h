@@ -46,6 +46,8 @@ extern "C" {
  *             `dest` is backend-specific: a filesystem path, an MQTT topic,
  *             a UART device name, etc. Returns 0 on success, non-zero error.
  *   write   — write one log line. `line` is NUL-terminated; `len` excludes NUL.
+ *             fb_logger passes at most EMBEDIQ_MSG_MAX_PAYLOAD bytes of text,
+ *             so `line` spans at most EMBEDIQ_MSG_MAX_PAYLOAD + 1 bytes.
  *             Must not block indefinitely. Must not allocate.
  *   flush   — push any buffered output to the OS. May be NULL.
  *   close   — release resources. May be NULL.

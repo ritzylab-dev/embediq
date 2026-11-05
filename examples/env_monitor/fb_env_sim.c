@@ -102,7 +102,8 @@ static float                 s_alert_threshold  = ENV_TEMP_ALERT_DEFAULT;
 
 /* ---------------------------------------------------------------------------
  * Publish one MSG_TELEMETRY_GAUGE
- * Payload: {metric_id, value, unit_id} — 7 bytes, always < EMBEDIQ_MSG_MAX_PAYLOAD
+ * Payload: {metric_id, value, unit_id} — sizeof(MSG_TELEMETRY_GAUGE_Payload_t) —
+ * 12 bytes with padding, always < EMBEDIQ_MSG_MAX_PAYLOAD
  * ------------------------------------------------------------------------- */
 
 static void publish_gauge(uint16_t metric_id, float value, uint8_t unit_id)
@@ -160,8 +161,9 @@ static void sf_tick(EmbedIQ_FB_Handle_t fb, const void *msg,
 /* ---------------------------------------------------------------------------
  * Sub-function: MSG_MQTT_CMD_RX — handle cloud commands
  * Command format (raw bytes in payload): "alert:27.5" → set threshold to 27.5°C
- * msg points at the payload bytes (EMBEDIQ_MSG_MAX_PAYLOAD of them); the
- * publisher zero-fills the bytes after the text.
+ * The command payload is a full-array text payload: msg points at
+ * EMBEDIQ_MSG_MAX_PAYLOAD bytes, and the publisher zero-fills the bytes after
+ * the text. A direct delivery must therefore pass a full-size buffer.
  * ------------------------------------------------------------------------- */
 
 static void sf_cmd(EmbedIQ_FB_Handle_t fb, const void *msg,

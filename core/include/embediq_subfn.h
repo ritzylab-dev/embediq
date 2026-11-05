@@ -43,7 +43,17 @@ typedef struct EmbedIQ_Signal_s EmbedIQ_Signal_t;
 typedef void (*embediq_subfn_init_fn)(EmbedIQ_FB_Handle_t fb, void *fb_data,
                                       void *subfn_data);
 
-/** Called for every message that matches a sub-function subscription. */
+/** Called for every message that matches a sub-function subscription.
+ *  `msg` is a borrowed pointer to the message's PAYLOAD BYTES, never to the EmbedIQ_Msg_t envelope: there is
+ *  no header, no payload_len and no source endpoint here. Its readable extent is the layout the message type
+ *  defines (its .iq catalogue, or the FB's documented layout for a placeholder type); a handler reads only that
+ *  layout and copies it out with memcpy (alignment is not guaranteed). The pointer is valid only for the duration
+ *  of the call; never retain it. In engine dispatch it points at the envelope's inline payload storage and is
+ *  never NULL. A direct delivery (fb_engine__deliver_msg, host test harness) passes the caller's payload storage
+ *  for that message type, or NULL; a handler that reads a payload checks `msg == NULL` first. A handler whose
+ *  message carries no payload does not dereference `msg` (`(void)msg;`). See CODING_RULES.md R-sub-34.
+ *  Calling context: the FB's dispatch thread; under direct delivery, the caller's thread holding the FB's
+ *  execution lock. */
 typedef void (*embediq_subfn_run_fn)(EmbedIQ_FB_Handle_t fb, const void *msg,
                                      void *fb_data, void *subfn_data);
 

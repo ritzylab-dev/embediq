@@ -113,6 +113,7 @@ static void policy_run(EmbedIQ_FB_Handle_t fb, const void *msg,
     (void)fb_data; (void)subfn_data;
 
     /* msg points at the MSG_FIELD_READING payload bytes. */
+    if (msg == NULL) return;   /* direct delivery without a payload */
     MSG_FIELD_READING_Payload_t reading;
     memcpy(&reading, msg, sizeof(reading));
 
