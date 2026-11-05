@@ -12,13 +12,20 @@
  *     NORTH_OFFLINE -> NORTH_RECONNECTING at tick 22
  *     NORTH_RECONNECTING -> NORTH_ONLINE at tick 23  (+ buffer flush)
  *
- * Sub-function 2 — "north_rx":
- *   Subscribes to MSG_TELEMETRY and MSG_ALERT.
- *   ONLINE:   prints to stdout (simulated TCP/MQTT publish).
- *   OFFLINE/RECONNECTING: buffers MSG_TELEMETRY locally (max 10 slots).
- *             MSG_ALERT is always printed (never buffered — alerts are urgent).
+ * Sub-function 2 — "north_telemetry":
+ *   Subscribes to MSG_TELEMETRY.
+ *   ONLINE:   sends the reading north (simulated TCP/MQTT publish).
+ *   OFFLINE/RECONNECTING: buffers it locally (max 10 slots).
+ *
+ * Sub-function 3 — "north_alert":
+ *   Subscribes to MSG_ALERT. Always sent north (never buffered — alerts are urgent).
+ *
+ * A sub-function receives the payload bytes only (no message id), so each
+ * message type has its own sub-function.
  *
  * FSM Observatory events are emitted automatically by embediq_sm_process().
+ * Every simulated send, buffer and link change is an application-defined
+ * Observatory event (EMBEDIQ_OBS_EVT_APP) — codes below. The FB never prints.
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_APPLICATION (3)
  *
@@ -41,12 +48,12 @@
 #include "embediq_sm.h"
 #include "embediq_config.h"
 #include "embediq_platform_msgs.h"
+#include "embediq_obs.h"
 #include "gateway_msgs.h"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdio.h>
 
 /* ---------------------------------------------------------------------------
  * Connectivity FSM states
@@ -67,6 +74,31 @@
 
 #define NORTH_BUFFER_SIZE  10u
 
+/* ---------------------------------------------------------------------------
+ * Application event codes (EMBEDIQ_OBS_EVT_APP state_or_flag), target 0xFF.
+ *
+ * Link events — msg_id = tick (seconds since boot, low 16 bits):
+ * ------------------------------------------------------------------------- */
+
+#define NORTH_EVT_LINK_DOWN          0x01u  /**< Link lost; telemetry is buffered. */
+#define NORTH_EVT_LINK_RECONNECTING  0x02u  /**< Link reconnecting. */
+#define NORTH_EVT_LINK_RESTORED      0x03u  /**< Link restored; the buffer is flushed. */
+#define NORTH_EVT_FLUSH_COUNT        0x04u  /**< Emitted before LINK_RESTORED.
+                                                 msg_id = buffered records to flush. */
+
+/* Per-sensor events — code = base + sensor_id (SENSOR_* in gateway_msgs.h,
+ * 0–2). Values are × 100 (bar, deg C or L/min; demo values 3–90 fit), saturating
+ * at 0 and 65535; no simulated value is negative. */
+#define NORTH_EVT_TELEMETRY          0x10u  /**< Sent north. msg_id = value × 100. */
+#define NORTH_EVT_TELEMETRY_FLUSHED  0x20u  /**< Buffered record sent on reconnect.
+                                                 msg_id = value × 100. */
+#define NORTH_EVT_BUFFERED           0x30u  /**< Buffered while offline. msg_id = seq. */
+#define NORTH_EVT_BUFFER_FULL_DROP   0x40u  /**< Buffer full; dropped. msg_id = seq. */
+#define NORTH_EVT_ALERT_ON           0x50u  /**< Alert raised. msg_id = value × 100. */
+#define NORTH_EVT_ALERT_OFF          0x60u  /**< Alert cleared. msg_id = value × 100. */
+#define NORTH_EVT_ALERT_THRESHOLD    0x70u  /**< Follows ALERT_ON / ALERT_OFF.
+                                                 msg_id = threshold × 100. */
+
 typedef struct {
     uint8_t  sensor_id;
     uint16_t seq_num;
@@ -77,11 +109,36 @@ typedef struct {
  * Module state (R-02: static, no malloc)
  * ------------------------------------------------------------------------- */
 
+static uint8_t             s_ep          = 0xFFu;  /* this FB's endpoint (cached in init) */
 static uint32_t            g_tick        = 0u;
 static uint8_t             g_conn_state  = NORTH_ONLINE;  /* mirror of FSM state */
 
 static NorthBufferEntry_t  g_buffer[NORTH_BUFFER_SIZE];
 static uint8_t             g_buf_count   = 0u;  /* entries currently stored  */
+
+/* ---------------------------------------------------------------------------
+ * Observatory helpers
+ * ------------------------------------------------------------------------- */
+
+static void north_emit(uint8_t code, uint16_t value)
+{
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu, code, value);
+}
+
+/** Per-sensor code: base + sensor_id. */
+static uint8_t sensor_code(uint8_t base, uint8_t sensor_id)
+{
+    return (uint8_t)(base + ((sensor_id < SENSOR_COUNT) ? sensor_id : 0x0Fu));
+}
+
+/** value × 100 as a saturating uint16. */
+static uint16_t hundredths(float value)
+{
+    float v = value * 100.0f + 0.5f;
+    if (v <= 0.0f)     { return 0u; }
+    if (v >= 65535.0f) { return 65535u; }
+    return (uint16_t)v;
+}
 
 /* ---------------------------------------------------------------------------
  * Connectivity FSM guard functions (pure — read-only access to g_tick)
@@ -113,35 +170,30 @@ static void action_go_offline(const void *msg, void *fb_data)
 {
     (void)msg; (void)fb_data;
     g_conn_state = NORTH_OFFLINE;
-    printf("\n[NORTH] *** Link down at t=%us — buffering telemetry locally ***\n\n",
-           (unsigned)g_tick);
+    north_emit(NORTH_EVT_LINK_DOWN, (uint16_t)g_tick);
 }
 
 static void action_go_reconnecting(const void *msg, void *fb_data)
 {
     (void)msg; (void)fb_data;
     g_conn_state = NORTH_RECONNECTING;
-    printf("\n[NORTH] Link reconnecting at t=%us...\n", (unsigned)g_tick);
+    north_emit(NORTH_EVT_LINK_RECONNECTING, (uint16_t)g_tick);
 }
 
 static void action_link_restored(const void *msg, void *fb_data)
 {
     (void)msg; (void)fb_data;
     g_conn_state = NORTH_ONLINE;
-    printf("\n[NORTH] Link restored at t=%us — flushing %u buffered records\n\n",
-           (unsigned)g_tick, (unsigned)g_buf_count);
+    north_emit(NORTH_EVT_FLUSH_COUNT, (uint16_t)g_buf_count);
+    north_emit(NORTH_EVT_LINK_RESTORED, (uint16_t)g_tick);
 
     /* Flush local buffer in order. */
-    static const char *k_sensor_names[] = { "Tank_Temp", "Tank_Pressure", "Pump_Flow" };
     for (uint8_t i = 0u; i < g_buf_count; i++) {
         const NorthBufferEntry_t *e = &g_buffer[i];
-        const char *name = (e->sensor_id < SENSOR_COUNT)
-                           ? k_sensor_names[e->sensor_id] : "unknown";
-        printf("  [-> CLOUD buffered] TELEMETRY  %-16s  value=%.2f  seq=%u\n",
-               name, (double)e->value, (unsigned)e->seq_num);
+        north_emit(sensor_code(NORTH_EVT_TELEMETRY_FLUSHED, e->sensor_id),
+                   hundredths(e->value));
     }
     g_buf_count = 0u;
-    printf("\n");
 }
 
 /* ---------------------------------------------------------------------------
@@ -172,73 +224,69 @@ static void north_timer(EmbedIQ_FB_Handle_t fb, const void *msg,
 }
 
 /* ---------------------------------------------------------------------------
- * Sub-function 2: north_rx — publishes or buffers telemetry/alerts
+ * Sub-function 2: north_telemetry — sends or buffers MSG_TELEMETRY
+ * msg points at the MSG_TELEMETRY payload bytes.
  * ------------------------------------------------------------------------- */
 
-static const char *sensor_name(uint8_t sid)
-{
-    static const char *k_names[] = { "Tank_Temp", "Tank_Pressure", "Pump_Flow" };
-    return (sid < SENSOR_COUNT) ? k_names[sid] : "unknown";
-}
-
-static void north_rx(EmbedIQ_FB_Handle_t fb, const void *msg,
-                     void *fb_data, void *subfn_data)
+static void north_telemetry(EmbedIQ_FB_Handle_t fb, const void *msg,
+                            void *fb_data, void *subfn_data)
 {
     (void)fb; (void)fb_data; (void)subfn_data;
 
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
+    if (msg == NULL) return;   /* direct delivery without a payload */
 
-    if (m->msg_id == MSG_ALERT) {
-        /* Alerts always go through — never buffered. */
-        MSG_ALERT_Payload_t alert;
-        memcpy(&alert, m->payload, sizeof(alert));
-        if (alert.active) {
-            printf("[-> CLOUD] ALERT ***  %-16s  value=%.2f  threshold=%.2f  ACTIVE\n",
-                   sensor_name(alert.sensor_id),
-                   (double)alert.value, (double)alert.threshold);
+    MSG_TELEMETRY_Payload_t telem;
+    memcpy(&telem, msg, sizeof(telem));
+
+    if (g_conn_state == NORTH_ONLINE) {
+        north_emit(sensor_code(NORTH_EVT_TELEMETRY, telem.sensor_id),
+                   hundredths(telem.value));
+    } else {
+        /* Buffer locally. */
+        if (g_buf_count < NORTH_BUFFER_SIZE) {
+            NorthBufferEntry_t *slot = &g_buffer[g_buf_count];
+            slot->sensor_id = telem.sensor_id;
+            slot->seq_num   = telem.seq_num;
+            slot->value     = telem.value;
+            g_buf_count++;
+            north_emit(sensor_code(NORTH_EVT_BUFFERED, telem.sensor_id),
+                       telem.seq_num);
         } else {
-            printf("[-> CLOUD] ALERT clr  %-16s  value=%.2f  threshold=%.2f  cleared\n",
-                   sensor_name(alert.sensor_id),
-                   (double)alert.value, (double)alert.threshold);
-        }
-        return;
-    }
-
-    if (m->msg_id == MSG_TELEMETRY) {
-        MSG_TELEMETRY_Payload_t telem;
-        memcpy(&telem, m->payload, sizeof(telem));
-
-        if (g_conn_state == NORTH_ONLINE) {
-            printf("[-> CLOUD] TELEMETRY  %-16s  value=%.2f  seq=%u\n",
-                   sensor_name(telem.sensor_id),
-                   (double)telem.value, (unsigned)telem.seq_num);
-        } else {
-            /* Buffer locally. */
-            if (g_buf_count < NORTH_BUFFER_SIZE) {
-                NorthBufferEntry_t *slot = &g_buffer[g_buf_count];
-                slot->sensor_id = telem.sensor_id;
-                slot->seq_num   = telem.seq_num;
-                slot->value     = telem.value;
-                g_buf_count++;
-                printf("[BUFFER] %-16s  seq=%u  buffered=%u/%u\n",
-                       sensor_name(telem.sensor_id),
-                       (unsigned)telem.seq_num,
-                       (unsigned)g_buf_count, NORTH_BUFFER_SIZE);
-            } else {
-                printf("[BUFFER] FULL — dropped %-16s seq=%u\n",
-                       sensor_name(telem.sensor_id), (unsigned)telem.seq_num);
-            }
+            north_emit(sensor_code(NORTH_EVT_BUFFER_FULL_DROP, telem.sensor_id),
+                       telem.seq_num);
         }
     }
 }
 
 /* ---------------------------------------------------------------------------
- * FB init — register two sub-functions
+ * Sub-function 3: north_alert — sends MSG_ALERT (never buffered)
+ * msg points at the MSG_ALERT payload bytes.
+ * ------------------------------------------------------------------------- */
+
+static void north_alert(EmbedIQ_FB_Handle_t fb, const void *msg,
+                        void *fb_data, void *subfn_data)
+{
+    (void)fb; (void)fb_data; (void)subfn_data;
+
+    if (msg == NULL) return;   /* direct delivery without a payload */
+
+    MSG_ALERT_Payload_t alert;
+    memcpy(&alert, msg, sizeof(alert));
+    north_emit(sensor_code(alert.active ? NORTH_EVT_ALERT_ON : NORTH_EVT_ALERT_OFF,
+                           alert.sensor_id),
+               hundredths(alert.value));
+    north_emit(sensor_code(NORTH_EVT_ALERT_THRESHOLD, alert.sensor_id),
+               hundredths(alert.threshold));
+}
+
+/* ---------------------------------------------------------------------------
+ * FB init — register three sub-functions
  * ------------------------------------------------------------------------- */
 
 static void north_bridge_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb_data;
+    s_ep = embediq_engine_fb_ep(fb);
 
     /* Sub-fn 1: timer handler drives the connectivity FSM. */
     static const uint16_t k_timer_subs[] = { MSG_TIMER_1SEC };
@@ -255,23 +303,39 @@ static void north_bridge_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
         .osal_signal        = NULL,
     };
 
-    /* Sub-fn 2: data handler publishes or buffers telemetry and alerts. */
-    static const uint16_t k_rx_subs[] = { MSG_TELEMETRY, MSG_ALERT };
-    static EmbedIQ_SubFn_Config_t k_rx_cfg = {
-        .name               = "north_rx",
+    /* Sub-fn 2: sends or buffers telemetry. */
+    static const uint16_t k_telem_subs[] = { MSG_TELEMETRY };
+    static EmbedIQ_SubFn_Config_t k_telem_cfg = {
+        .name               = "north_telemetry",
         .init_order         = 2u,
         .init_fn            = NULL,
-        .run_fn             = north_rx,
+        .run_fn             = north_telemetry,
         .exit_fn            = NULL,
-        .subscriptions      = k_rx_subs,
-        .subscription_count = 2u,
+        .subscriptions      = k_telem_subs,
+        .subscription_count = 1u,
+        .subfn_data         = NULL,
+        .fsm                = NULL,
+        .osal_signal        = NULL,
+    };
+
+    /* Sub-fn 3: sends alerts. */
+    static const uint16_t k_alert_subs[] = { MSG_ALERT };
+    static EmbedIQ_SubFn_Config_t k_alert_cfg = {
+        .name               = "north_alert",
+        .init_order         = 3u,
+        .init_fn            = NULL,
+        .run_fn             = north_alert,
+        .exit_fn            = NULL,
+        .subscriptions      = k_alert_subs,
+        .subscription_count = 1u,
         .subfn_data         = NULL,
         .fsm                = NULL,
         .osal_signal        = NULL,
     };
 
     embediq_subfn_register(fb, &k_timer_cfg);
-    embediq_subfn_register(fb, &k_rx_cfg);
+    embediq_subfn_register(fb, &k_telem_cfg);
+    embediq_subfn_register(fb, &k_alert_cfg);
 }
 
 /* ---------------------------------------------------------------------------

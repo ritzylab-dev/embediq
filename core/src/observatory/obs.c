@@ -218,6 +218,7 @@ static const char *event_tag(uint8_t et)
         case EMBEDIQ_OBS_EVT_FAULT:      return "FLT";
         case EMBEDIQ_OBS_EVT_QUEUE_DROP: return "DRP";
         case EMBEDIQ_OBS_EVT_OVERFLOW:   return "OVF";
+        case EMBEDIQ_OBS_EVT_APP:        return "APP";
         default:                          return "???";
     }
 }
@@ -266,6 +267,7 @@ static uint32_t obs_timestamp_us(void)
  *   LIFECYCLE:  [timestamp_us] LC  <fb> → N/A  <state_name>  seq=N
  *   FSM_TRANS:  [timestamp_us] FSM state_S → state_T  msg=0xXXXX  seq=N
  *   OVERFLOW:   [timestamp_us] OVF dropped=N  seq=N
+ *   APP:        [timestamp_us] APP <src_fb> → <tgt_fb>  code=C val=V  seq=N
  *   Others:     [timestamp_us] TAG <src_fb> → <tgt_fb>  msg=0xXXXX  seq=N
  */
 static void format_event_internal(const EmbedIQ_Event_t *evt,
@@ -293,6 +295,16 @@ static void format_event_internal(const EmbedIQ_Event_t *evt,
                  (unsigned)evt->timestamp_us,
                  event_tag(evt->event_type),
                  (unsigned)evt->msg_id,   /* overflow count packed here */
+                 (unsigned)evt->sequence);
+    } else if (evt->event_type == EMBEDIQ_OBS_EVT_APP) {
+        /* code and value are defined by the emitting FB */
+        snprintf(buf, n, "[%10u] %s %s → %s  code=%u val=%u  seq=%u",
+                 (unsigned)evt->timestamp_us,
+                 event_tag(evt->event_type),
+                 fb_name(evt->source_fb_id),
+                 fb_name(evt->target_fb_id),
+                 (unsigned)evt->state_or_flag,
+                 (unsigned)evt->msg_id,
                  (unsigned)evt->sequence);
     } else {
         snprintf(buf, n, "[%10u] %s %s → %s  msg=0x%04x  seq=%u",

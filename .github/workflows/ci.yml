@@ -119,6 +119,9 @@ jobs:
       - name: FB layer call enforcement — strict (I-07, R-02, R-sub-03)
         run: python3 tools/ci/check_fb_calls.py
 
+      - name: FB layer call checker — per-rule allowance tests
+        run: python3 tools/ci/test_check_fb_calls.py
+
       - name: Binary blob detection — warning
         run: python3 tools/ci/binary_blob_check.py
 

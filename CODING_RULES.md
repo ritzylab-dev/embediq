@@ -51,6 +51,7 @@ Any PR violating these will be rejected.
 | R-11 | All sizing in `embediq_config.h`. Validated by `validator.py` at build.                                                                   |             |
 | R-12 | Sub-function registrations only inside FB `init_fn`.                                                                                      |             |
 | R-15 | Sub-function execution order when multiple sub-fns match same message = registration order (init_order ascending). Must be deterministic. | Code review |
+| R-stdio | Functional Blocks never write to stdout/stderr. They report through the Observatory. | `check_fb_calls.py` |
 
 ---
 
@@ -123,6 +124,24 @@ EMBEDIQ_SUBS(my_subs, MSG_TIMER_100MS);
 // ✗ WRONG — blocks the dispatch thread for this FB
 usleep(100 * 1000);
 embediq_osal_delay_ms(100);
+```
+
+---
+
+### R-stdio · Functional Blocks never write to stdout/stderr
+
+**Enforcement:** CI — `tools/ci/check_fb_calls.py` (hard failure)
+
+Functional Blocks never write to stdout/stderr (printf, fprintf, puts, fputs, fputc, putc,
+putchar, perror, vprintf). They report through the Observatory. Host entry programs under
+examples/*/main.c are exempt by exact path. Enforced by tools/ci/check_fb_calls.py.
+
+```c
+// ✓ CORRECT — an application-defined Observatory event; the FB documents code and value
+embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu, BLINK_EVT_LEVEL, value);
+
+// ✗ WRONG — there is no stdout on an MCU target
+printf("[blink_led] level=%u\n", level);
 ```
 
 ---
@@ -428,6 +447,26 @@ publish into a full queue is a bus-capacity wait, and two dispatch threads publi
 each other's full queues plus a thread waiting for that executor's lock form a cycle no lock rule
 breaks. `embediq_bus_post_async()` never waits: a full HIGH queue is a dropped, observed delivery.
 Enforcement: code review — any `embediq_publish()` reachable from a `fault_fn` is rejected.
+
+---
+
+### R-sub-34 · A sub-function reads payload bytes, never the envelope
+
+**R-sub-34 — A sub-function reads payload bytes, never the envelope.** A `run_fn`'s `msg` is a
+borrowed pointer to the message's payload bytes, never to the `EmbedIQ_Msg_t` envelope: there is
+no header, no `payload_len` and no source endpoint behind it. Its readable extent is the layout
+the message type defines (its `.iq` catalogue, or the FB's documented layout for a placeholder
+type); the handler reads only that layout and copies it out with `memcpy` (alignment is not
+guaranteed). The pointer is valid only for the duration of the call and is never retained. In
+engine dispatch it points at the envelope's inline payload storage and is never NULL. A direct
+delivery (`fb_engine__deliver_msg`, host test harness) passes the caller's payload storage for
+that message type, or NULL, so a handler that reads a payload checks `msg == NULL` first. A
+handler whose message carries no payload does not dereference `msg` (`(void)msg;`).
+✓ Check `msg == NULL`; `memcpy` into the payload type; read only that layout.
+✗ Reinterpreting the pointer as `EmbedIQ_Msg_t`, or reading `payload_len` or the source through
+it — nothing of the envelope is passed.
+Enforcement: checked by `tools/ci/check_fb_calls.py` for the envelope-cast and envelope-alias
+forms; other misuse is caught in code review.
 
 ---
 

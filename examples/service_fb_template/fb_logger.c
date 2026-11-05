@@ -9,13 +9,19 @@
  *   - Zero OSAL / RTOS / POSIX threading calls (R-sub-03).
  *   - Zero blocking primitives in handlers (R-sub-03a).
  *   - Zero dynamic allocation (I-07, R-02) — static FB state only.
- *   - Payload access via memcpy into a local bounded buffer (I-03 compliant).
+ *   - The handler reads payload bytes, never the envelope (R-sub-34): it
+ *     copies them into a local bounded buffer.
+ *
+ * MSG_LOG_ENTRY payload: up to EMBEDIQ_MSG_MAX_PAYLOAD bytes of text;
+ * NUL-terminated when shorter than the maximum; a direct delivery must pass
+ * a full-size buffer.
  *
  * MSG_LOG_ENTRY ID = 0x1600 is used as a placeholder in this template.
  * In a real project, reserve the message ID in messages_registry.json
  * (community / third-party range 0x1400–0xFFFF) and generate the payload
  * struct from an .iq schema. Hand-written payload structs are forbidden
- * (I-04).
+ * (I-04). The registry reserves 1750–1799 for a production logger; 0x1600
+ * is a placeholder outside the catalogue.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -26,7 +32,7 @@
 #include "fb_logger.h"
 #include "embediq_subfn.h"
 #include "embediq_bus.h"
-#include "embediq_msg.h"
+#include "embediq_config.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -39,8 +45,10 @@
  * ------------------------------------------------------------------------- */
 #define MSG_LOG_ENTRY  0x1600u
 
-/* Bounded log-line buffer. Size chosen to fit EmbedIQ_Msg_t.payload. */
-#define LOGGER_LINE_MAX  64u
+/* Log-line buffer: EMBEDIQ_MSG_MAX_PAYLOAD bytes of text + 1 NUL. The backend
+ * gets a NUL-terminated line and a length that excludes the NUL
+ * (fb_logger_ops.h), so a full-size payload needs one byte more. */
+#define LOGGER_LINE_MAX  (EMBEDIQ_MSG_MAX_PAYLOAD + 1u)
 
 /* ---------------------------------------------------------------------------
  * Module state (static — no dynamic allocation, R-02)
@@ -57,21 +65,20 @@ static void logger_run(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
 
-    if (g_ops == NULL || g_ops->write == NULL || msg == NULL) {
+    if (msg == NULL) return;   /* direct delivery without a payload */
+    if (g_ops == NULL || g_ops->write == NULL) {
         return;  /* backend not registered — template is inert */
     }
 
-    /* Extract a bounded, NUL-terminated line from the inline payload.
-     * EmbedIQ_Msg_t.payload is uint8_t[EMBEDIQ_MSG_MAX_PAYLOAD]; copy into a
-     * local buffer, then force termination at the last byte. */
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
+    /* msg is the MSG_LOG_ENTRY payload bytes (no envelope, no length): copy
+     * at most EMBEDIQ_MSG_MAX_PAYLOAD bytes, stopping at the first NUL, and
+     * terminate the copy. */
     char line[LOGGER_LINE_MAX];
-
-    uint16_t n = m->payload_len;
-    if (n >= sizeof(line)) {
-        n = (uint16_t)(sizeof(line) - 1u);
-    }
-    memcpy(line, m->payload, n);
+    const uint8_t *nul = memchr(msg, 0, EMBEDIQ_MSG_MAX_PAYLOAD);
+    uint16_t n = (nul != NULL)
+               ? (uint16_t)(nul - (const uint8_t *)msg)
+               : (uint16_t)EMBEDIQ_MSG_MAX_PAYLOAD;
+    memcpy(line, msg, n);
     line[n] = '\0';
 
     g_ops->write(line, n);

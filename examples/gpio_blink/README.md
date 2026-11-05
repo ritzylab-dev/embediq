@@ -66,6 +66,22 @@ s_gpio_pins[0].pin  = NEW_PIN;    /* change this */
 
 fb_blink_led.c requires zero changes between hardware platforms.
 
+## What you see
+
+`main.c` runs the Observatory at level 2 with the STDOUT transport. fb_blink_led
+never prints: every LED change is an application-defined event (`APP`):
+
+```
+[  16136722] APP fb_blink_led → N/A  code=1 val=1  seq=8     # gpio_id 0, LED on
+[  17136929] APP fb_blink_led → N/A  code=1 val=0  seq=9     # gpio_id 0, LED off
+```
+
+| Code | Event | `val` |
+| ---- | ----- | ----- |
+| 1 | BLINK_EVT_LEVEL — the LED level was set | `gpio_id << 8 \| level` (level 0 or 1) |
+
+The code is defined in `fb_blink_led.c`.
+
 ## Message Flow
 
 ```

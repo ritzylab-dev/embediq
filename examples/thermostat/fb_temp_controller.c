@@ -10,7 +10,13 @@
  *   WARNING  → CRITICAL  when temperature > 85 °C
  *   CRITICAL → NORMAL    when temperature < 70 °C
  *
- * State-entry actions use embediq_obs_emit() — never printf (R-sub-04).
+ * State-entry actions report an application-defined Observatory event
+ * (EMBEDIQ_OBS_EVT_APP) from the controller's own endpoint — never printf
+ * (R-stdio). APP codes, msg_id = the reading that caused the entry, in tenths
+ * of a degree (0 below 0 °C, 65535 at or above 6553.5 °C):
+ *   CTRL_EVT_STATE_NORMAL   (1) — entered NORMAL
+ *   CTRL_EVT_STATE_WARNING  (2) — entered WARNING
+ *   CTRL_EVT_STATE_CRITICAL (3) — entered CRITICAL
  * The controller calls embediq_wdg_checkin() on every temperature reading,
  * proving liveness to the watchdog (registered with 5 000 ms timeout).
  *
@@ -60,11 +66,20 @@ extern void embediq_wdg_checkin(void *fb);
 /* Watchdog timeout: 5 s is well above the 1 s tick rate, preventing false faults. */
 #define CTRL_WDG_TIMEOUT_MS  5000u
 
+/* EMBEDIQ_OBS_EVT_APP codes — see the file header. */
+#define CTRL_EVT_STATE_NORMAL    1u
+#define CTRL_EVT_STATE_WARNING   2u
+#define CTRL_EVT_STATE_CRITICAL  3u
+
 /* ---------------------------------------------------------------------------
  * Module state (static, R-02)
  * ------------------------------------------------------------------------- */
 
 static EmbedIQ_FB_Handle_t g_ctrl_fb = NULL;
+
+/* The controller's endpoint, the source of its APP events. Assigned in
+ * ctrl_init: static storage cannot be initialised by a call. */
+static uint8_t s_ep = 0xFFu;
 
 #ifdef EMBEDIQ_PLATFORM_HOST
 /* Incremented in ctrl_run on the FB's thread, read by the host-only
@@ -74,53 +89,79 @@ static _Atomic uint32_t g_reading_count = 0u;
 #endif
 
 /* ---------------------------------------------------------------------------
+ * Payload access — msg is the MSG_TEMP_READING payload bytes (R-sub-34).
+ * ctrl_run rejects NULL before the FSM runs, so guards and actions get a
+ * payload; memcpy because the bytes carry no alignment guarantee.
+ * ------------------------------------------------------------------------- */
+
+static float reading_c(const void *msg)
+{
+    TempReading_t reading;
+    memcpy(&reading, msg, sizeof(reading));
+    return reading.temperature_c;
+}
+
+/** The reading in tenths of a degree, saturated to 0..65535. */
+static uint16_t reading_tenths(const void *msg)
+{
+    float t = reading_c(msg) * 10.0f;
+    if (!(t > 0.0f))     return 0u;        /* also NaN */
+    if (t >= 65535.0f)   return 65535u;
+    return (uint16_t)(t + 0.5f);
+}
+
+/* ---------------------------------------------------------------------------
  * FSM guard functions
  * ------------------------------------------------------------------------- */
 
 static bool guard_above_75(const void *msg, void *fb_data)
 {
     (void)fb_data;
-    return ((const TempReading_t *)msg)->temperature_c > 75.0f;
+    return reading_c(msg) > 75.0f;
 }
 
 static bool guard_above_85(const void *msg, void *fb_data)
 {
     (void)fb_data;
-    return ((const TempReading_t *)msg)->temperature_c > 85.0f;
+    return reading_c(msg) > 85.0f;
 }
 
 static bool guard_below_70(const void *msg, void *fb_data)
 {
     (void)fb_data;
-    return ((const TempReading_t *)msg)->temperature_c < 70.0f;
+    return reading_c(msg) < 70.0f;
 }
 
 /* ---------------------------------------------------------------------------
- * FSM action functions — log state transitions via Observatory (no printf)
+ * FSM action functions — report state entries via the Observatory (no printf)
+ *
+ * LIFECYCLE and FAULT events belong to the engine: an application FB never
+ * emits them itself. A real fault is reported with embediq_fb_report_fault().
+ * A high temperature is the application's own state, so it is an APP event.
  * ------------------------------------------------------------------------- */
 
 static void action_enter_warning(const void *msg, void *fb_data)
 {
-    (void)msg; (void)fb_data;
-    /* "WARM — monitoring": emit lifecycle event for the WARNING entry. */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu,
-                     CTRL_WARNING, MSG_TEMP_READING);
+    (void)fb_data;
+    /* "WARM — monitoring" */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                     CTRL_EVT_STATE_WARNING, reading_tenths(msg));
 }
 
 static void action_enter_critical(const void *msg, void *fb_data)
 {
-    (void)msg; (void)fb_data;
-    /* "CRITICAL — taking action": emit a fault-category event. */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0u, 0xFFu,
-                     CTRL_CRITICAL, MSG_TEMP_READING);
+    (void)fb_data;
+    /* "CRITICAL — taking action": an application state, not an FB fault. */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                     CTRL_EVT_STATE_CRITICAL, reading_tenths(msg));
 }
 
 static void action_enter_normal(const void *msg, void *fb_data)
 {
-    (void)msg; (void)fb_data;
-    /* Recovery to NORMAL: emit lifecycle event. */
-    embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu,
-                     CTRL_NORMAL, MSG_TEMP_READING);
+    (void)fb_data;
+    /* Recovery to NORMAL */
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                     CTRL_EVT_STATE_NORMAL, reading_tenths(msg));
 }
 
 /* ---------------------------------------------------------------------------
@@ -149,6 +190,7 @@ static void ctrl_run(EmbedIQ_FB_Handle_t fb, const void *msg,
     (void)fb_data;
     EmbedIQ_SM_t *sm = (EmbedIQ_SM_t *)subfn_data;
 
+    if (msg == NULL) return;   /* direct delivery without a payload */
     embediq_sm_process(sm, msg, MSG_TEMP_READING, NULL);
 
     /* Prove liveness to the watchdog. */
@@ -167,6 +209,7 @@ static void ctrl_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb_data;
     g_ctrl_fb = fb;
+    s_ep = embediq_engine_fb_ep(fb);
 
     /* Register with watchdog: 5 000 ms timeout; first checkin is in ctrl_run. */
     embediq_wdg_register(fb, CTRL_WDG_TIMEOUT_MS);

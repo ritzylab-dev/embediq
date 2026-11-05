@@ -62,7 +62,7 @@ int main(int argc, char *argv[])
     printf("EmbedIQ GPIO Blink Demo\n========================\n");
 
     embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_STDOUT);
-    embediq_obs_set_level(1u);
+    embediq_obs_set_level(2u);   /* level 2 shows application events (FUNCTION band) */
 
     /* Board config: gpio_id=0 maps to the BCM pin from --pin (default 17).
      * Application FBs use gpio_id=0; only fb_gpio and the HAL see the physical pin. */

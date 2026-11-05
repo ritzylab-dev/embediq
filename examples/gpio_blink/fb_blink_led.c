@@ -9,6 +9,9 @@
  * fb_gpio resolves it at runtime. This file requires zero changes to move the
  * LED to a different pin or board.
  *
+ * Observatory: one application-defined event (EMBEDIQ_OBS_EVT_APP) per toggle —
+ * see BLINK_EVT_LEVEL below. The FB never prints.
+ *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
  *
@@ -21,11 +24,18 @@
 #include "embediq_msg.h"
 #include "embediq_config.h"
 #include "embediq_platform_msgs.h"
+#include "embediq_obs.h"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdio.h>
+
+/* ---------------------------------------------------------------------------
+ * Application event codes (EMBEDIQ_OBS_EVT_APP state_or_flag), target 0xFF
+ * ------------------------------------------------------------------------- */
+
+/** LED level requested. msg_id = (gpio_id << 8) | level (level: 0 = LOW, 1 = HIGH). */
+#define BLINK_EVT_LEVEL  1u
 
 /* ---------------------------------------------------------------------------
  * Static (private) function declarations
@@ -94,8 +104,9 @@ static void blink_tick(EmbedIQ_FB_Handle_t fb, const void *msg,
     (void)memcpy(m.payload, &p, sizeof(p));
     m.payload_len = (uint16_t)sizeof(p);
 
-    printf("[blink_led] gpio_id=%u -> %s\n",
-           (unsigned)g_led_gpio_id, g_led_state ? "HIGH" : "LOW");
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, embediq_engine_fb_ep(fb), 0xFFu,
+                     BLINK_EVT_LEVEL,
+                     (uint16_t)(((uint16_t)g_led_gpio_id << 8) | g_led_state));
     embediq_publish(fb, &m);
 }
 

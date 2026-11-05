@@ -3,24 +3,32 @@
 /*
  * tests/integration/test_thermostat_observable.c
  *
- * End-to-end observable thermostat test.
+ * Observable thermostat test, driving the production thermostat FBs.
  *
  * Setup:
- *   - Register fb_sensor  (Phase 3, no sub-fn)
- *   - Register fb_controller (Phase 3, FSM sub-fn: NORMAL ↔ WARNING)
- *   - embediq_engine_boot()  → 4 LIFECYCLE events (INITIALISING + RUNNING × 2)
- *   - Deliver 5 MSG_TEMP_READING messages (80, 60, 80, 60, 80 °C)
- *     → 5 FSM_TRANS events (alternating NORMAL→WARNING and WARNING→NORMAL)
- *   Total: 9 Observatory events, sequences 0–8, fully gapless
+ *   - Register the thermostat FB set in main.c order: fb_timer, fb_nvm,
+ *     fb_watchdog, fb_temp_sensor, fb_temp_controller. fb_timer is registered
+ *     first, so it holds endpoint 0.
+ *   - embediq_engine_boot() (no dispatch threads are started, so the only
+ *     controller activity is what this test delivers).
+ *   - Take a baseline sequence after boot: the boot LIFECYCLE events are the
+ *     engine's and stay valid.
+ *   - Deliver MSG_TEMP_READING to the controller with fb_engine__deliver_msg()
+ *     and a TempReading_t (the message's payload layout): 80, 90, 60 °C, which
+ *     enter WARNING, CRITICAL and NORMAL in turn; then deliver NULL.
  *
  * Assertions:
- *   1. obs_captures_enough_events  — ring holds ≥ 5 events
- *   2. obs_has_fsm_transition      — at least one FSM_TRANS event in ring
- *   3. sequence_gapless            — no sequence gaps between consecutive events
- *   4. zero_printf_in_app_fb_code  — application FB code emits zero printf calls
+ *   1. state_entry_reported_by_controller — each delivery adds exactly one APP
+ *      event, from the controller's endpoint, with the state code and the
+ *      reading in tenths of a degree
+ *   2. no_engine_events_forged — no LIFECYCLE or FAULT event attributed to
+ *      fb_timer is added after the baseline
+ *   3. null_payload_is_ignored — a NULL delivery adds no event and does not crash
+ *   4. obs_has_fsm_transition — at least one FSM_TRANS event in the ring
+ *   5. sequence_gapless — no sequence gaps between consecutive events
  *
  * Run:      ./build/tests/integration/test_thermostat_observable
- * Expected: "All 4 tests passed. (0 failed)"
+ * Expected: "All N tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -29,13 +37,13 @@
  */
 
 #include "embediq_fb.h"
-#include "embediq_subfn.h"
-#include "embediq_sm.h"
 #include "embediq_obs.h"
+#include "thermostat_msgs.h"
 
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>     /* setenv */
 #include <string.h>
 
 /* ---------------------------------------------------------------------------
@@ -49,6 +57,23 @@ extern uint32_t obs__ring_count(void);
 extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 extern void     obs__set_level(uint8_t level);
 
+/* Platform FB APIs */
+extern EmbedIQ_FB_Handle_t fb_timer_register(void);
+extern EmbedIQ_FB_Handle_t fb_nvm_register(void);
+extern EmbedIQ_FB_Handle_t fb_watchdog_register(void);
+extern void                fb_timer__stop_and_wait(void);
+
+/* Application FB APIs */
+extern EmbedIQ_FB_Handle_t fb_temp_sensor_register(void);
+extern EmbedIQ_FB_Handle_t fb_temp_controller_register(void);
+
+/* The controller's APP codes, as documented in fb_temp_controller.c. */
+#define CTRL_EVT_STATE_NORMAL    1u
+#define CTRL_EVT_STATE_WARNING   2u
+#define CTRL_EVT_STATE_CRITICAL  3u
+
+#define TEST_NVM_PATH  "/tmp/test_thermostat_observable_nvm.bin"
+
 /* ---------------------------------------------------------------------------
  * Minimal test harness
  * ------------------------------------------------------------------------- */
@@ -59,129 +84,98 @@ static int g_tests_failed = 0;
 #define ASSERT(cond, msg)  do {                                                \
     g_tests_run++;                                                             \
     if (!(cond)) {                                                             \
-        fprintf(stderr, "FAIL  %-56s  %s:%d\n", __func__, __FILE__, __LINE__);\
+        fprintf(stderr, "FAIL  %-40s  %s:%d  %s\n",                            \
+                __func__, __FILE__, __LINE__, (msg));                          \
         g_tests_failed++;                                                      \
     } else {                                                                   \
-        printf("PASS  %s\n", __func__);                                        \
+        printf("PASS  %s  %s\n", __func__, (msg));                             \
     }                                                                          \
 } while (0)
 
 /* ---------------------------------------------------------------------------
- * Temperature message — test-local struct (not a production type)
+ * Observatory scan helpers — events are selected by sequence, not ring index
  * ------------------------------------------------------------------------- */
+
+static uint8_t             g_timer_ep = 0xFFu;
+static uint8_t             g_ctrl_ep  = 0xFFu;
+static EmbedIQ_FB_Handle_t g_h_ctrl   = NULL;
+
+/** Sequence the next event will carry (one past the newest in the ring). */
+static uint32_t next_seq(void)
+{
+    uint32_t n = obs__ring_count();
+    EmbedIQ_Event_t e = {0};
+    if (n == 0u || !obs__ring_read(n - 1u, &e)) return 0u;
+    return e.sequence + 1u;
+}
 
 typedef struct {
-    float temperature;
-} TempReading_t;
+    uint32_t        from_ctrl;      /* any event with the controller's endpoint */
+    uint32_t        app_from_ctrl;  /* APP events with the controller's endpoint */
+    uint32_t        forged;         /* LIFECYCLE/FAULT attributed to fb_timer */
+    EmbedIQ_Event_t last_app;
+} scan_t;
 
-/* ---------------------------------------------------------------------------
- * Controller FSM
- * ------------------------------------------------------------------------- */
-
-#define MSG_TEMP_READING   0x1400u
-#define CTRL_NORMAL        0u
-#define CTRL_WARNING       1u
-
-static bool temp_above_warn(const void *msg, void *fb_data)
+static scan_t scan_since(uint32_t from_seq)
 {
-    (void)fb_data;
-    return ((const TempReading_t *)msg)->temperature > 75.0f;
-}
-
-static const EmbedIQ_SM_Row_t s_ctrl_table[] = {
-    /* NORMAL  → WARNING  when temp > 75 °C */
-    { CTRL_NORMAL,  MSG_TEMP_READING, temp_above_warn, NULL, CTRL_WARNING },
-    /* WARNING → NORMAL   always (NULL guard = unconditional) */
-    { CTRL_WARNING, MSG_TEMP_READING, NULL,            NULL, CTRL_NORMAL  },
-    EMBEDIQ_SM_TABLE_END
-};
-
-static EmbedIQ_SM_t g_ctrl_sm = { CTRL_NORMAL, s_ctrl_table, "thermo_ctrl" };
-
-/* ---------------------------------------------------------------------------
- * Controller sub-function
- * ------------------------------------------------------------------------- */
-
-static void ctrl_fsm_run(EmbedIQ_FB_Handle_t fb, const void *msg,
-                          void *fb_data, void *subfn_data)
-{
-    (void)fb; (void)fb_data;
-    EmbedIQ_SM_t *sm = (EmbedIQ_SM_t *)subfn_data;
-    embediq_sm_process(sm, msg, MSG_TEMP_READING, NULL);
-}
-
-static void ctrl_init(EmbedIQ_FB_Handle_t handle, void *fb_data)
-{
-    (void)fb_data;
-    static const uint16_t subs[] = { MSG_TEMP_READING };
-    static EmbedIQ_SubFn_Config_t cfg = {
-        .name               = "ctrl_fsm",
-        .init_order         = 1u,
-        .init_fn            = NULL,
-        .run_fn             = ctrl_fsm_run,
-        .exit_fn            = NULL,
-        .subscriptions      = subs,
-        .subscription_count = 1u,
-        .subfn_data         = &g_ctrl_sm,
-        .fsm                = NULL,
-        .osal_signal        = NULL,
-    };
-    embediq_subfn_register(handle, &cfg);
-}
-
-/* ---------------------------------------------------------------------------
- * Shared test state — set up once before all assertions
- * ------------------------------------------------------------------------- */
-
-/* Tracks printf calls from application FB code (must stay 0). */
-static int g_app_printf_count = 0;
-
-static EmbedIQ_FB_Handle_t g_sensor_handle     = NULL;
-static EmbedIQ_FB_Handle_t g_ctrl_handle       = NULL;
-
-static void do_setup(void)
-{
-    /* Reset engine and observatory; then set verbose level to capture FSM events. */
-    fb_engine__reset();
-    obs__set_level(2u);   /* level 2: all event types including FSM_TRANS */
-
-    /* Reset the FSM to NORMAL state for each test run. */
-    g_ctrl_sm.current_state = CTRL_NORMAL;
-
-    /* Register fb_sensor — minimal; no sub-fns needed. */
-    static const EmbedIQ_FB_Config_t sensor_cfg = {
-        .name       = "fb_sensor",
-        .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
-    };
-    g_sensor_handle = embediq_fb_register(&sensor_cfg);
-
-    /* Register fb_controller — registers FSM sub-fn during init_fn. */
-    static const EmbedIQ_FB_Config_t ctrl_cfg = {
-        .name       = "fb_controller",
-        .boot_phase = EMBEDIQ_BOOT_PHASE_APPLICATION,
-        .init_fn    = ctrl_init,
-    };
-    g_ctrl_handle = embediq_fb_register(&ctrl_cfg);
-
-    /* Boot: generates 2× LIFECYCLE(INITIALISING) + 2× LIFECYCLE(RUNNING) = 4 events */
-    embediq_engine_boot();
-
-    /* Deliver 5 messages → 5 alternating FSM transitions */
-    static const float temps[] = { 80.0f, 60.0f, 80.0f, 60.0f, 80.0f };
-    for (int i = 0; i < 5; i++) {
-        TempReading_t m = { temps[i] };
-        fb_engine__deliver_msg(g_ctrl_handle, MSG_TEMP_READING, &m);
+    scan_t r;
+    memset(&r, 0, sizeof(r));
+    uint32_t n = obs__ring_count();
+    for (uint32_t i = 0u; i < n; i++) {
+        EmbedIQ_Event_t e = {0};
+        if (!obs__ring_read(i, &e) || e.sequence < from_seq) continue;
+        if (e.source_fb_id == g_ctrl_ep) {
+            r.from_ctrl++;
+            if (e.event_type == EMBEDIQ_OBS_EVT_APP) {
+                r.app_from_ctrl++;
+                r.last_app = e;
+            }
+        }
+        if (e.source_fb_id == g_timer_ep &&
+            (e.event_type == EMBEDIQ_OBS_EVT_LIFECYCLE ||
+             e.event_type == EMBEDIQ_OBS_EVT_FAULT)) {
+            r.forged++;
+        }
     }
+    return r;
 }
 
 /* ---------------------------------------------------------------------------
  * Assertions
  * ------------------------------------------------------------------------- */
 
-static void test_obs_captures_enough_events(void)
+static void deliver_reading(float temperature_c, uint8_t want_code,
+                            uint16_t want_tenths)
 {
-    ASSERT(obs__ring_count() >= 5u,
-           "observatory must capture at least 5 events from 5 delivered messages");
+    TempReading_t reading = { .temperature_c = temperature_c };
+    uint32_t before = next_seq();
+    fb_engine__deliver_msg(g_h_ctrl, MSG_TEMP_READING, &reading);
+    scan_t s = scan_since(before);
+
+    ASSERT(s.app_from_ctrl == 1u, "exactly one APP event from the controller");
+    ASSERT(s.last_app.state_or_flag == want_code, "APP code is the state entered");
+    ASSERT(s.last_app.msg_id == want_tenths, "APP value is the reading in tenths");
+}
+
+static void test_state_entry_reported_by_controller(void)
+{
+    deliver_reading(80.0f, CTRL_EVT_STATE_WARNING,  800u);
+    deliver_reading(90.0f, CTRL_EVT_STATE_CRITICAL, 900u);
+    deliver_reading(60.0f, CTRL_EVT_STATE_NORMAL,   600u);
+}
+
+static void test_no_engine_events_forged(uint32_t baseline)
+{
+    scan_t s = scan_since(baseline);
+    ASSERT(s.forged == 0u, "no LIFECYCLE or FAULT attributed to fb_timer after boot");
+}
+
+static void test_null_payload_is_ignored(void)
+{
+    uint32_t before = next_seq();
+    fb_engine__deliver_msg(g_h_ctrl, MSG_TEMP_READING, NULL);
+    scan_t s = scan_since(before);
+    ASSERT(s.from_ctrl == 0u && s.forged == 0u, "a NULL payload adds no event");
 }
 
 static void test_obs_has_fsm_transition(void)
@@ -196,7 +190,7 @@ static void test_obs_has_fsm_transition(void)
             break;
         }
     }
-    ASSERT(found, "observatory ring must contain at least one FSM_TRANS event");
+    ASSERT(found, "the ring holds at least one FSM_TRANS event");
 }
 
 static void test_sequence_gapless(void)
@@ -213,15 +207,7 @@ static void test_sequence_gapless(void)
         }
     }
 
-    ASSERT(gapless, "all observatory event sequences must be consecutive (no gaps)");
-}
-
-static void test_zero_printf_in_app_fb_code(void)
-{
-    /* Application FB code must never call printf directly.
-     * The observatory handles all runtime output via its transport. */
-    ASSERT(g_app_printf_count == 0,
-           "application FB code must not call printf");
+    ASSERT(gapless, "all event sequences are consecutive");
 }
 
 /* ---------------------------------------------------------------------------
@@ -230,12 +216,32 @@ static void test_zero_printf_in_app_fb_code(void)
 
 int main(void)
 {
-    do_setup();
+    fb_engine__reset();
+    obs__set_level(2u);   /* level 2: lifecycle, FSM and application events */
+    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
 
-    test_obs_captures_enough_events();
+    EmbedIQ_FB_Handle_t h_timer = fb_timer_register();
+    (void)fb_nvm_register();
+    (void)fb_watchdog_register();
+    (void)fb_temp_sensor_register();
+    g_h_ctrl = fb_temp_controller_register();
+
+    if (h_timer == NULL || g_h_ctrl == NULL || embediq_engine_boot() != 0) {
+        fprintf(stderr, "FAIL  setup: the thermostat FB set did not boot\n");
+        return 1;
+    }
+    g_timer_ep = embediq_engine_fb_ep(h_timer);
+    g_ctrl_ep  = embediq_engine_fb_ep(g_h_ctrl);
+
+    uint32_t baseline = next_seq();
+
+    test_state_entry_reported_by_controller();
+    test_no_engine_events_forged(baseline);
+    test_null_payload_is_ignored();
     test_obs_has_fsm_transition();
     test_sequence_gapless();
-    test_zero_printf_in_app_fb_code();
+
+    fb_timer__stop_and_wait();
 
     printf("\n");
     if (g_tests_failed == 0) {

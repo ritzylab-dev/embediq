@@ -29,7 +29,7 @@ Every line follows this format:
 | Field | Meaning |
 |-------|---------|
 | `timestamp_us` | Microseconds since system boot. uint32 — wraps at ~71 min. |
-| `TYPE` | `LC` = lifecycle, `FSM` = state transition, `TX` = message sent, `FLT` = fault, `DRP` = queue drop |
+| `TYPE` | `LC` = lifecycle, `FSM` = state transition, `TX` = message sent, `FLT` = fault, `DRP` = queue drop, `APP` = application-defined event (`code=` and `val=` are documented by the emitting FB) |
 | `source → target` | Which FB emitted the event. `N/A` = no specific target. |
 | `seq=N` | Monotonic sequence counter. A gap means the Observatory ring buffer overflowed. |
 
@@ -49,21 +49,34 @@ EmbedIQ Smart Thermostat Demo — Phase 1
 [xxxxxxxxx] LC  fb_temp_controller → N/A  INITIALISING  seq=8
 [xxxxxxxxx] LC  fb_temp_controller → N/A  RUNNING  seq=9
 [MAIN] All FBs initialised. Running demo (30 s)...
-// Watchdog confirms all FBs are healthy — one log line per second
-[WDG] WDT kick [every-1s count=1]
-...
-[WDG] WDT kick [every-1s count=11]
-// ~12s: temperature reaches 80°C — FSM transitions NORMAL → WARNING
-[xxxxxxxxx] FSM state_0 → state_1  msg=0x0420  seq=11
-// ~14s: temperature reaches 90°C — FSM transitions WARNING → CRITICAL
-[xxxxxxxxx] FSM state_1 → state_2  msg=0x0420  seq=13
-// ~19s: temperature falls to 65°C — FSM transitions CRITICAL → NORMAL
-[xxxxxxxxx] FSM state_2 → state_0  msg=0x0420  seq=15
+// Watchdog check-ins (TIMING family, printed as `???`) are omitted here
+// ~12s: temperature reaches 80°C — the controller reports entering WARNING, then the FSM transitions NORMAL → WARNING
+[xxxxxxxxx] APP fb_temp_controller → N/A  code=2 val=800  seq=125
+[xxxxxxxxx] FSM state_0 → state_1  msg=0x1400  seq=126
+// ~14s: temperature reaches 90°C — CRITICAL entered, WARNING → CRITICAL
+[xxxxxxxxx] APP fb_temp_controller → N/A  code=3 val=900  seq=146
+[xxxxxxxxx] FSM state_1 → state_2  msg=0x1400  seq=147
+// ~19s: temperature falls to 65°C — NORMAL entered, CRITICAL → NORMAL
+[xxxxxxxxx] APP fb_temp_controller → N/A  code=1 val=650  seq=196
+[xxxxxxxxx] FSM state_2 → state_0  msg=0x1400  seq=197
 [MAIN] Demo complete.
+
+fb_temp_controller reports each state entry as an application-defined event
+(`APP`) from its own endpoint. It never emits `LC` or `FLT` events: those belong
+to the engine, and a real FB fault is reported with `embediq_fb_report_fault()`.
+
+| Code | Event | `val` |
+| ---- | ----- | ----- |
+| 1 | CTRL_EVT_STATE_NORMAL — entered NORMAL | the reading that caused the entry, °C × 10 |
+| 2 | CTRL_EVT_STATE_WARNING — entered WARNING | the reading that caused the entry, °C × 10 |
+| 3 | CTRL_EVT_STATE_CRITICAL — entered CRITICAL | the reading that caused the entry, °C × 10 |
+
+The codes are defined in `fb_temp_controller.c`. Values saturate at 0 and 65535.
 
 ## What to verify
 
 - [ ] All 5 FBs reached `RUNNING` in correct order: PLATFORM → INFRASTRUCTURE → APPLICATION
+- [ ] Each FSM transition is preceded by one `APP` line from `fb_temp_controller`
 - [ ] FSM transitioned `NORMAL → WARNING` at approximately 12 seconds
 - [ ] FSM transitioned `WARNING → CRITICAL` at approximately 14 seconds
 - [ ] FSM transitioned `CRITICAL → NORMAL` at approximately 19 seconds

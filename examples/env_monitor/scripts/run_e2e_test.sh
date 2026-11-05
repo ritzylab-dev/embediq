@@ -355,9 +355,11 @@ mosquitto_pub -h 127.0.0.1 -p "$MQTT_PORT" \
     -m "alert:25.0"
 
 sleep 2
-if grep -q "Alert threshold updated" /tmp/device.log; then
+# fb_env_sim reports through Observatory APP events (examples/env_monitor/fb_env_sim.c):
+# code=7 is ENV_SIM_EVT_THRESHOLD_SET, code=6 is ENV_SIM_EVT_CMD.
+if grep -qE "APP .* code=7 val=" /tmp/device.log; then
     pass "Device received and processed cloud command (alert threshold updated)"
-elif grep -q "Cloud command received" /tmp/device.log; then
+elif grep -qE "APP .* code=6 val=" /tmp/device.log; then
     pass "Device received cloud command (MSG_MQTT_CMD_RX)"
 else
     fail "No evidence of command receipt in device logs"

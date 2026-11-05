@@ -2183,7 +2183,7 @@ The family is derived in the decoder with zero runtime overhead:
 | 0x40–0x4F | RESOURCE | LIB_INIT(0x40), LIB_DEINIT(0x41) — Phase 2 activates XOBS-3 (queue depth, stack high-water) |
 | 0x50–0x5F | TIMING | Phase 2 activates XOBS-4 (watchdog checkin, message latency) |
 | 0x60–0x6F | FAULT | FAULT(0x60), SECURITY_INCIDENT(0x61), AUTH_EVENT(0x62), FAULT_CLEARED(0x63), LIB_ALLOC_FAIL(0x64), LIB_TIMEOUT(0x65), OSAL_FAULT(0x66 — Phase 2), HAL_FAULT(0x67 — Phase 2), NVM_PERSIST_FAIL(0x6B) |
-| 0x70–0x7F | FUNCTION | TEST_START(0x70), TEST_END(0x71) |
+| 0x70–0x7F | FUNCTION | TEST_START(0x70), TEST_END(0x71), APP(0x72 — application-defined: the emitting FB documents its code and value) |
 | 0x80–0x8F | AI (Phase 3) | RESERVED — Phase 3 AI family. Do not allocate. Taxonomy defined after Phase 1 AI production data. |
 | 0x90–0xFF | VENDOR | Community and vendor extension range — 7 full 16-slot sub-bands. Never allocated by the framework. |
 
@@ -2280,8 +2280,10 @@ python3 tools/embediq_obs/embediq_obs.py obs export /tmp/session.iqtrace
 
 Phase 1 established the Observatory foundation: seven event family bands, per-family
 compile-time trace flags, and the `.iqtrace` binary capture format. Three bands were
-left deliberately empty in Phase 1 — RESOURCE (0x40–0x4F), TIMING (0x50–0x5F), FUNCTION
-(0x70–0x7F) — reserved for Phase 2 activation.
+left deliberately empty in Phase 1 — RESOURCE (0x40–0x4F) and TIMING (0x50–0x5F) — reserved
+for Phase 2 activation. The FUNCTION band (0x70–0x7F) holds events whose meaning is defined
+outside the framework core: TEST_START (0x70) and TEST_END (0x71) for certification evidence,
+and APP (0x72) for application-defined events; 0x73–0x7F stay reserved.
 
 Phase 2 adds constants to those reserved bands and obligation hooks to the layer contract
 headers. No structural change to the Observatory is required.

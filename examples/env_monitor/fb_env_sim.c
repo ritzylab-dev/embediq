@@ -14,6 +14,9 @@
  * Also handles MSG_MQTT_CMD_RX — parses simple text commands:
  *   "alert:NN.N"  → sets temperature alert threshold to NN.N °C
  *
+ * Observatory: reports through application-defined events (EMBEDIQ_OBS_EVT_APP);
+ * the codes and the meaning of each value are listed below. The FB never prints.
+ *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
  *
@@ -27,13 +30,38 @@
 #include "embediq_config.h"
 #include "embediq_platform_msgs.h"
 #include "telemetry_msg_catalog.h"
+#include "embediq_obs.h"
 #include "env_monitor_metrics.h"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>   /* atof */
+
+/* ---------------------------------------------------------------------------
+ * Application event codes (EMBEDIQ_OBS_EVT_APP state_or_flag), target 0xFF.
+ * Fixed-point values saturate at 0 and 65535; no simulated value is negative
+ * (temperature 18–30 °C, humidity 45–65 %, CO2 380–560 ppm).
+ * ------------------------------------------------------------------------- */
+
+#define ENV_SIM_EVT_READY          1u  /**< FB initialised. msg_id = alert threshold, °C × 10. */
+#define ENV_SIM_EVT_TEMP           2u  /**< Every 10th tick. msg_id = temperature, °C × 10. */
+#define ENV_SIM_EVT_HUMIDITY       3u  /**< Every 10th tick. msg_id = humidity, % × 10. */
+#define ENV_SIM_EVT_CO2            4u  /**< Every 10th tick. msg_id = CO2, ppm. */
+#define ENV_SIM_EVT_ALERT          5u  /**< Every 10th tick. msg_id = alert level (0 or 1). */
+#define ENV_SIM_EVT_CMD            6u  /**< Cloud command received. msg_id = command length,
+                                            bytes (the text is not traced). */
+#define ENV_SIM_EVT_THRESHOLD_SET  7u  /**< Alert threshold changed by a command.
+                                            msg_id = new threshold, °C × 10. */
+
+/** Scale a non-negative reading to a saturating uint16 fixed-point value. */
+static uint16_t to_fixed(float value, float scale)
+{
+    float v = value * scale + 0.5f;
+    if (v <= 0.0f)     { return 0u; }
+    if (v >= 65535.0f) { return 65535u; }
+    return (uint16_t)v;
+}
 
 /* ---------------------------------------------------------------------------
  * Triangle wave helper — no floating-point division, no math.h
@@ -68,12 +96,14 @@ static float triangle_wave(uint32_t tick, uint32_t period,
  * ------------------------------------------------------------------------- */
 
 static EmbedIQ_FB_Handle_t  s_fb               = NULL;
+static uint8_t               s_ep               = 0xFFu;  /* this FB's endpoint */
 static uint32_t              s_tick             = 0u;
 static float                 s_alert_threshold  = ENV_TEMP_ALERT_DEFAULT;
 
 /* ---------------------------------------------------------------------------
  * Publish one MSG_TELEMETRY_GAUGE
- * Payload: {metric_id, value, unit_id} — 7 bytes, always < EMBEDIQ_MSG_MAX_PAYLOAD
+ * Payload: {metric_id, value, unit_id} — sizeof(MSG_TELEMETRY_GAUGE_Payload_t) —
+ * 12 bytes with padding, always < EMBEDIQ_MSG_MAX_PAYLOAD
  * ------------------------------------------------------------------------- */
 
 static void publish_gauge(uint16_t metric_id, float value, uint8_t unit_id)
@@ -117,15 +147,23 @@ static void sf_tick(EmbedIQ_FB_Handle_t fb, const void *msg,
     publish_gauge(ENV_METRIC_ALERT_LEVEL, alert, ENV_UNIT_NONE);
 
     if (s_tick % 10u == 0u) {
-        printf("[ENV SIM] tick=%u temp=%.1f°C humidity=%.1f%% CO2=%.0fppm alert=%.0f\n",
-               (unsigned)s_tick, (double)temp, (double)humidity,
-               (double)co2, (double)alert);
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                         ENV_SIM_EVT_TEMP, to_fixed(temp, 10.0f));
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                         ENV_SIM_EVT_HUMIDITY, to_fixed(humidity, 10.0f));
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                         ENV_SIM_EVT_CO2, to_fixed(co2, 1.0f));
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                         ENV_SIM_EVT_ALERT, to_fixed(alert, 1.0f));
     }
 }
 
 /* ---------------------------------------------------------------------------
  * Sub-function: MSG_MQTT_CMD_RX — handle cloud commands
  * Command format (raw bytes in payload): "alert:27.5" → set threshold to 27.5°C
+ * The command payload is a full-array text payload: msg points at
+ * EMBEDIQ_MSG_MAX_PAYLOAD bytes, and the publisher zero-fills the bytes after
+ * the text. A direct delivery must therefore pass a full-size buffer.
  * ------------------------------------------------------------------------- */
 
 static void sf_cmd(EmbedIQ_FB_Handle_t fb, const void *msg,
@@ -133,27 +171,27 @@ static void sf_cmd(EmbedIQ_FB_Handle_t fb, const void *msg,
 {
     (void)fb; (void)fb_data; (void)subfn_data;
     if (!msg) { return; }
-    const EmbedIQ_Msg_t *m = (const EmbedIQ_Msg_t *)msg;
-    if (m->payload_len == 0u) { return; }
 
     /* Safe NUL-terminated copy of payload.
      * Buffer size derivation: EMBEDIQ_MSG_MAX_PAYLOAD bytes content + 1 NUL
      * = EMBEDIQ_MSG_MAX_PAYLOAD + 1 bytes total. */
     char cmd[EMBEDIQ_MSG_MAX_PAYLOAD + 1u];
-    uint16_t len = (m->payload_len < (uint16_t)EMBEDIQ_MSG_MAX_PAYLOAD) ?
-                   m->payload_len : (uint16_t)EMBEDIQ_MSG_MAX_PAYLOAD;
-    (void)memcpy(cmd, m->payload, len);
-    cmd[len] = '\0';
+    (void)memcpy(cmd, msg, EMBEDIQ_MSG_MAX_PAYLOAD);
+    cmd[EMBEDIQ_MSG_MAX_PAYLOAD] = '\0';
+    size_t len = strlen(cmd);
+    if (len == 0u) { return; }
 
-    printf("[ENV SIM] Cloud command received: %s\n", cmd);
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                     ENV_SIM_EVT_CMD, (uint16_t)len);
 
     /* Parse "alert:NN.N" */
     if (strncmp(cmd, "alert:", 6u) == 0) {
         float threshold = (float)atof(cmd + 6u);
         if (threshold > 0.0f && threshold < 100.0f) {
             s_alert_threshold = threshold;
-            printf("[ENV SIM] Alert threshold updated to %.1f°C\n",
-                   (double)s_alert_threshold);
+            embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                             ENV_SIM_EVT_THRESHOLD_SET,
+                             to_fixed(s_alert_threshold, 10.0f));
         }
     }
 }
@@ -167,6 +205,7 @@ static void env_sim_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb_data;
     s_fb   = fb;
+    s_ep   = embediq_engine_fb_ep(fb);
     s_tick = 0u;
     s_alert_threshold = ENV_TEMP_ALERT_DEFAULT;
 
@@ -191,8 +230,8 @@ static void env_sim_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     (void)embediq_subfn_register(fb, &k_timer_cfg);
     (void)embediq_subfn_register(fb, &k_cmd_cfg);
 
-    printf("[ENV SIM] Initialised. Publishing temp/humidity/CO2 every second.\n");
-    printf("[ENV SIM] Alert threshold: %.1f°C\n", (double)s_alert_threshold);
+    embediq_obs_emit(EMBEDIQ_OBS_EVT_APP, s_ep, 0xFFu,
+                     ENV_SIM_EVT_READY, to_fixed(s_alert_threshold, 10.0f));
 }
 
 /* ---------------------------------------------------------------------------
