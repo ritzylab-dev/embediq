@@ -15,12 +15,12 @@
  * durable too. A failure before the rename removes the temp file and leaves
  * the original untouched; a directory-sync failure after the rename returns
  * HAL_ERR_IO with the new contents in place but their durability uncertain.
- * A directory this implementation creates (the store's directory on first
- * use, or an explicit path's parent) is made durable the same way: its
- * parent's entry is synced before the first successful write to that store
- * reports success. If that sync fails the write returns HAL_ERR_IO with the
- * new store visible, and the next write to the same store performs the sync
- * again. Reads never create directories. Ranges are checked by subtraction against
+ * Every successful write or erase syncs the store file, the store's
+ * directory, and that directory's parent, in that order, before reporting
+ * success; a directory created on first use is therefore durable by the
+ * first successful write to it, and a failed sync is simply performed again
+ * by the next nonzero write or erase. No record of which directories this
+ * implementation created is kept. Reads never create directories. Ranges are checked by subtraction against
  * HAL_FLASH_POSIX_MAX_SIZE before any arithmetic, and a store or temp path
  * that does not fit PATH_BUF is refused, never shortened. An absent backing file (ENOENT) is an empty store and reads as
  * zeros; any other open or read failure is HAL_ERR_IO, and a backing file
@@ -82,23 +82,17 @@ static uint32_t s_write_calls  = 0u;
 static uint32_t s_fail_writes  = 0u;
 static uint32_t s_fail_reads   = 0u;   /* next n hal_flash_read calls fail */
 static uint32_t s_fail_dir_syncs = 0u; /* next n directory syncs fail */
-static uint32_t s_fail_parent_syncs = 0u;   /* next n created-directory parent syncs fail */
+static uint32_t s_fail_parent_syncs = 0u;   /* next n store-directory parent syncs fail */
 static uint32_t s_parent_syncs = 0u;        /* parent syncs that succeeded */
 static char     s_last_parent_synced[PATH_BUF];
 #endif
 
-/* A directory this HAL created (its mkdir returned 0) whose entry in its
- * parent is not yet known durable; empty when there is none. Cleared only by
- * a successful parent sync, so an EEXIST on a later call does not lose it. */
-static char s_pending_dir[PATH_BUF];
-
 /**
  * Ensure parent directory exists (one level only).
- * Scans backwards for '/' and mkdir everything up to that point. Returns true
- * when this call created the directory, and records it in s_pending_dir; an
- * EEXIST or any other mkdir result leaves s_pending_dir unchanged.
+ * Scans backwards for '/' and mkdir everything up to that point. EEXIST is
+ * ignored; a failure surfaces when the temp file cannot be opened.
  */
-static bool ensure_parent_dir(const char *path)
+static void ensure_parent_dir(const char *path)
 {
     char dir[PATH_BUF];
     strncpy(dir, path, PATH_BUF - 1u);
@@ -106,11 +100,9 @@ static bool ensure_parent_dir(const char *path)
 
     /* Find last slash. */
     char *slash = strrchr(dir, '/');
-    if (!slash || slash == dir) return false;
+    if (!slash || slash == dir) return;
     *slash = '\0';
-    if (mkdir(dir, 0755) != 0) return false;
-    memcpy(s_pending_dir, dir, (size_t)(slash - dir) + 1u);   /* with its NUL */
-    return true;
+    (void)mkdir(dir, 0755);   /* EEXIST is the usual case */
 }
 
 /**
@@ -213,8 +205,8 @@ static int read_file(void *buf, size_t buf_size, size_t *out_len)
 
 /**
  * fsync directory dir, so the entries in it reach the medium: the store's
- * directory (is_parent false) or the parent of a directory this HAL created
- * (is_parent true). Returns false on any failure.
+ * directory (is_parent false) or that directory's parent (is_parent true).
+ * Returns false on any failure.
  */
 static bool sync_directory(const char *dir, bool is_parent)
 {
@@ -246,9 +238,9 @@ static bool sync_store_dir(const char *store_dir)
 
 /**
  * Atomically write buf[0..len) to the backing file: write <path>.tmp, flush,
- * fsync and close it, rename it over the store, then fsync the directory and,
- * when this HAL created that directory and its entry is not yet durable,
- * fsync its parent. The rename is the publication point. A failure before it removes the temp
+ * fsync and close it, rename it over the store, then fsync the store's
+ * directory and that directory's parent. The rename is the publication
+ * point. A failure before it removes the temp
  * file and leaves the store as it was. A directory-sync failure after it
  * returns HAL_ERR_IO with the new store in place but its durability
  * uncertain; no rollback is attempted, since an unproven rollback is worse
@@ -257,7 +249,7 @@ static bool sync_store_dir(const char *store_dir)
  */
 static int write_file(const void *buf, size_t len)
 {
-    (void)ensure_parent_dir(s_tmp_path);   /* records a created directory in s_pending_dir */
+    ensure_parent_dir(s_tmp_path);
     FILE *f = fopen(s_tmp_path, "wb");
     if (!f) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO); return HAL_ERR_IO; }
 
@@ -283,18 +275,15 @@ static int write_file(const void *buf, size_t len)
         return HAL_ERR_IO;
     }
 
-    /* The store's directory was created by this HAL and its entry is not yet
-     * durable: sync its parent. On failure it stays pending, so the next
-     * write to this store syncs it again even though mkdir then sees EEXIST.
-     * A pending directory of a different store is left for that store. */
-    if (s_pending_dir[0] != '\0' && strcmp(s_pending_dir, store_dir) == 0) {
-        char parent[PATH_BUF];
-        dir_of(store_dir, parent);
-        if (!sync_directory(parent, true)) {
-            EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
-            return HAL_ERR_IO;
-        }
-        s_pending_dir[0] = '\0';
+    /* Sync the directory's own entry in its parent on every write: a
+     * directory created on first use is durable by the first write that
+     * succeeds, whichever write that is, with nothing to remember between
+     * calls. */
+    char parent[PATH_BUF];
+    dir_of(store_dir, parent);
+    if (!sync_directory(parent, true)) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
+        return HAL_ERR_IO;
     }
     return HAL_OK;
 }
@@ -419,23 +408,18 @@ void hal_flash__fail_next_dir_fsync(uint32_t n)
     s_fail_dir_syncs = n;
 }
 
-/** The next n syncs of a created directory's parent fail (0 = none; test use
- *  only): the write is published, reports HAL_ERR_IO, and stays pending. */
+/** The next n syncs of the store directory's parent fail (0 = none; test use
+ *  only): the write is published and reports HAL_ERR_IO. */
 void hal_flash__fail_next_parent_fsync(uint32_t n)
 {
     s_fail_parent_syncs = n;
 }
 
-/** Parent syncs of created directories that succeeded (test use only). */
+/** Store-directory parent syncs that succeeded, cumulative: one per successful
+ *  nonzero write or erase (test use only). */
 uint32_t hal_flash__parent_syncs(void)
 {
     return s_parent_syncs;
-}
-
-/** True while a directory this HAL created awaits its parent's sync (test use only). */
-bool hal_flash__dir_entry_pending(void)
-{
-    return s_pending_dir[0] != '\0';
 }
 
 /** The directory most recently synced as a parent, into out (test use only). */

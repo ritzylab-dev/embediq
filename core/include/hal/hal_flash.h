@@ -61,16 +61,15 @@ int      hal_flash_read(uint32_t addr, void *buf, size_t len);
  *   rename returns HAL_ERR_IO with the new contents possibly visible and their
  *   durability not guaranteed.
  *
- *   A directory this implementation creates (the store's directory on first
- *   use, or an explicit path's parent) is made durable the same way: its
- *   parent's entry is synced before the first successful write to that store
- *   reports success. If that sync fails the write returns HAL_ERR_IO with the
- *   new store visible, and the next write to the same store performs the sync
- *   again. Reads never create directories.
+ *   Every successful write or erase syncs the store file, the store's
+ *   directory, and that directory's parent, in that order, before reporting
+ *   success; a directory created on first use is therefore durable by the
+ *   first successful write to it, and a failed sync is simply performed again
+ *   by the next nonzero write or erase. No record of which directories this
+ *   implementation created is kept. Reads never create directories.
  *
  *   POSIX: satisfied via write-to-tmp + fflush + fsync + rename(2) + fsync of
- *   the containing directory (and, for a directory it created, of that
- *   directory's parent) in hal_flash_posix.c.
+ *   the containing directory and of its parent in hal_flash_posix.c.
  *   ESP32 / STM32: use sector-copy-before-erase or dual-bank write.
  *   This requirement MUST be documented in any RTOS/MCU HAL implementation
  *   comment before that implementation is submitted for review.
