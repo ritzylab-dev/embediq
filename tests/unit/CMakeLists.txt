@@ -322,6 +322,29 @@ target_compile_options(test_hal_obs PRIVATE
 add_test(NAME unit_hal_obs COMMAND test_hal_obs)
 
 # ---------------------------------------------------------------------------
+# POSIX flash HAL — read and write failures, absent/erased/short semantics
+# ---------------------------------------------------------------------------
+
+add_executable(test_hal_flash_posix test_hal_flash_posix.c)
+
+target_include_directories(test_hal_flash_posix PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_hal_flash_posix PRIVATE
+    embediq_hal_posix
+)
+
+target_compile_options(test_hal_flash_posix PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_hal_flash_posix COMMAND test_hal_flash_posix)
+
+# ---------------------------------------------------------------------------
 # embediq_cfg typed configuration component (C1)
 # ---------------------------------------------------------------------------
 

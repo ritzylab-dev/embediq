@@ -11,7 +11,7 @@
  * the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
- * Expected: "All 31 tests passed. (0 failed)"
+ * Expected: "All 34 tests passed. (0 failed)"
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
@@ -31,6 +31,9 @@
 #include <string.h>
 #include <stdlib.h>     /* setenv */
 #include <pthread.h>
+#include <unistd.h>     /* getpid, rmdir */
+#include <sys/stat.h>   /* mkdir */
+#include <dirent.h>     /* opendir — test directory removal */
 
 /* ---------------------------------------------------------------------------
  * Public NVM API (matches embediq_nvm.h contract)
@@ -49,6 +52,10 @@ extern void        nvm__set_persist_delay_ms(uint32_t ms);
 /* Host-only flash failure injection (hal/posix/peripherals/hal_flash_posix.c). */
 extern void        hal_flash__fail_next_write(uint32_t n);
 extern void        hal_flash__fail_next_read(uint32_t n);
+extern void        hal_flash__fail_next_dir_fsync(uint32_t n);
+extern void        hal_flash__fail_next_parent_fsync(uint32_t n);
+extern uint32_t    hal_flash__parent_syncs(void);
+extern void        hal_flash__last_parent_synced(char *out, size_t cap);
 extern uint32_t    hal_flash__write_calls(void);
 
 /* Observatory host-only ring access (core/src/observatory/obs.c). */
@@ -629,6 +636,70 @@ static void test_unreadable_flash_refuses_to_persist_until_flush_reloads(void)
            "unreadable flash is never overwritten; flush re-reads it and restores the table");
 }
 
+/* test_real_read_failure_puts_store_in_unreadable_state
+ * The same protection without the injection hook: the backing path is a
+ * directory, so the flash read really fails. Load: one CFG_BLOB_INVALID
+ * (read failure). set(k) → ERR, one NVM_PERSIST_FAIL state FLASH_UNREADABLE,
+ * nothing written. The path is pointed at an absent file: flush → OK with one
+ * CFG_BLOB_INVALID state 0 (no blob yet — an empty store); set(k) → OK with
+ * one flash write; after a reload k is present.
+ */
+static void test_real_read_failure_puts_store_in_unreadable_state(void)
+{
+    setup();
+    char dir[96];
+    snprintf(dir, sizeof(dir), "/tmp/test_nvm_store_dir_%d", (int)getpid());
+    (void)mkdir(dir, 0755);
+    (void)remove(TEST_NVM_PATH);
+    uint32_t k = 0x5Bu, got = 0u;
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    setenv("EMBEDIQ_NVM_PATH", dir, 1);
+    nvm__init_state();
+    nvm__load_state();
+    uint32_t blob_events = 0u;
+    for (uint8_t st = 0u; st < 4u; st++) {
+        blob_events += count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, st);
+    }
+    uint32_t read_fails = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, BLOB_STATE_READ_FAIL);
+
+    uint32_t before = hal_flash__write_calls();
+    embediq_err_t rc_set = embediq_nvm_set("persist.real", &k, sizeof(k));
+    uint32_t writes  = hal_flash__write_calls() - before;
+    uint32_t refused = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL,
+                                    (uint8_t)EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE);
+    uint32_t persist_fails = count_persist_fail_events();
+
+    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);   /* absent: an empty store */
+    embediq_err_t rc_flush = embediq_nvm_flush();
+    uint32_t no_blob = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, 0u);
+
+    uint32_t before2 = hal_flash__write_calls();
+    embediq_err_t rc_set2 = embediq_nvm_set("persist.real", &k, sizeof(k));
+    uint32_t writes2 = hal_flash__write_calls() - before2;
+
+    reload_from_flash();
+    bool k_after = get_u32("persist.real", &got) && got == k;
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+    (void)rmdir(dir);
+    char dir_tmp[sizeof(dir) + 4u];
+    snprintf(dir_tmp, sizeof(dir_tmp), "%s.tmp", dir);
+    (void)remove(dir_tmp);   /* a temp file a failed write may have left */
+
+    printf("      blob_events=%u read_fail_events=%u set=%d flash_writes=%u "
+           "refused_events=%u persist_fail_events=%u | flush=%d no_blob_events=%u "
+           "set_after=%d writes_after=%u k_after_reload=%d\n",
+           (unsigned)blob_events, (unsigned)read_fails, (int)rc_set, (unsigned)writes,
+           (unsigned)refused, (unsigned)persist_fails, (int)rc_flush, (unsigned)no_blob,
+           (int)rc_set2, (unsigned)writes2, (int)k_after);
+    ASSERT(blob_events == 1u && read_fails == 1u
+           && rc_set == EMBEDIQ_ERR && writes == 0u && refused == 1u && persist_fails == 1u
+           && rc_flush == EMBEDIQ_OK && no_blob == 1u
+           && rc_set2 == EMBEDIQ_OK && writes2 == 1u && k_after,
+           "a real read failure makes the store unreadable; flush on a readable path recovers");
+}
+
 /* test_set_reports_persist_failure
  * A set whose flash write fails returns EMBEDIQ_ERR and emits one
  * NVM_PERSIST_FAIL; the value is readable from RAM. The next set (write
@@ -658,6 +729,170 @@ static void test_set_reports_persist_failure(void)
            (int)rc_ok, (int)both);
     ASSERT(rc_fail == EMBEDIQ_ERR && events == 1u && in_ram && rc_ok == EMBEDIQ_OK && both,
            "failed persist returned and observed; the next persist carries the change");
+}
+
+/* The value stored on flash for key, read through the HAL, not through NVM:
+ * an entry is the key field (EMBEDIQ_NVM_KEY_SIZE bytes, NUL-padded) followed
+ * by its value bytes. Returns false if the key is not in the image. */
+static bool flash_u32(const char *key, uint32_t *out)
+{
+    static uint8_t img[EMBEDIQ_NVM_MAX_KEYS * (EMBEDIQ_NVM_KEY_SIZE + EMBEDIQ_NVM_VAL_SIZE) * 2u];
+    if (hal_flash_read(0u, img, sizeof(img)) != HAL_OK) return false;
+    size_t klen = strlen(key) + 1u;   /* with its NUL */
+    for (size_t i = 0u; i + EMBEDIQ_NVM_KEY_SIZE + sizeof(*out) <= sizeof(img); i++) {
+        if (memcmp(img + i, key, klen) == 0) {
+            memcpy(out, img + i + EMBEDIQ_NVM_KEY_SIZE, sizeof(*out));
+            return true;
+        }
+    }
+    return false;
+}
+
+/* test_set_after_directory_sync_failure_retries_and_persists
+ * A directory-sync failure after the rename: the HAL reports HAL_ERR_IO with
+ * the new store already published. set(k=2) → ERR, one NVM_PERSIST_FAIL with
+ * the HAL code; RAM and the store both hold 2; one flash write. The next
+ * set(j) → OK with one more write; after a reload k == 2 and j == 5. The
+ * flush path: a failed directory sync fails the flush; the next flush is OK.
+ */
+static void test_set_after_directory_sync_failure_retries_and_persists(void)
+{
+    setup();
+    uint32_t k1 = 1u, k2 = 2u, j = 5u, got = 0u, on_flash = 0u;
+    embediq_err_t rc_seed = embediq_nvm_set("persist.dirsync_k", &k1, sizeof(k1));
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    uint32_t before = hal_flash__write_calls();
+    hal_flash__fail_next_dir_fsync(1u);
+    embediq_err_t rc_fail = embediq_nvm_set("persist.dirsync_k", &k2, sizeof(k2));
+    uint32_t writes   = hal_flash__write_calls() - before;
+    uint32_t fails    = count_persist_fail_events();
+    uint32_t hal_code = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL, (uint8_t)HAL_ERR_IO);
+    bool in_ram       = get_u32("persist.dirsync_k", &got) && got == k2;
+    bool published    = flash_u32("persist.dirsync_k", &on_flash) && on_flash == k2;
+
+    uint32_t before2 = hal_flash__write_calls();
+    embediq_err_t rc_next = embediq_nvm_set("persist.dirsync_j", &j, sizeof(j));
+    uint32_t writes2 = hal_flash__write_calls() - before2;
+
+    reload_from_flash();
+    uint32_t got_k = 0u, got_j = 0u;
+    bool both = get_u32("persist.dirsync_k", &got_k) && got_k == k2
+             && get_u32("persist.dirsync_j", &got_j) && got_j == j;
+
+    hal_flash__fail_next_dir_fsync(1u);
+    embediq_err_t rc_flush_fail = embediq_nvm_flush();
+    embediq_err_t rc_flush_ok   = embediq_nvm_flush();
+    hal_flash__fail_next_dir_fsync(0u);
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    printf("      seed=%d failed_set=%d flash_writes=%u persist_fail_events=%u with_hal_code=%u "
+           "in_ram=%d published=%d | next_set=%d next_writes=%u both_after_reload=%d | "
+           "flush_fail=%d flush_ok=%d\n",
+           (int)rc_seed, (int)rc_fail, (unsigned)writes, (unsigned)fails, (unsigned)hal_code,
+           (int)in_ram, (int)published, (int)rc_next, (unsigned)writes2, (int)both,
+           (int)rc_flush_fail, (int)rc_flush_ok);
+    ASSERT(rc_seed == EMBEDIQ_OK && rc_fail == EMBEDIQ_ERR && writes == 1u
+           && fails == 1u && hal_code == 1u && in_ram && published
+           && rc_next == EMBEDIQ_OK && writes2 == 1u && both
+           && rc_flush_fail == EMBEDIQ_ERR && rc_flush_ok == EMBEDIQ_OK,
+           "a directory-sync failure fails the persist; the next persist carries the change");
+}
+
+/* HOME as the process started; saved and restored by the test that changes it. */
+static char g_home_saved[1024];
+static bool g_home_was_set = false;
+
+static void home_save(void)
+{
+    const char *home = getenv("HOME");
+    g_home_was_set = home != NULL && strlen(home) < sizeof(g_home_saved);
+    if (g_home_was_set) memcpy(g_home_saved, home, strlen(home) + 1u);
+}
+
+static void home_restore(void)
+{
+    if (g_home_was_set) setenv("HOME", g_home_saved, 1); else unsetenv("HOME");
+}
+
+/* Remove path and, if it is a directory, everything below it. */
+static void rm_tree(const char *path)
+{
+    DIR *d = opendir(path);
+    if (d == NULL) {
+        (void)unlink(path);
+        return;
+    }
+    struct dirent *e;
+    char child[1024];
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        size_t lp = strlen(path), ln = strlen(e->d_name);
+        if (lp + 1u + ln >= sizeof(child)) continue;
+        memcpy(child, path, lp);
+        child[lp] = '/';
+        memcpy(child + lp + 1u, e->d_name, ln + 1u);
+        rm_tree(child);
+    }
+    (void)closedir(d);
+    (void)rmdir(path);
+}
+
+/* test_first_configuration_is_durable_only_after_parent_sync
+ * Default store path, HOME without .embediq. Loading creates nothing. With
+ * the sync of .embediq's parent failing, set(k=1) → ERR with one
+ * NVM_PERSIST_FAIL carrying the HAL code and no parent sync. set(j=5) → OK:
+ * the retry syncs HOME. After a reload k == 1 and j == 5.
+ */
+static void test_first_configuration_is_durable_only_after_parent_sync(void)
+{
+    char home[96], dot[128], last[1024];
+    snprintf(home, sizeof(home), "/tmp/test_nvm_first_home_%d", (int)getpid());
+    snprintf(dot,  sizeof(dot),  "%s/.embediq", home);
+    home_save();
+    rm_tree(home);
+    (void)mkdir(home, 0755);
+    setenv("HOME", home, 1);
+    unsetenv("EMBEDIQ_NVM_PATH");
+    obs__reset();
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
+
+    nvm__init_state();
+    nvm__load_state();
+    struct stat st;
+    bool created_by_load = stat(dot, &st) == 0;
+
+    uint32_t k = 1u, j = 5u, got_k = 0u, got_j = 0u;
+    uint32_t syncs0 = hal_flash__parent_syncs();
+    hal_flash__fail_next_parent_fsync(1u);
+    embediq_err_t rc_k = embediq_nvm_set("persist.first_k", &k, sizeof(k));
+    hal_flash__fail_next_parent_fsync(0u);
+    uint32_t fails    = count_persist_fail_events();
+    uint32_t hal_code = count_events(EMBEDIQ_OBS_EVT_NVM_PERSIST_FAIL, (uint8_t)HAL_ERR_IO);
+    uint32_t syncs_k  = hal_flash__parent_syncs() - syncs0;
+
+    embediq_err_t rc_j = embediq_nvm_set("persist.first_j", &j, sizeof(j));
+    uint32_t syncs_j = hal_flash__parent_syncs() - syncs0;
+    hal_flash__last_parent_synced(last, sizeof(last));
+    bool synced_home = strcmp(last, home) == 0;
+
+    reload_from_flash();
+    bool both = get_u32("persist.first_k", &got_k) && got_k == k
+             && get_u32("persist.first_j", &got_j) && got_j == j;
+    embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
+
+    home_restore();
+    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
+    rm_tree(home);
+
+    printf("      created_by_load=%d set_k=%d persist_fail_events=%u with_hal_code=%u "
+           "parent_syncs=%u | set_j=%d parent_syncs=%u synced_home=%d both_after_reload=%d\n",
+           (int)created_by_load, (int)rc_k, (unsigned)fails, (unsigned)hal_code,
+           (unsigned)syncs_k, (int)rc_j, (unsigned)syncs_j, (int)synced_home, (int)both);
+    ASSERT(!created_by_load && rc_k == EMBEDIQ_ERR && fails == 1u && hal_code == 1u
+           && syncs_k == 0u && rc_j == EMBEDIQ_OK && syncs_j == 1u && synced_home && both,
+           "the first configuration is acknowledged only after its directory is durable");
 }
 
 /* test_provision_retry_reestablishes_durability
@@ -823,6 +1058,9 @@ int main(void)
     test_provision_retry_reestablishes_durability();
     test_delete_retry_reestablishes_durability();
     test_unreadable_flash_refuses_to_persist_until_flush_reloads();
+    test_real_read_failure_puts_store_in_unreadable_state();
+    test_set_after_directory_sync_failure_retries_and_persists();
+    test_first_configuration_is_durable_only_after_parent_sync();
     test_flush_reports_failure();
     test_skip_rule_never_skips_an_unpersisted_change();
 
