@@ -14,10 +14,11 @@
  * refused and touches nothing), store paths that do not fit are refused and
  * create nothing (explicit EMBEDIQ_NVM_PATH and the HOME-derived default),
  * and a directory-sync failure after the rename is reported with the new
- * store already published. A directory the HAL creates on first use is
- * created by the first write, never by a read, and its parent is synced
- * before that write succeeds; a failed parent sync is retried by the next
- * write.
+ * store already published. Every successful write or erase syncs the store
+ * directory's parent, so a directory created on first use (by the first
+ * write, never by a read) is durable once that write succeeds, and a failed
+ * parent sync is performed again by the next write - also after a write to
+ * a store under a different parent.
  *
  * Every test works in its own directory /tmp/embediq_hal_flash_<pid>/, made
  * in setup() and removed with everything in it in teardown(), so concurrent
@@ -53,12 +54,10 @@ extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 
 /* Host-only: the next n directory syncs after a rename fail. */
 extern void     hal_flash__fail_next_dir_fsync(uint32_t n);
-/* Host-only: the next n syncs of a created directory's parent fail; parent
- * syncs that succeeded; whether a created directory awaits its parent's sync;
- * the directory most recently synced as a parent. */
+/* Host-only: the next n syncs of the store directory's parent fail; parent
+ * syncs that succeeded; the directory most recently synced as a parent. */
 extern void     hal_flash__fail_next_parent_fsync(uint32_t n);
 extern uint32_t hal_flash__parent_syncs(void);
-extern bool     hal_flash__dir_entry_pending(void);
 extern void     hal_flash__last_parent_synced(char *out, size_t cap);
 
 /* The largest store hal_flash_posix.c holds (its HAL_FLASH_POSIX_MAX_SIZE). */
@@ -569,16 +568,14 @@ static void test_first_use_read_creates_nothing_and_write_syncs_parent(void)
     const uint8_t data[4] = { 1u, 2u, 3u, 4u };
     int rc_write = hal_flash_write(0u, data, sizeof(data));
     uint32_t syncs = hal_flash__parent_syncs() - syncs0;
-    printf("      read=%d created_by_read=%d write=%d parent_syncs=%u pending=%d\n",
-           rc_read, (int)dot_after_read, rc_write, (unsigned)syncs,
-           (int)hal_flash__dir_entry_pending());
+    printf("      read=%d created_by_read=%d write=%d parent_syncs=%u\n",
+           rc_read, (int)dot_after_read, rc_write, (unsigned)syncs);
 
     ASSERT(ok_paths, "a HOME without .embediq");
     ASSERT(rc_read == HAL_OK && zeros, "a first read is HAL_OK and empty");
     ASSERT(!dot_after_read, "a read creates no directory");
     ASSERT(rc_write == HAL_OK && exists(dot), "the first write creates .embediq");
     ASSERT(syncs == 1u && last_parent_is(home), "HOME, the parent of .embediq, was synced");
-    ASSERT(!hal_flash__dir_entry_pending(), "nothing is left pending");
     teardown();
 }
 
@@ -602,25 +599,22 @@ static void test_first_use_parent_sync_failure_then_retry(void)
     uint32_t faults        = flash_fault_count();
     bool     published     = read_equals(first, sizeof(first));
     bool     no_tmp        = !exists(tmp);
-    bool     pending_fail  = hal_flash__dir_entry_pending();
     uint32_t syncs_fail    = hal_flash__parent_syncs() - syncs0;
 
     int rc_retry = hal_flash_write(0u, second, sizeof(second));   /* .embediq now exists */
     uint32_t syncs_retry = hal_flash__parent_syncs() - syncs0;
-    printf("      failed: write=%d faults=%u published=%d pending=%d parent_syncs=%u | "
-           "retry: write=%d parent_syncs=%u pending=%d\n", rc_fail, (unsigned)faults,
-           (int)published, (int)pending_fail, (unsigned)syncs_fail, rc_retry,
-           (unsigned)syncs_retry, (int)hal_flash__dir_entry_pending());
+    printf("      failed: write=%d faults=%u published=%d parent_syncs=%u | "
+           "retry: write=%d parent_syncs=%u\n", rc_fail, (unsigned)faults,
+           (int)published, (unsigned)syncs_fail, rc_retry, (unsigned)syncs_retry);
 
     ASSERT(ok_paths && rc_read == HAL_OK, "a HOME without .embediq, read first");
     ASSERT(rc_fail == HAL_ERR_IO, "a failed parent sync fails the write");
     ASSERT(faults == 1u, "exactly one HAL fault observed");
     ASSERT(published && no_tmp, "the store is published and no temp file is left (no rollback)");
-    ASSERT(pending_fail && syncs_fail == 0u, "the parent sync is still pending");
+    ASSERT(syncs_fail == 0u, "no parent sync succeeded");
     ASSERT(rc_retry == HAL_OK && syncs_retry == 1u && last_parent_is(home),
            "the next write performs the parent sync although .embediq exists");
-    ASSERT(!hal_flash__dir_entry_pending() && read_equals(second, sizeof(second)),
-           "nothing is left pending; the second write reads back");
+    ASSERT(read_equals(second, sizeof(second)), "the second write reads back");
     teardown();
 }
 
@@ -641,8 +635,7 @@ static void test_explicit_path_autocreated_parent_is_synced(void)
     int rc_a = hal_flash_write(0u, data, sizeof(data));
     uint32_t syncs_a = hal_flash__parent_syncs() - syncs0;
     ASSERT(ok_paths && rc_a == HAL_OK && exists(store_a), "the write creates newdir and the store");
-    ASSERT(syncs_a == 1u && last_parent_is(g_dir) && !hal_flash__dir_entry_pending(),
-           "newdir's parent was synced; nothing is pending");
+    ASSERT(syncs_a == 1u && last_parent_is(g_dir), "newdir's parent was synced");
 
     /* A failed parent sync is retried by the next write. */
     setenv("EMBEDIQ_NVM_PATH", store_b, 1);
@@ -650,52 +643,116 @@ static void test_explicit_path_autocreated_parent_is_synced(void)
     hal_flash__fail_next_parent_fsync(1u);
     int rc_fail = hal_flash_write(0u, data, sizeof(data));
     hal_flash__fail_next_parent_fsync(0u);
-    bool pending_fail = hal_flash__dir_entry_pending();
+    uint32_t syncs_fail = hal_flash__parent_syncs() - syncs0;
     int rc_retry = hal_flash_write(0u, data, sizeof(data));
     uint32_t syncs_b = hal_flash__parent_syncs() - syncs0;
-    printf("      created: write=%d parent_syncs=%u | failed: write=%d pending=%d | "
+    printf("      created: write=%d parent_syncs=%u | failed: write=%d parent_syncs=%u | "
            "retry: write=%d parent_syncs=%u\n", rc_a, (unsigned)syncs_a, rc_fail,
-           (int)pending_fail, rc_retry, (unsigned)syncs_b);
-    ASSERT(rc_fail == HAL_ERR_IO && pending_fail, "a failed parent sync fails the write; still pending");
-    ASSERT(rc_retry == HAL_OK && syncs_b == 1u && !hal_flash__dir_entry_pending(),
+           (unsigned)syncs_fail, rc_retry, (unsigned)syncs_b);
+    ASSERT(rc_fail == HAL_ERR_IO && syncs_fail == 0u, "a failed parent sync fails the write");
+    ASSERT(rc_retry == HAL_OK && syncs_b == 1u && last_parent_is(g_dir),
            "the retry performs the parent sync");
     teardown();
 }
 
-static void test_pending_directory_belongs_to_its_store(void)
+/* One write to the store at path: its result, the parent syncs it added, and
+ * whether the directory most recently synced as a parent is then want. */
+static int write_at(const char *path, uint32_t *syncs, const char *want, bool *synced_want)
+{
+    const uint8_t data[4] = { 1u, 2u, 3u, 4u };
+    setenv("EMBEDIQ_NVM_PATH", path, 1);
+    uint32_t before = hal_flash__parent_syncs();
+    int rc = hal_flash_write(0u, data, sizeof(data));
+    *syncs = hal_flash__parent_syncs() - before;
+    *synced_want = last_parent_is(want);
+    return rc;
+}
+
+static void test_two_created_directories_under_distinct_parents_both_become_durable(void)
 {
     setup();
-    static char dir_a[TEST_HAL_PATH_BUF], store_a[TEST_HAL_PATH_BUF];
-    bool ok_paths = join(dir_a, sizeof(dir_a), g_dir, "dir_a")
-                 && join(store_a, sizeof(store_a), dir_a, "store.bin");
-    const uint8_t data[4] = { 1u, 2u, 3u, 4u };
+    static char pa[TEST_HAL_PATH_BUF], pb[TEST_HAL_PATH_BUF];
+    static char dir_a[TEST_HAL_PATH_BUF], dir_b[TEST_HAL_PATH_BUF];
+    static char store_a[TEST_HAL_PATH_BUF], store_b[TEST_HAL_PATH_BUF];
+    bool ok_paths = join(pa, sizeof(pa), g_dir, "pa")
+                 && join(pb, sizeof(pb), g_dir, "pb")
+                 && join(dir_a, sizeof(dir_a), pa, "newa")
+                 && join(dir_b, sizeof(dir_b), pb, "newb")
+                 && join(store_a, sizeof(store_a), dir_a, "store.bin")
+                 && join(store_b, sizeof(store_b), dir_b, "store.bin")
+                 && mkdir(pa, 0755) == 0 && mkdir(pb, 0755) == 0;
+    ASSERT(ok_paths && !exists(dir_a) && !exists(dir_b),
+           "parents pa and pb exist; newa and newb do not");
 
-    /* A's directory created, its parent sync failed: A is pending. */
-    setenv("EMBEDIQ_NVM_PATH", store_a, 1);
+    /* A is created and its parent sync fails. */
+    uint32_t syncs = 0u;
+    bool     at    = false;
+    obs__reset();
     hal_flash__fail_next_parent_fsync(1u);
-    int rc_a_fail = hal_flash_write(0u, data, sizeof(data));
+    int rc_a_fail = write_at(store_a, &syncs, pa, &at);
     hal_flash__fail_next_parent_fsync(0u);
+    uint32_t faults = flash_fault_count();
+    ASSERT(rc_a_fail == HAL_ERR_IO && faults == 1u,
+           "A's failed parent sync fails the write, one HAL fault");
+    ASSERT(exists(dir_a) && exists(store_a), "newa and A's store are visible");
 
-    /* B's directory already exists: writing B leaves A pending. */
-    setenv("EMBEDIQ_NVM_PATH", g_store, 1);
+    /* B is created under a different parent and succeeds. */
+    int rc_b = write_at(store_b, &syncs, pb, &at);
+    uint32_t syncs_b = syncs;
+    bool     at_pb   = at;
+
+    /* A again: its own parent is synced before HAL_OK. */
+    int rc_a = write_at(store_a, &syncs, pa, &at);
+    printf("      A failed=%d faults=%u | B write=%d parent_syncs=%u synced_pb=%d | "
+           "A retry=%d parent_syncs=%u synced_pa=%d\n", rc_a_fail, (unsigned)faults,
+           rc_b, (unsigned)syncs_b, (int)at_pb, rc_a, (unsigned)syncs, (int)at);
+    ASSERT(rc_b == HAL_OK && exists(dir_b) && syncs_b == 1u && at_pb,
+           "B's write syncs pb, B's own parent");
+    ASSERT(rc_a == HAL_OK && syncs == 1u && at, "the retry of A syncs pa, A's own parent");
+
+    /* The mirror: B's parent sync fails, A is written, B is retried. */
+    obs__reset();
+    hal_flash__fail_next_parent_fsync(1u);
+    int rc_b_fail = write_at(store_b, &syncs, pb, &at);
+    hal_flash__fail_next_parent_fsync(0u);
+    faults = flash_fault_count();
+    int rc_a2 = write_at(store_a, &syncs, pa, &at);
+    bool at_pa = at;
+    int rc_b2 = write_at(store_b, &syncs, pb, &at);
+    printf("      B failed=%d faults=%u | A write=%d synced_pa=%d | B retry=%d "
+           "parent_syncs=%u synced_pb=%d\n", rc_b_fail, (unsigned)faults, rc_a2,
+           (int)at_pa, rc_b2, (unsigned)syncs, (int)at);
+    ASSERT(rc_b_fail == HAL_ERR_IO && faults == 1u,
+           "B's failed parent sync fails the write, one HAL fault");
+    ASSERT(rc_a2 == HAL_OK && at_pa, "A's write syncs pa");
+    ASSERT(rc_b2 == HAL_OK && syncs == 1u && at, "the retry of B syncs pb, B's own parent");
+    teardown();
+}
+
+static void test_every_write_syncs_store_dir_and_parent(void)
+{
+    setup();
+    setenv("EMBEDIQ_NVM_PATH", g_store, 1);   /* g_dir exists */
+    const uint8_t data[4] = { 1u, 2u, 3u, 4u };
+    uint8_t buf[sizeof(data)];
+
     uint32_t syncs0 = hal_flash__parent_syncs();
-    int rc_b = hal_flash_write(0u, data, sizeof(data));
-    uint32_t syncs_b = hal_flash__parent_syncs() - syncs0;
-    bool pending_after_b = hal_flash__dir_entry_pending();
+    int rc_w1 = hal_flash_write(0u, data, sizeof(data));
+    int rc_w2 = hal_flash_write(0u, data, sizeof(data));
+    uint32_t after_writes = hal_flash__parent_syncs() - syncs0;
+    int rc_r = hal_flash_read(0u, buf, sizeof(buf));
+    uint32_t after_read = hal_flash__parent_syncs() - syncs0;
+    int rc_e = hal_flash_erase(0u, sizeof(data));
+    uint32_t after_erase = hal_flash__parent_syncs() - syncs0;
+    printf("      writes=%d,%d parent_syncs=%u | read=%d parent_syncs=%u | erase=%d "
+           "parent_syncs=%u\n", rc_w1, rc_w2, (unsigned)after_writes, rc_r,
+           (unsigned)after_read, rc_e, (unsigned)after_erase);
 
-    /* Back to A: its parent sync runs now. */
-    setenv("EMBEDIQ_NVM_PATH", store_a, 1);
-    int rc_a = hal_flash_write(0u, data, sizeof(data));
-    uint32_t syncs_a = hal_flash__parent_syncs() - syncs0;
-    printf("      A failed=%d | B write=%d parent_syncs=%u pending=%d | A write=%d parent_syncs=%u "
-           "pending=%d\n", rc_a_fail, rc_b, (unsigned)syncs_b, (int)pending_after_b, rc_a,
-           (unsigned)syncs_a, (int)hal_flash__dir_entry_pending());
-
-    ASSERT(ok_paths && rc_a_fail == HAL_ERR_IO, "A is left pending by a failed parent sync");
-    ASSERT(rc_b == HAL_OK && syncs_b == 0u && pending_after_b,
-           "a write to another store neither syncs nor clears A's entry");
-    ASSERT(rc_a == HAL_OK && syncs_a == 1u && last_parent_is(g_dir)
-           && !hal_flash__dir_entry_pending(), "the next write to A performs its parent sync");
+    ASSERT(rc_w1 == HAL_OK && rc_w2 == HAL_OK && after_writes == 2u,
+           "two writes to an existing directory sync its parent twice");
+    ASSERT(rc_r == HAL_OK && after_read == after_writes, "a read syncs nothing");
+    ASSERT(rc_e == HAL_OK && after_erase == 3u && last_parent_is("/tmp"),
+           "an erase syncs the parent (/tmp) too");
     teardown();
 }
 
@@ -803,7 +860,8 @@ int main(void)
     test_first_use_read_creates_nothing_and_write_syncs_parent();
     test_first_use_parent_sync_failure_then_retry();
     test_explicit_path_autocreated_parent_is_synced();
-    test_pending_directory_belongs_to_its_store();
+    test_two_created_directories_under_distinct_parents_both_become_durable();
+    test_every_write_syncs_store_dir_and_parent();
     test_ranges_are_checked_without_wrapping();   /* last: on a wrapping HAL it crashes */
 
     embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);

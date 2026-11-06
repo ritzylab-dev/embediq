@@ -55,7 +55,6 @@ extern void        hal_flash__fail_next_read(uint32_t n);
 extern void        hal_flash__fail_next_dir_fsync(uint32_t n);
 extern void        hal_flash__fail_next_parent_fsync(uint32_t n);
 extern uint32_t    hal_flash__parent_syncs(void);
-extern bool        hal_flash__dir_entry_pending(void);
 extern void        hal_flash__last_parent_synced(char *out, size_t cap);
 extern uint32_t    hal_flash__write_calls(void);
 
