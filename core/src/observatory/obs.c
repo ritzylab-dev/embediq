@@ -66,7 +66,7 @@
  *   The entire function body is (void) + return — zero overhead.
  *   All ring/format code is inside #ifdef EMBEDIQ_PLATFORM_HOST.
  *
- * Package-internal API (EMBEDIQ_PLATFORM_HOST only):
+ * Package-internal API (EMBEDIQ_TEST_HOOKS, host only):
  *   obs__reset()        — clear ring, counters, restore defaults
  *   obs__event_count()  — total events written to ring since reset
  *   obs__ring_count()   — events currently in ring
@@ -696,10 +696,11 @@ int embediq_obs_capture_end(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Package-internal + test-only API (EMBEDIQ_PLATFORM_HOST)
+ * Package-internal + test-only API (EMBEDIQ_TEST_HOOKS, host only: the hooks
+ * read the host ring state)
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#if defined(EMBEDIQ_TEST_HOOKS) && defined(EMBEDIQ_PLATFORM_HOST)
 
 /**
  * Reset all Observatory state.
@@ -827,6 +828,10 @@ void obs__format_event(const EmbedIQ_Event_t *evt, char *buf, size_t n)
 {
     format_event_internal(evt, buf, n);
 }
+
+#endif /* EMBEDIQ_TEST_HOOKS && EMBEDIQ_PLATFORM_HOST */
+
+#ifdef EMBEDIQ_PLATFORM_HOST
 
 /* ---------------------------------------------------------------------------
  * ISR-safe emit — host implementation (host form of the Phase-2 MCU design)

@@ -48,7 +48,7 @@
  *   embediq_nvm_flush()            — rewrite the current table (retry)
  *   embediq_nvm_reset()            — wipe all entries
  *
- * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
+ * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   nvm__init_state()   — clear cache + create both locks
  *   nvm__load_state()   — trigger nvm_load() (simulates power-on reload)
  *   nvm__set_persist_delay_ms() — slow every persist (concurrency tests)
@@ -161,7 +161,7 @@ static struct {
     nvm_entry_t       entries[NVM_MAX_KEYS];
 } s_persist_buf;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /* Test-only: delay applied to every persist immediately before the flash
  * write, to widen the window in which other callers overlap a persist. */
 static uint32_t s_persist_delay_ms = 0u;
@@ -271,7 +271,7 @@ static embediq_err_t nvm_persist(uint32_t gen, bool force)
     s_persist_buf.hdr.crc32 = embediq_crc32(s_persist_buf.entries,
                                               sizeof(s_persist_buf.entries));
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     if (s_persist_delay_ms > 0u) {
         embediq_osal_delay_ms(s_persist_delay_ms);
     }
@@ -633,10 +633,10 @@ embediq_err_t embediq_nvm_reset(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only API — EMBEDIQ_PLATFORM_HOST only
+ * Test-only API — EMBEDIQ_TEST_HOOKS only
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 /**
  * Reset all NVM state: clear in-memory cache, create both locks.
@@ -674,4 +674,4 @@ void nvm__set_persist_delay_ms(uint32_t ms)
     s_persist_delay_ms = ms;
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

@@ -64,7 +64,7 @@ static uint8_t                          g_pin_count = 0u;
 EMBEDIQ_SUBS(g_gpio_subs, MSG_GPIO_SET_REQUEST);
 EMBEDIQ_PUBS(g_gpio_pubs, MSG_GPIO_PIN_EVENT);
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 #define GPIO_TEST_MAX_PUB  8u   /* capture depth for host unit tests */
 static int      g_test_pub_count    = 0;
 static uint16_t g_test_pub_ids[GPIO_TEST_MAX_PUB];
@@ -114,7 +114,7 @@ static const embediq_gpio_pin_config_t *find_pin_cfg(uint8_t gpio_id)
 static void gpio_obs_fault(uint8_t state)
 {
     EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, SRC_FB_GPIO, 0u, state, 0u);
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     g_test_fault_count++;
 #endif
 }
@@ -152,7 +152,7 @@ static void gpio_set(EmbedIQ_FB_Handle_t fb, const void *msg,
     }
 
     /* Success -- publish MSG_GPIO_PIN_EVENT carrying the LOGICAL gpio_id. */
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     if (g_test_pub_count < 8) {
         g_test_pub_ids[g_test_pub_count]      = MSG_GPIO_PIN_EVENT;
         g_test_pub_gpio_ids[g_test_pub_count] = p.gpio_id;
@@ -206,7 +206,8 @@ static void gpio_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 }
 
 /* ---------------------------------------------------------------------------
- * Host-only: release pins at process exit, and test accessors.
+ * Host-only: release pins at process exit (EMBEDIQ_PLATFORM_HOST), and test
+ * accessors (EMBEDIQ_TEST_HOOKS).
  * ------------------------------------------------------------------------- */
 
 #ifdef EMBEDIQ_PLATFORM_HOST
@@ -218,6 +219,10 @@ static void gpio_deinit_all(void)
         hal_gpio_deinit(g_pins[i].pin);
     }
 }
+
+#endif /* EMBEDIQ_PLATFORM_HOST */
+
+#ifdef EMBEDIQ_TEST_HOOKS
 
 void fb_gpio__test_reset(void)
 {
@@ -231,4 +236,4 @@ uint8_t  fb_gpio__test_pub_gpio_id(int idx) { return g_test_pub_gpio_ids[idx]; }
 uint8_t  fb_gpio__test_pub_state(int idx)   { return g_test_pub_states[idx]; }
 int      fb_gpio__test_fault_count(void)    { return g_test_fault_count; }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

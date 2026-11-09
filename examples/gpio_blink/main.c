@@ -14,7 +14,7 @@
  * a physical pin number.
  *
  * Runs on real hardware (Linux sysfs) and on host/CI (hal_gpio_posix.c writes
- * /tmp/embediq_gpio{N}_value under EMBEDIQ_PLATFORM_HOST).
+ * /tmp/embediq_gpio{N}_value under EMBEDIQ_GPIO_SIM).
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com

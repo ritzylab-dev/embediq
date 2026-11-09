@@ -30,7 +30,7 @@
  *   embediq_wdg_checkin(fb)        — record a live heartbeat
  *   embediq_wdg_unregister(fb)     — stop tracking an FB
  *
- * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
+ * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   wdg__init_state()    — reset slots and counters (does not start task)
  *   wdg__trigger_check() — run one monitor scan synchronously
  *   wdg__fault_count()   — total missed-checkin faults since last init
@@ -92,7 +92,7 @@ static EmbedIQ_FB_Handle_t g_wdg_fb      = NULL;
 static embediq_osal_atomic32_t g_running = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static uint32_t            g_kick_seq    = 0u;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 static uint32_t            g_fault_count = 0u;
 #endif
 
@@ -135,7 +135,7 @@ static void monitor_scan(void)
             misses[n_miss].handle     = g_slots[i].handle;
             misses[n_miss].timeout_ms = g_slots[i].timeout_ms;
             n_miss++;
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
             g_fault_count++;
 #endif
         }
@@ -353,10 +353,10 @@ void embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only API — EMBEDIQ_PLATFORM_HOST only
+ * Test-only API — EMBEDIQ_TEST_HOOKS only
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 /**
  * Reset all watchdog state.
@@ -400,4 +400,4 @@ void wdg__stop_monitor(void)
     }
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

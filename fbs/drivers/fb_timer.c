@@ -17,7 +17,7 @@
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_PLATFORM (1)
  *
- * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
+ * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   fb_timer__start()         — init + start HAL timer without engine_boot
  *   fb_timer__stop_and_wait() — stop + deinit HAL timer
  *   fb_timer__reset_counts()  — zero all tick counters
@@ -58,12 +58,12 @@ static embediq_osal_atomic32_t g_running  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);  /* 
 static bool                 g_has_1ms_sub = false;
 static volatile uint32_t    g_tick        = 0u;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 static volatile uint32_t    g_cnt_1ms     = 0u;
 static volatile uint32_t    g_cnt_10ms    = 0u;
 static volatile uint32_t    g_cnt_100ms   = 0u;
 static volatile uint32_t    g_cnt_1sec    = 0u;
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */
 
 /* ---------------------------------------------------------------------------
  * HAL timer callback — invoked every 1 ms on the HAL timer thread (ISR-like
@@ -97,7 +97,7 @@ static void timer_callback(void *ctx)
 
     uint32_t tick = ++g_tick;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     g_cnt_1ms++;
 #endif
 
@@ -108,7 +108,7 @@ static void timer_callback(void *ctx)
 
     /* 10 ms */
     if ((tick % 10u) == 0u) {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
         g_cnt_10ms++;
 #endif
         post_tick(MSG_TIMER_10MS);
@@ -116,7 +116,7 @@ static void timer_callback(void *ctx)
 
     /* 100 ms */
     if ((tick % 100u) == 0u) {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
         g_cnt_100ms++;
 #endif
         post_tick(MSG_TIMER_100MS);
@@ -124,7 +124,7 @@ static void timer_callback(void *ctx)
 
     /* 1 s */
     if ((tick % 1000u) == 0u) {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
         g_cnt_1sec++;
 #endif
         post_tick(MSG_TIMER_1SEC);
@@ -193,10 +193,10 @@ EmbedIQ_FB_Handle_t fb_timer_register(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only API — EMBEDIQ_PLATFORM_HOST only
+ * Test-only API — EMBEDIQ_TEST_HOOKS only
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 /** Start the HAL timer directly without going through embediq_engine_boot(). */
 void fb_timer__start(void)
@@ -237,4 +237,4 @@ uint32_t fb_timer__count_1sec(void)  { return g_cnt_1sec;  }
 /** True if MSG_TIMER_1MS subscriber was detected during the last init. */
 bool fb_timer__has_1ms_sub(void) { return g_has_1ms_sub; }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

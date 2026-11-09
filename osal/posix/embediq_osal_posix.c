@@ -135,11 +135,11 @@ static void *_task_entry(void *raw)
     return NULL;
 }
 
-/* Test-only failure injection (host builds only), like
+/* Test-only failure injection (EMBEDIQ_TEST_HOOKS builds only), like
  * embediq_osal__fail_next_mutex_create() below: the nth
  * embediq_osal_task_create() call from now fails once, observed like a real
  * thread-creation failure (n = 0 disarms). */
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 static _Atomic uint32_t s_task_fail_countdown = 0u;
 
 void embediq_osal__fail_next_task_create(uint32_t nth)
@@ -158,7 +158,7 @@ EmbedIQ_Task_t *embediq_osal_task_create(const char    *name,
     (void)priority;
     (void)stack_bytes;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     uint32_t n = atomic_load(&s_task_fail_countdown);
     while (n != 0u
            && !atomic_compare_exchange_weak(&s_task_fail_countdown, &n, n - 1u)) {
@@ -424,14 +424,14 @@ void embediq_osal_signal_destroy(EmbedIQ_Signal_t *sig)
  * ------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
- * Test-only failure injection (host builds only) — review #182 N2
+ * Test-only failure injection (EMBEDIQ_TEST_HOOKS builds only) — review #182 N2
  *
  * embediq_osal__fail_next_mutex_create(n): the nth embediq_osal_mutex_create()
  * call from now returns NULL, once (n = 0 disarms). Lets tests drive the
  * "required boot resource unavailable" path without exhausting memory.
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 static _Atomic uint32_t s_mutex_fail_countdown = 0u;
 
 void embediq_osal__fail_next_mutex_create(uint32_t nth)
@@ -442,7 +442,7 @@ void embediq_osal__fail_next_mutex_create(uint32_t nth)
 
 EmbedIQ_Mutex_t *embediq_osal_mutex_create(void)
 {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     uint32_t n = atomic_load(&s_mutex_fail_countdown);
     while (n != 0u
            && !atomic_compare_exchange_weak(&s_mutex_fail_countdown, &n, n - 1u)) {

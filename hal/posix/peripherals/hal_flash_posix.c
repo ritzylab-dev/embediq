@@ -74,7 +74,7 @@ static char s_tmp_path[PATH_BUF];
  * temp path could alias the store path, so every operation is refused. */
 static bool s_path_invalid = false;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /* Test-only: hal_flash_write calls attempted, and how many of the next
  * calls fail with HAL_ERR_IO without touching the file. Written by the test
  * thread between operations; the NVM persist lock serialises the writers. */
@@ -210,7 +210,10 @@ static int read_file(void *buf, size_t buf_size, size_t *out_len)
  */
 static bool sync_directory(const char *dir, bool is_parent)
 {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifndef EMBEDIQ_TEST_HOOKS
+    (void)is_parent;   /* read only by the test hooks below */
+#endif
+#ifdef EMBEDIQ_TEST_HOOKS
     uint32_t *fail = is_parent ? &s_fail_parent_syncs : &s_fail_dir_syncs;
     if (*fail > 0u) {
         (*fail)--;
@@ -221,7 +224,7 @@ static bool sync_directory(const char *dir, bool is_parent)
     if (fd < 0) return false;
     bool ok = fsync(fd) == 0;
     if (close(fd) != 0) ok = false;
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     if (ok && is_parent) {
         s_parent_syncs++;
         memcpy(s_last_parent_synced, dir, strlen(dir) + 1u);
@@ -297,7 +300,7 @@ int hal_flash_read(uint32_t addr, void *buf, size_t len)
     if (!buf || !range_ok(addr, len)) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     if (len == 0u) return HAL_OK;   /* nothing to read */
     resolve_paths();
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     if (s_fail_reads > 0u) {
         s_fail_reads--;
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_IO);
@@ -328,7 +331,7 @@ int hal_flash_write(uint32_t addr, const void *buf, size_t len)
 {
     if (!buf || !range_ok(addr, len)) { EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_FLASH, HAL_ERR_INVALID); return HAL_ERR_INVALID; }
     if (len == 0u) return HAL_OK;   /* no-op: the store is not rewritten */
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     s_write_calls++;
     if (s_fail_writes > 0u) {
         s_fail_writes--;
@@ -388,7 +391,7 @@ uint32_t hal_flash_page_size(void)
     return HAL_FLASH_PAGE_SIZE;
 }
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /** The next n hal_flash_write calls fail with HAL_ERR_IO (0 = none; test use only). */
 void hal_flash__fail_next_write(uint32_t n)
 {

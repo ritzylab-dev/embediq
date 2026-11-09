@@ -152,6 +152,23 @@ TSAN_OPTIONS="halt_on_error=0 second_deadlock_stack=1 history_size=4 suppression
 
 The tsan CI job is advisory until Set 2 fixes land; after F7 it is a required check.
 
+### Release profile
+
+```bash
+cmake -B build-release -DEMBEDIQ_PLATFORM=host -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+```
+
+Test instrumentation (reset and introspection functions, failure injection,
+capture buffers and counters) is compiled only when `EMBEDIQ_TEST_HOOKS` is on:
+on by default for development and test builds, off when `CMAKE_BUILD_TYPE` is
+`Release`. The release profile builds every library and example but no test
+executable. It contains no test hooks and no GPIO simulation (`EMBEDIQ_GPIO_SIM`;
+the GPIO HAL drives the real `/sys/class/gpio`), and keeps the host behaviour
+selected by `EMBEDIQ_PLATFORM_HOST`: the Observatory host transports and the
+socket bridge. `tools/ci/check_release_symbols.sh` builds this profile and
+checks it; the `release-symbols` CI job runs it on every PR.
+
 ---
 
 ## Getting help

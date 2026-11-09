@@ -57,10 +57,10 @@ EmbedIQ_FB_Handle_t fb_gpio_register(const embediq_gpio_pin_config_t *pins,
                                       uint8_t pin_count);
 
 /* ---------------------------------------------------------------------------
- * Test injection -- EMBEDIQ_PLATFORM_HOST builds only
+ * Test injection -- EMBEDIQ_TEST_HOOKS builds only
  * Used by unit tests to simulate HAL write failures.
  * ------------------------------------------------------------------------- */
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /*
  * Cause the next hal_gpio_write() call for physical pin `pin` to return -1.
  * Resets automatically after one triggered failure.

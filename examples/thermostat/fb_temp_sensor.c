@@ -103,10 +103,10 @@ static void sensor_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only API — EMBEDIQ_PLATFORM_HOST only
+ * Test-only API — EMBEDIQ_TEST_HOOKS only
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 /** Return the last simulated temperature (°C) computed by sensor_tick. */
 float sensor__last_temp(void)
@@ -114,7 +114,7 @@ float sensor__last_temp(void)
     return g_temp;
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */
 
 /* ---------------------------------------------------------------------------
  * Public: fb_temp_sensor_register()

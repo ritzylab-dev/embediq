@@ -16,7 +16,7 @@ A PR that breaks any invariant will not merge. No exceptions.
 | I-02 | `sizeof(EmbedIQ_Event_t) == 14` on all targets                                                                | `static_assert` + CI multi-target compile              |
 | I-03 | `offsetof(EmbedIQ_Msg_t, payload) == 20` on all targets                                                       | `static_assert`                                        |
 | I-04 | `messages.iq` is the only payload schema source                                                               | Grep: no hand-written payload structs                  |
-| I-05 | Zero `test/*` symbols in production binary                                                                    | `nm`/`readelf` on release binary                       |
+| I-05 | Zero `test/*` symbols in production binary                                                                    | Enforced by `tools/ci/check_release_symbols.sh` on the release profile (CI job `release-symbols`) |
 | I-06 | `EMBEDIQ_DEBUG_JSON` never defined in release builds                                                          | CMake release config check                             |
 | I-07 | No `malloc`/`free` in Layer 1                                                                                 | Binary analysis: no malloc in Layer 1 objects          |
 | I-08 | All sizing parameters in `embediq_config.h`                                                                   | `validator.py` fails build if hardcoded                |
@@ -44,7 +44,7 @@ Any PR violating these will be rejected.
 | R-04 | Apache 2.0 only in Core/Layer 1/Layer 2. No GPL or LGPL anywhere.                                                                         |             |
 | R-05 | Every layer: one interface header, one or more impl directories.                                                                          |             |
 | R-06 | Every module: `EmbedIQ_Module_Meta_t` descriptor.                                                                                         |             |
-| R-07 | Test infrastructure compiles to zero bytes in production.                                                                                 |             |
+| R-07 | Test infrastructure compiles to zero bytes in production.                                                                                 | Enforced by `tools/ci/check_release_symbols.sh` on the release profile (CI job `release-symbols`) |
 | R-08 | Core headers compile standalone — no OSAL or platform headers.                                                                            |             |
 | R-09 | Native bus never depends on Bridge.                                                                                                       |             |
 | R-10 | `messages.iq` is the only authoritative payload schema source.                                                                            |             |

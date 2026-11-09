@@ -47,11 +47,11 @@
 static EmbedIQ_FB_Handle_t s_fb = NULL;  /* EmbedIQ_FB_Handle_t = void* */
 
 /* ---------------------------------------------------------------------------
- * Host-only test capture (engine-free unit testing). Records published
- * messages and report_fault() calls so the unit test can assert on them
- * without booting the engine or the bus.
+ * Test capture, EMBEDIQ_TEST_HOOKS only (engine-free unit testing). Records
+ * published messages and report_fault() calls so the unit test can assert on
+ * them without booting the engine or the bus.
  * ------------------------------------------------------------------------- */
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 #define PROV_TEST_MAX_PUB  16
 static uint16_t s_test_pub_id[PROV_TEST_MAX_PUB];
 static uint8_t  s_test_pub_status[PROV_TEST_MAX_PUB];
@@ -66,7 +66,7 @@ static void prov_test_record(uint16_t msg_id, uint8_t first_byte)
         s_test_pub_count++;
     }
 }
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */
 
 /* ---------------------------------------------------------------------------
  * Internal helpers
@@ -90,7 +90,7 @@ static void prov_publish(uint16_t msg_id, const void *payload, uint16_t len)
         msg.payload_len = len;
     }
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     prov_test_record(msg_id,
                      (payload != NULL && len > 0u)
                          ? ((const uint8_t *)payload)[0] : 0u);
@@ -104,7 +104,7 @@ static void prov_publish(uint16_t msg_id, const void *payload, uint16_t len)
 /* Report an FB fault. In host unit tests (s_fb == NULL) records the call only. */
 static void prov_report_fault(uint32_t reason)
 {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     s_test_fault_count++;
 #endif
     if (s_fb != NULL) {
@@ -334,12 +334,12 @@ void fb_provisioning_register(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only accessors (host/test builds only — never linked into production).
+ * Test-only accessors (EMBEDIQ_TEST_HOOKS builds only — never linked into production).
  * Drive the startup sequence and sub-functions without the engine/bus, and
  * expose the captured publish / fault effects.
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 void fb_provisioning__test_reset(void)
 {
@@ -389,4 +389,4 @@ int fb_provisioning__test_fault_count(void)
     return s_test_fault_count;
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

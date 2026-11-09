@@ -70,7 +70,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 | R-04 | Apache 2.0 only in Core/Layer 1/Layer 2. No GPL or LGPL. | CI license scanner |
 | R-05 | Every layer: one interface header, one or more impl directories. | Directory structure enforced |
 | R-06 | Every module: EmbedIQ_Module_Meta_t descriptor. | meta_scanner validates at build |
-| R-07 | Test infrastructure compiles to zero bytes in production. | CI: zero test symbols in release binary |
+| R-07 | Test infrastructure compiles to zero bytes in production. | Enforced by `tools/ci/check_release_symbols.sh` on the release profile (CI job `release-symbols`) |
 | R-08 | Core headers compile standalone — no OSAL or platform headers. | CI: compile Core headers in isolation |
 | R-09 | Native bus never depends on Bridge. | CI: compile without bridge flag |
 | R-10 | messages.iq is the only authoritative payload schema source. | Tooling: all payload structs generated |
