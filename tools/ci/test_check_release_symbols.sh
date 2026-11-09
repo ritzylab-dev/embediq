@@ -105,9 +105,16 @@ OBS=core/src/observatory/obs.c
 save "$OBS"
 perl -0pi -e 's/#ifdef EMBEDIQ_TEST_HOOKS\n(static uint32_t g_total\b[^\n]*\n)#endif[^\n]*\n/$1/g;
               s/#ifdef EMBEDIQ_TEST_HOOKS\n(\s*g_total\+\+;\n)#endif[^\n]*\n/$1/g' "$TREE/$OBS"
-n_unguarded=$(grep -cE '^static uint32_t g_total\b|^\s*g_total\+\+;' "$TREE/$OBS")
-echo "== S1: $n_unguarded g_total sites unguarded (definition + 3 increments expected)"
-run_case S1 nonzero "" "FAIL  (f)" "g_total"
+n_sites=$(grep -cE '^static uint32_t g_total\b|^\s*g_total\+\+;' "$TREE/$OBS")
+n_guarded=$(grep -B1 -E '^static uint32_t g_total\b|^\s*g_total\+\+;' "$TREE/$OBS" \
+            | grep -c '^#ifdef EMBEDIQ_TEST_HOOKS')
+echo "== S1: $n_sites g_total sites, $n_guarded still guarded (expected 4 and 0)"
+if [ "$n_sites" -ne 4 ] || [ "$n_guarded" -ne 0 ]; then
+    echo "FAIL  S1 (mutation did not leave g_total unguarded)"
+    failures=$((failures + 1))
+else
+    run_case S1 nonzero "" "FAIL  (f)" "g_total"
+fi
 restore "$OBS"
 
 # --- S2a / S2b: an example hook guarded by the host macro.
