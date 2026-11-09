@@ -485,9 +485,8 @@ static void bridge_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
         g_unix_fd = open_unix_listener(sock_path);
     }
     /* TCP listener — deferred per ITEM5 Topic 11 OUT table.
-     * Env vars are read for forward-compatibility / documentation only. */
-    (void)getenv("EMBEDIQ_BRIDGE_PORT");
-    (void)getenv("EMBEDIQ_BRIDGE_HOST");
+     * EMBEDIQ_BRIDGE_PORT and EMBEDIQ_BRIDGE_HOST are reserved for it and
+     * not read until it exists. */
 
     const char *hb = getenv("EMBEDIQ_BRIDGE_HEARTBEAT_MS");
     if (hb != NULL && hb[0] != '\0') {
