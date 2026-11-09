@@ -241,3 +241,8 @@ jobs:
       # framework library against tools/ci/test_hook_inventory.txt (I-05, R-07).
       - name: No test hooks in the host release build
         run: tools/ci/check_release_symbols.sh
+
+      # The check must reject each of its known failure shapes and accept the
+      # unmodified tree; runs in a scratch copy of the checkout.
+      - name: Release symbol check self-test
+        run: tools/ci/test_check_release_symbols.sh
