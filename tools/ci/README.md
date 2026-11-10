@@ -28,7 +28,7 @@ blocking.
 | `tools/boundary_checker.py` | no source includes a header from a layer it may not access | ARCHITECTURE.md "Layer Boundary Rules" | blocking | `tools/test_boundary_checker.py` |
 | `licence_check.py --strict` | every first-party `.c`/`.h` carries `SPDX-License-Identifier: Apache-2.0` | R-04 | blocking | `test_licence_check.py` |
 | `check_message_ids.py` | no message ID or message name is defined more than once | CODING_RULES.md, message-ID rules | blocking | `test_check_message_ids.py` |
-| `check_core_headers.sh` | every core header compiles standalone and includes only C freestanding headers | R-08, I-01 | blocking | `test_check_core_headers.sh` |
+| `check_core_headers.sh` | every core header compiles standalone, includes no system header other than <stdint.h>, <stddef.h>, <stdbool.h>, and every quote include resolves to a core or generated header | R-08, I-01 | blocking | `test_check_core_headers.sh` |
 | `component_globals_check.py` | components do not store OSAL handles at file scope | R-lib-4 | advisory | — |
 | `component_state_check.py` | components do not call OSAL APIs | R-lib-4 | advisory | — |
 | `vendoring_check.py` | every `third_party/` subdirectory has a complete `VENDORING.md` | R-lib-3 | advisory | — |
@@ -36,7 +36,7 @@ blocking.
 | `ops_version_check.py` | every ops table header defines its ABI version and leads with a `uint32_t version` field | R-lib-4 | advisory | — |
 | `binary_blob_check.py` | no compiled objects in source directories | CODING_RULES.md | advisory | — |
 | `check_release_symbols.sh` | no test hooks in the host release build | R-07, I-05 | blocking (job `release-symbols`) | `test_check_release_symbols.sh` |
-| `tsan_summarise.py` | no ThreadSanitizer finding, runtime abort or sanitizer-handled crash in the test run | ARCHITECTURE.md "Threads in EmbedIQ" | blocking (job `tsan`) | `test_tsan_summarise.py` |
+| `tsan_summarise.py` | no ThreadSanitizer finding, unparsed report, runtime abort or sanitizer-handled crash in the test run | ARCHITECTURE.md "Threads in EmbedIQ" | blocking (job `tsan`) | `test_tsan_summarise.py` |
 
 The `tsan` job also builds `tsan_canary.c`, a deliberately racy program, and
 requires the summary to reject it before the test run — proof on every run

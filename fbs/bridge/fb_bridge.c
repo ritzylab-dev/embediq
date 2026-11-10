@@ -29,7 +29,7 @@
  *   EMBEDIQ_OBS_EVT_EXTFB_CONNECTED    (0x32, STATE band)
  *   EMBEDIQ_OBS_EVT_EXTFB_DISCONNECTED (0x33, STATE band)
  *
- * Layer rules (enforced by tools/boundary_checker.py):
+ * Layer rules (the include rule is enforced by tools/boundary_checker.py):
  *   - Zero hal_* includes.
  *   - All POSIX headers gated under EMBEDIQ_PLATFORM_HOST.
  *   - All thread creation through embediq_osal_task_create().

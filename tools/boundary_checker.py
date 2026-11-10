@@ -43,9 +43,22 @@ Rules:
   - components/ utility libraries (e.g. embediq_crc — LIB-3) carry zero
     framework dependencies and exist to be consumed by the layers above them;
     Driver and Service FBs may include them directly.
-  - Directories whose name starts with "build", .git and __pycache__ are
-    skipped. A file that cannot be opened or a directory that cannot be listed
-    is a violation ("cannot read").
+  - Directories named build, or whose name starts with build_ or build-, are
+    skipped, as are .git and __pycache__. A file that cannot be opened or a
+    directory that cannot be listed is a violation ("cannot read").
+  - An include is recognised when the directive starts its line; block
+    comments that open and close on that line, before or inside the
+    directive, are skipped and `%:` is read as `#`. An include written through
+    a macro, split by a line continuation, or preceded or interrupted by a
+    block comment that spans lines is not inspected. A source file under
+    core/, osal/, hal/ or fbs/ that is neither under core/include/ nor in one
+    of the source locations above is rejected as an unrecognised source
+    location. This check does not reject an include that resolves to a file
+    inside generated/, from any source location. A source file's location is
+    its path in the tree: symbolic links are not followed when deciding it,
+    and a directory reached through a symbolic link is not walked. A
+    generated header is identified by its canonical path: a link inside
+    generated/ to a file outside it is not a generated header.
 
 On success prints one line: boundary_checker.py: OK — <n> file(s) checked, 0 violations.
 
@@ -130,8 +143,12 @@ _HEADER_EXT = ('.h', '.hpp')
 _SOURCE_EXT = ('.c', '.h', '.cpp', '.hpp')
 
 
+_CHECKED_ROOTS = ('core', 'osal', 'hal', 'fbs')
+
+
 def _skip_dir(name):
-    return name.startswith('build') or name in ('.git', '__pycache__')
+    return (name == 'build' or name.startswith(('build_', 'build-'))
+            or name in ('.git', '__pycache__'))
 
 
 def _rel(path, repo_root):
@@ -201,7 +218,11 @@ def _is_generated(path, repo_root):
 
 # ── Per-file include check ───────────────────────────────────────────────────
 
-_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
+# A directive that starts its line; block comments that open and close on the
+# line are skipped before and inside it, and `%:` is the digraph for `#`.
+_BLOCK_COMMENT = r'/\*(?:[^*]|\*(?!/))*\*/'
+_GAP = r'\s*(?:' + _BLOCK_COMMENT + r'\s*)*'
+_INCLUDE_RE = re.compile(r'^' + _GAP + r'(?:#|%:)' + _GAP + r'include' + _GAP + r'"([^"]+)"')
 
 
 def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
@@ -303,6 +324,12 @@ def run(repo_root):
             abs_path   = os.path.join(dirpath, fname)
             rel_path   = _rel(abs_path, repo_root)
             file_layer = _layer_of(rel_path)
+            if file_layer is None and rel_path.split('/')[0] in _CHECKED_ROOTS:
+                all_violations.append(
+                    f'VIOLATION: {rel_path}: unrecognised source location — every '
+                    f'source under core/, osal/, hal/ and fbs/ belongs to a location '
+                    f'listed in ARCHITECTURE.md, Layer Boundary Rules')
+                continue
             if file_layer not in _ALLOWED:
                 continue  # layer not under our rules
             checked += 1

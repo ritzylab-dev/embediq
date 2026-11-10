@@ -6,6 +6,10 @@
 # depth) is skipped — vendored code keeps its upstream licence notices; this is
 # not a dependency licence review. Under --strict a file that cannot be read or
 # a directory that cannot be listed is a violation.
+# The identifier is the whole remainder of the first line carrying
+# `SPDX-License-Identifier:`, less surrounding whitespace and one closing `*/`;
+# it must be exactly Apache-2.0 (`Apache-2.0 OR MIT` is rejected). Directories
+# named build, or whose name starts with build_ or build-, are skipped.
 # Usage: python3 tools/ci/licence_check.py [--root <repo>] [--strict]
 #
 # @author  Ritesh Anand
@@ -18,9 +22,21 @@ import os
 import re
 import sys
 
-_SPDX_PATTERN = re.compile(r'SPDX-License-Identifier:\s*(\S+)')
+_SPDX_PATTERN = re.compile(r'SPDX-License-Identifier:(.*)$', re.MULTILINE)
 _SKIP_DIRS = {'.git', '__pycache__', 'generated'}
 _VENDORED = 'third_party'
+
+
+def _is_build_dir(name):
+    return name == 'build' or name.startswith(('build_', 'build-'))
+
+
+def _identifier(remainder):
+    """The licence expression: the line's remainder without a closing */."""
+    value = remainder.strip()
+    if value.endswith('*/'):
+        value = value[:-2].rstrip()
+    return value
 _VENDORED_NOTICE = ('third_party/: not checked — vendored code keeps its upstream '
                     'licence notices; this check covers first-party sources only '
                     'and is not a dependency licence review.')
@@ -44,7 +60,7 @@ def run(repo_root, strict=False):
             pruned_vendored = True
         dirnames[:] = [d for d in dirnames
                        if d not in _SKIP_DIRS and d != _VENDORED
-                       and not d.startswith('build')]
+                       and not _is_build_dir(d)]
         for fname in filenames:
             if not fname.endswith(('.c', '.h')):
                 continue
@@ -59,6 +75,7 @@ def run(repo_root, strict=False):
                 continue
 
             m = _SPDX_PATTERN.search(content)
+            ident = _identifier(m.group(1)) if m else None
             if not m:
                 violations.append(
                     f'{tag}: {rel_path}:\n'
@@ -72,10 +89,10 @@ def run(repo_root, strict=False):
                     f'the file comment header\n'
                     f'  See-also: https://spdx.dev/ids/'
                 )
-            elif m.group(1) != 'Apache-2.0':
+            elif ident != 'Apache-2.0':
                 violations.append(
                     f'{tag}: {rel_path}:\n'
-                    f"  Issue: SPDX-License-Identifier is '{m.group(1)}' "
+                    f"  Issue: SPDX-License-Identifier is '{ident}' "
                     f"(expected 'Apache-2.0')\n"
                     f'  Rule: CODING_RULES.md — all source files must carry '
                     f'SPDX-License-Identifier: Apache-2.0\n'

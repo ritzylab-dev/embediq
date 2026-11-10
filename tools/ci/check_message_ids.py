@@ -12,10 +12,15 @@ Usage:
   Defaults: the repository's messages/ and core/include/embediq_platform_msgs.h,
   located from this script's own path.
 
+A header line that starts `#define MSG_` but is not a definition of the form
+above, or whose value is not a valid C integer, cannot be parsed: it is an
+error naming the file and line, never silently dropped.
+
 Exit codes: 0 = no duplicates; 1 = a duplicate ID or name (both definitions
-are named as "<file>: <NAME> = 0xNNNN"); 2 = a source cannot be read or
-parsed, no catalog exists, a catalog defines no messages, or the header
-yields no definitions — an empty input is never a pass.
+are named as "<file>: <NAME> = 0xNNNN"); 2 = a source cannot be read (including
+a file that is not valid UTF-8) or parsed, no catalog exists, a catalog defines
+no messages, or the header yields no definitions — an empty input is never a
+pass.
 
 @author  Ritesh Anand
 @company embediq.com | ritzylab.com
@@ -35,6 +40,8 @@ REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 GENERATOR = os.path.join(REPO, "tools", "messages_iq", "generate.py")
 HEADER_DEFINE = re.compile(
     r"^\s*#\s*define\s+(MSG_[A-Z0-9_]+)\s+(0x[0-9A-Fa-f]+|[0-9]+)[uU]?\b")
+# Every line that starts a MSG_ definition; each must be matched by HEADER_DEFINE.
+HEADER_MSG_LINE = re.compile(r"^\s*#\s*define\s+MSG_")
 
 
 def _display(path):
@@ -79,7 +86,7 @@ def main(argv):
     for path in catalogs:
         try:
             text = _read(path)
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             print(f"check_message_ids.py: cannot read {_display(path)}: {e}")
             return 2
         try:
@@ -95,12 +102,23 @@ def main(argv):
 
     try:
         header_text = _read(args.header)
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         print(f"check_message_ids.py: cannot read {_display(args.header)}: {e}")
         return 2
-    header_defs = [(_display(args.header), m.group(1), int(m.group(2), 0))
-                   for m in (HEADER_DEFINE.match(l) for l in header_text.splitlines())
-                   if m]
+    header_defs = []
+    for lineno, line in enumerate(header_text.splitlines(), 1):
+        if not HEADER_MSG_LINE.match(line):
+            continue
+        m = HEADER_DEFINE.match(line)
+        try:
+            value = int(m.group(2), 0) if m else None
+        except ValueError:
+            value = None
+        if value is None:
+            print(f"check_message_ids.py: cannot parse {_display(args.header)}:{lineno}: "
+                  f"{line.strip()}")
+            return 2
+        header_defs.append((_display(args.header), m.group(1), value))
     if not header_defs:
         print(f"check_message_ids.py: no header definitions found in {_display(args.header)}")
         return 2

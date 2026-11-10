@@ -19,16 +19,22 @@ Usage:
   --github  also emit ::error annotations and append the table to
             $GITHUB_STEP_SUMMARY.
 
-Runtime aborts are listed separately: a line containing "ThreadSanitizer: CHECK
-failed", "FATAL: ThreadSanitizer" or "ERROR: ThreadSanitizer" (a crash the
-sanitizer handled, such as SEGV). They are read from the tsan.* files and from
+Runtime aborts are listed separately: a line containing one of the four tokens
+"ThreadSanitizer: CHECK failed", "FATAL: ThreadSanitizer", "ERROR:
+ThreadSanitizer" (a crash the sanitizer handled, such as SEGV) or
+"ThreadSanitizer: nested bug". They are read from the tsan.* files and from
 <dir>/Testing/Temporary/LastTest.log when it exists — the test output ctest
 recorded, the only record of a sanitizer start-up abort.
 
-Exit codes: 0 = no finding and no runtime abort; 1 = at least one finding or
-runtime abort; 2 = usage error, an argument that is not a readable directory,
-or a report that cannot be read (no table is printed). Python 3 standard
-library only.
+Unparsed reports: in each tsan.* file, every line containing "WARNING:
+ThreadSanitizer:" beyond the reports read as table rows is an unparsed report
+— a report was written but could not be read. They are counted on the first
+line, listed per file, and fail the run like a finding.
+
+Exit codes: 0 = no finding, no unparsed report and no runtime abort; 1 = at
+least one finding, unparsed report or runtime abort; 2 = usage error, an
+argument that is not a readable directory, or a report that cannot be read (no
+table is printed). Python 3 standard library only.
 
 @author  Ritesh Anand
 @company embediq.com | ritzylab.com
@@ -58,7 +64,9 @@ THREAD_DEF = re.compile(r"^\s*Thread (T\d+)(?: '([^']*)')? \(tid=")
 LOCATION = re.compile(r"^\s*Location is (.*)$")
 # A sanitizer runtime abort: CHECK failure, fatal error or handled crash.
 ABORT = re.compile(r"ThreadSanitizer: CHECK failed|FATAL: ThreadSanitizer|"
-                   r"ERROR: ThreadSanitizer")
+                   r"ERROR: ThreadSanitizer|ThreadSanitizer: nested bug")
+# Every report starts with this line; one not read as a table row is unparsed.
+WARNING_LINE = "WARNING: ThreadSanitizer:"
 
 KIND_NAMES = (
     ("data race", "data race"),
@@ -295,12 +303,15 @@ def main(argv):
 
     rows = OrderedDict()
     aborts = []
+    unparsed = []   # (file basename, count)
     total = 0
-    for text in texts:
+    for path, text in zip(files, texts):
+        parsed = 0
         for lines in read_reports(text):
             r = parse_report(lines)
             if r is None:
                 continue
+            parsed += 1
             total += 1
             if r["key"] not in rows:
                 rows[r["key"]] = dict(r, count=0, modules=set())
@@ -309,13 +320,18 @@ def main(argv):
                 rows[r["key"]]["modules"].add(r["module"])
         for msg, frames in read_aborts(text):
             aborts.append((msg, top_frame(frames)))
+        warnings = sum(1 for line in text if WARNING_LINE in line)
+        if warnings > parsed:
+            unparsed.append((os.path.basename(path), warnings - parsed))
+    n_unparsed = sum(n for _, n in unparsed)
     # The recorded test output is scanned for abort lines only.
     for msg, frames in read_aborts(last_test_lines):
         aborts.append((msg, top_frame(frames)))
 
     out = []
     out.append("TSan report files: {}   reports: {}   distinct findings: {}   "
-               "runtime aborts: {}".format(len(files), total, len(rows), len(aborts)))
+               "runtime aborts: {}   unparsed reports: {}".format(
+                   len(files), total, len(rows), len(aborts), n_unparsed))
     out.append("")
     out.append("| # | Kind | Variable or location (file:line) | Writer frame | "
                "Reader/other frame | Count |")
@@ -336,6 +352,12 @@ def main(argv):
         for msg, tf in aborts:
             where = "{} ({}, {})".format(tf[2], tf[0], tf[1]) if tf else "unknown"
             out.append("  - {} — {}".format(where, msg))
+    if n_unparsed:
+        out.append("")
+        out.append("UNPARSED REPORTS — a sanitizer report was written but could not be "
+                   "read as a table row:")
+        for name, n in unparsed:
+            out.append("  - {}: {}".format(name, n))
 
     text = "\n".join(out)
     print(text)
@@ -350,11 +372,14 @@ def main(argv):
         if rows:
             print("::error::ThreadSanitizer: {} distinct findings — "
                   "see the job summary and the tsan-reports artifact".format(len(rows)))
+        if n_unparsed:
+            print("::error::ThreadSanitizer: {} report(s) could not be parsed — "
+                  "see the tsan-reports artifact".format(n_unparsed))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with open(summary, "a") as fh:
                 fh.write("## ThreadSanitizer inventory\n\n" + text + "\n")
-    return 1 if rows or aborts else 0
+    return 1 if rows or aborts or n_unparsed else 0
 
 
 if __name__ == "__main__":

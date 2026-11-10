@@ -195,8 +195,8 @@ jobs:
             || { echo "gate self-check FAILED: expected exit 1 with a data race in tsan_canary; got exit $rc"; exit 1; }
 
       # Every test runs to completion and every sanitizer report is written (halt_on_error=0 exitcode=0). A test
-      # assertion failure or timeout fails this step; sanitizer findings, runtime aborts and sanitizer-handled crashes are failed by the summary step
-      # below, which always runs.
+      # assertion failure or timeout fails this step; sanitizer findings, unparsed reports, runtime aborts and sanitizer-handled crashes are failed
+      # by the summary step below, which always runs.
       - name: Run tests under ThreadSanitizer
         run: TSAN_OPTIONS="halt_on_error=0 exitcode=0 suppressions=$PWD/tools/ci/tsan.supp log_path=$PWD/build_tsan/tsan" ctest --test-dir build_tsan --output-on-failure --timeout 300
 
