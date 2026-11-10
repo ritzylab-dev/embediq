@@ -48,6 +48,40 @@ if(EMBEDIQ_PLATFORM STREQUAL "test")
 endif()
 
 # ---------------------------------------------------------------------------
+# Test instrumentation — EMBEDIQ_TEST_HOOKS
+#
+# Reset and introspection functions, failure injection, capture buffers and
+# counters used by the test suites. Separate from EMBEDIQ_PLATFORM_HOST, which
+# selects real host behaviour (Observatory transports, socket bridge) and stays
+# on in a Linux gateway release. ON by default, OFF by default when
+# CMAKE_BUILD_TYPE is Release; when OFF no test executable is built.
+# EMBEDIQ_GPIO_SIM (GPIO sysfs redirected to /tmp so CI needs no hardware)
+# follows this switch, so a release build drives real /sys/class/gpio.
+#
+# Release profile:
+#   cmake -B build-release -DEMBEDIQ_PLATFORM=host -DCMAKE_BUILD_TYPE=Release
+# Checked by tools/ci/check_release_symbols.sh.
+# ---------------------------------------------------------------------------
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(_embediq_test_hooks_default OFF)
+else()
+    set(_embediq_test_hooks_default ON)
+endif()
+option(EMBEDIQ_TEST_HOOKS
+    "Build test instrumentation and the test suites (host/test platforms only)"
+    ${_embediq_test_hooks_default})
+
+if(EMBEDIQ_TEST_HOOKS)
+    if(NOT (EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test"))
+        message(FATAL_ERROR "EMBEDIQ_TEST_HOOKS requires EMBEDIQ_PLATFORM=host or test")
+    endif()
+    add_compile_definitions(EMBEDIQ_TEST_HOOKS EMBEDIQ_GPIO_SIM)
+    message(STATUS "EmbedIQ: test hooks ON")
+else()
+    message(STATUS "EmbedIQ: test hooks OFF — tests not built")
+endif()
+
+# ---------------------------------------------------------------------------
 # Include paths
 #
 #   core/include  — framework contract headers; added as SYSTEM so -Wall/-Werror
@@ -125,9 +159,11 @@ if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
     add_subdirectory(fbs/drivers)
     add_subdirectory(fbs/services)
     add_subdirectory(fbs/bridge)
-    add_subdirectory(tests/unit)
-    add_subdirectory(tests/integration)
-    add_subdirectory(tests/lib)
+    if(EMBEDIQ_TEST_HOOKS)
+        add_subdirectory(tests/unit)
+        add_subdirectory(tests/integration)
+        add_subdirectory(tests/lib)
+    endif()
 
     # -----------------------------------------------------------------------
     # Component libraries + tests (LIB-3)
@@ -138,23 +174,25 @@ if(EMBEDIQ_PLATFORM STREQUAL "host" OR EMBEDIQ_PLATFORM STREQUAL "test")
         ${CMAKE_SOURCE_DIR}/components/embediq_crc)
     target_compile_options(embediq_crc PRIVATE -Wall -Wextra -Werror)
 
-    add_executable(test_embediq_crc
-        components/embediq_crc/test_embediq_crc.c)
-    target_include_directories(test_embediq_crc PRIVATE
-        ${CMAKE_SOURCE_DIR}/components/embediq_crc)
-    target_link_libraries(test_embediq_crc PRIVATE embediq_crc)
-    target_compile_options(test_embediq_crc PRIVATE -Wall -Wextra -Werror)
-    add_test(NAME unit_embediq_crc COMMAND test_embediq_crc)
+    if(EMBEDIQ_TEST_HOOKS)
+        add_executable(test_embediq_crc
+            components/embediq_crc/test_embediq_crc.c)
+        target_include_directories(test_embediq_crc PRIVATE
+            ${CMAKE_SOURCE_DIR}/components/embediq_crc)
+        target_link_libraries(test_embediq_crc PRIVATE embediq_crc)
+        target_compile_options(test_embediq_crc PRIVATE -Wall -Wextra -Werror)
+        add_test(NAME unit_embediq_crc COMMAND test_embediq_crc)
 
-    # -----------------------------------------------------------------------
-    # Platform library registration tests (LIB-4a)
-    # -----------------------------------------------------------------------
-    add_executable(test_platform_lib tests/test_platform_lib.c)
-    target_include_directories(test_platform_lib PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/include)
-    target_link_libraries(test_platform_lib PRIVATE embediq_fb_engine)
-    target_compile_options(test_platform_lib PRIVATE -Wall -Wextra -Werror)
-    add_test(NAME unit_platform_lib COMMAND test_platform_lib)
+        # -----------------------------------------------------------------------
+        # Platform library registration tests (LIB-4a)
+        # -----------------------------------------------------------------------
+        add_executable(test_platform_lib tests/test_platform_lib.c)
+        target_include_directories(test_platform_lib PRIVATE
+            ${CMAKE_SOURCE_DIR}/core/include)
+        target_link_libraries(test_platform_lib PRIVATE embediq_fb_engine)
+        target_compile_options(test_platform_lib PRIVATE -Wall -Wextra -Werror)
+        add_test(NAME unit_platform_lib COMMAND test_platform_lib)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

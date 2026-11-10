@@ -5,8 +5,10 @@
  *
  * Implements the hal_gpio.h contract over the Linux sysfs GPIO interface
  * (/sys/class/gpio). No libgpiod -- zero new dependencies. Under
- * EMBEDIQ_PLATFORM_HOST the sysfs paths are redirected to /tmp files so unit
- * tests and CI run without root or GPIO hardware.
+ * EMBEDIQ_GPIO_SIM (defined with EMBEDIQ_TEST_HOOKS, never in the release
+ * profile) the sysfs paths are redirected to /tmp files so unit tests and CI
+ * run without root or GPIO hardware; a release host build drives the real
+ * /sys/class/gpio.
  *
  * This layer deals exclusively in PHYSICAL pin numbers. The logical gpio_id
  * abstraction lives in fb_gpio.c -- the HAL never sees it.
@@ -29,11 +31,11 @@
 #include <stdint.h>
 
 /* ---------------------------------------------------------------------------
- * sysfs paths -- redirected to /tmp on host builds. On host the attribute
- * separator is "_" (flat files in /tmp); on the real target it is "/".
+ * sysfs paths -- redirected to /tmp under EMBEDIQ_GPIO_SIM. Simulated, the
+ * attribute separator is "_" (flat files in /tmp); on real sysfs it is "/".
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_GPIO_SIM
 #  define GPIO_SYSFS_EXPORT    "/tmp/embediq_gpio_export"
 #  define GPIO_SYSFS_UNEXPORT  "/tmp/embediq_gpio_unexport"
 #  define GPIO_SYSFS_BASE      "/tmp/embediq_gpio"
@@ -46,10 +48,10 @@
 #endif
 
 /* ---------------------------------------------------------------------------
- * Test-only failure injection (host builds only)
+ * Test-only failure injection (EMBEDIQ_TEST_HOOKS)
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 static uint8_t g_fail_write_pin   = 0xFFu;   /* 0xFF = no pending failure */
 static uint8_t g_fail_write_armed = 0u;
 
@@ -115,7 +117,7 @@ int hal_gpio_init(uint8_t pin, hal_gpio_dir_t dir, hal_gpio_pull_t pull)
 
 int hal_gpio_write(uint8_t pin, uint8_t val)
 {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     if (g_fail_write_armed && pin == g_fail_write_pin) {
         g_fail_write_armed = 0u;
         g_fail_write_pin   = 0xFFu;

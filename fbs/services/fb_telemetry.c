@@ -209,7 +209,7 @@ static void publish_batch(uint8_t fault_triggered)
 
 /* ---------------------------------------------------------------------------
  * Package-internal aggregator helpers — callable from both the sub-function
- * handlers (production path) and the unit tests (EMBEDIQ_PLATFORM_HOST).
+ * handlers (production path) and the unit tests (EMBEDIQ_TEST_HOOKS).
  *
  * These are not in fb_telemetry.h; declared extern in tests/unit/test_fb_telemetry.c.
  * ------------------------------------------------------------------------- */
@@ -383,10 +383,10 @@ void fb_telemetry_set_tag(const char *key, const char *value)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only API — EMBEDIQ_PLATFORM_HOST only (I-05)
+ * Test-only API — EMBEDIQ_TEST_HOOKS only (I-05)
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 void fb_telemetry__reset(void)
 {
@@ -424,4 +424,4 @@ void fb_telemetry__force_flush(uint8_t fault_triggered)
     reset_table();
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

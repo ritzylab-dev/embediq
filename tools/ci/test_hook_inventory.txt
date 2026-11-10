@@ -1,0 +1,86 @@
+# tools/ci/test_hook_inventory.txt — every test hook, by symbol
+#
+# The explicit inventory check_release_symbols.sh asserts against: every
+# function with external linkage defined inside an EMBEDIQ_TEST_HOOKS block in
+# core/, osal/, hal/, fbs/ and examples/. None may be defined in a host
+# release library. One symbol per line, sorted; lines starting with '#' and
+# blank lines are ignored. A hook added to the tree is added here too.
+#
+# @author  Ritesh Anand
+# @company embediq.com | ritzylab.com
+#
+# SPDX-License-Identifier: Apache-2.0
+
+bus_inject
+ctrl__reading_count
+embediq_osal__fail_next_mutex_create
+embediq_osal__fail_next_task_create
+embediq_platform_lib_reset
+fb_cloud_mqtt__publish_telemetry_json_test
+fb_cloud_mqtt__set_topic_test
+fb_engine__deliver_msg
+fb_engine__dispatch_sem
+fb_engine__exec_lock_held
+fb_engine__fault_overflow_total
+fb_engine__obs_event_count
+fb_engine__reset
+fb_engine__set_report_delay_hook
+fb_gpio__test_fault_count
+fb_gpio__test_pub_count
+fb_gpio__test_pub_gpio_id
+fb_gpio__test_pub_id
+fb_gpio__test_pub_state
+fb_gpio__test_reset
+fb_provisioning__run_startup_test
+fb_provisioning__sf_cmd_rx_test
+fb_provisioning__sf_connected_test
+fb_provisioning__test_fault_count
+fb_provisioning__test_pub_count
+fb_provisioning__test_pub_id
+fb_provisioning__test_pub_status
+fb_provisioning__test_reset
+fb_telemetry__active_count
+fb_telemetry__force_flush
+fb_telemetry__get_entry
+fb_telemetry__reset
+fb_timer__count_100ms
+fb_timer__count_10ms
+fb_timer__count_1ms
+fb_timer__count_1sec
+fb_timer__has_1ms_sub
+fb_timer__reset_counts
+fb_timer__start
+fb_timer__stop_and_wait
+hal_flash__fail_next_dir_fsync
+hal_flash__fail_next_parent_fsync
+hal_flash__fail_next_read
+hal_flash__fail_next_write
+hal_flash__last_parent_synced
+hal_flash__parent_syncs
+hal_flash__write_calls
+hal_gpio__fail_next_write
+hal_tls__debug
+hal_tls__live_sessions
+hal_tls__set_connect_finish_hook
+message_bus__drop_count
+message_bus__get_notify_fn
+message_bus__reset
+message_bus__test_recv
+nvm__init_state
+nvm__load_state
+nvm__set_persist_delay_ms
+obs__event_count
+obs__force_overflow
+obs__format_event
+obs__isr_dropped_total
+obs__isr_ring_peek
+obs__reset
+obs__ring_count
+obs__ring_read
+obs__sequence_outside_critical
+obs__set_level
+sensor__last_temp
+wdg__fault_count
+wdg__init_state
+wdg__stop_monitor
+wdg__trigger_check

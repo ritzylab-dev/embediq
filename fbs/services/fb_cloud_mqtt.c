@@ -464,9 +464,9 @@ EmbedIQ_FB_Handle_t fb_cloud_mqtt_register(void)
     return embediq_fb_register(&k_cfg);
 }
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /* ---------------------------------------------------------------------------
- * Test-only accessors (host/test builds only — never linked into production)
+ * Test-only accessors (EMBEDIQ_TEST_HOOKS builds only — never linked into production)
  * Exposes publish_telemetry_json() and a setter for the topic so the unit
  * test (tests/unit/test_fb_cloud_mqtt.c) can drive the JSON code path without
  * boot/connect machinery.
@@ -481,4 +481,4 @@ void fb_cloud_mqtt__set_topic_test(const char *topic)
     if (topic == NULL) { s_telemetry_topic[0] = '\0'; return; }
     (void)snprintf(s_telemetry_topic, sizeof(s_telemetry_topic), "%s", topic);
 }
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

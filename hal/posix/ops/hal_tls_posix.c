@@ -131,7 +131,7 @@ typedef struct {
 
 static connect_args_t g_connect_args[EMBEDIQ_TLS_MAX_CONNECTIONS];
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /* Test hook: called by connect_finish after the slot is released and before
  * on_complete, with the attempt's user_ctx. NULL = no hook. */
 typedef void (*tls_connect_finish_hook_t)(void *user_ctx);
@@ -312,7 +312,7 @@ static void connect_finish(tls_slot_t *s, const connect_args_t *attempt,
     s->connected  = (result == EMBEDIQ_TLS_OK);
     s->connecting = false;
     pthread_mutex_unlock(&s->mutex);
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     tls_connect_finish_hook_t hook = atomic_load(&s_connect_finish_hook);
     if (hook) hook(attempt->user_ctx);
 #endif
@@ -701,7 +701,7 @@ const embediq_tls_ops_t *hal_tls_posix_ops(void)
     return hal_tls_posix_ops_slot(0u);
 }
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /** Install (fn) or remove (NULL) the hook connect_finish calls between
  *  releasing the slot and invoking on_complete (test use only). */
 void hal_tls__set_connect_finish_hook(void (*fn)(void *user_ctx))

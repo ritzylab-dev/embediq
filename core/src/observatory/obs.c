@@ -66,7 +66,7 @@
  *   The entire function body is (void) + return — zero overhead.
  *   All ring/format code is inside #ifdef EMBEDIQ_PLATFORM_HOST.
  *
- * Package-internal API (EMBEDIQ_PLATFORM_HOST only):
+ * Package-internal API (EMBEDIQ_TEST_HOOKS, host only):
  *   obs__reset()        — clear ring, counters, restore defaults
  *   obs__event_count()  — total events written to ring since reset
  *   obs__ring_count()   — events currently in ring
@@ -116,7 +116,9 @@ static const embediq_obs_stream_ops_t *s_stream_ops = NULL;
 static EmbedIQ_Event_t g_ring[EMBEDIQ_OBS_RING_DEPTH];
 static uint32_t g_ring_head  = 0u;  /* index of oldest stored event */
 static uint32_t g_ring_count = 0u;  /* events currently in ring     */
+#ifdef EMBEDIQ_TEST_HOOKS
 static uint32_t g_total      = 0u;  /* total events written to ring */
+#endif
 static uint32_t g_overflow   = 0u;  /* drops pending overflow report */
 
 /* Shared by the thread path and the ISR path. */
@@ -140,7 +142,9 @@ static embediq_osal_atomic32_t g_isr_ready[EMBEDIQ_OBS_ISR_RING_DEPTH];
 static embediq_osal_atomic32_t g_isr_head          = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static embediq_osal_atomic32_t g_isr_tail          = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static embediq_osal_atomic32_t g_isr_dropped       = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+#ifdef EMBEDIQ_TEST_HOOKS
 static embediq_osal_atomic32_t g_isr_dropped_total = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+#endif
 
 /* Power-of-2 mask: EMBEDIQ_OBS_RING_DEPTH must be a power of 2 (= 256). */
 #define RING_MASK  ((uint32_t)(EMBEDIQ_OBS_RING_DEPTH) - 1u)
@@ -353,19 +357,27 @@ static void transport_set(EmbedIQ_Obs_Transport_t t)
 
 /* Set while this module holds the OSAL critical section. Lets
  * next_sequence() verify the single-linearization-point rule (R3): a
- * sequence taken outside the section is counted for the tests. */
+ * sequence taken outside the section is counted for the tests. Test hooks
+ * only: in a release the rule holds by construction (next_sequence() is
+ * called only inside the section), so nothing checks it. */
+#ifdef EMBEDIQ_TEST_HOOKS
 static embediq_osal_atomic32_t g_in_critical        = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static embediq_osal_atomic32_t g_seq_outside_crit   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+#endif
 
 static void obs_critical_enter(void)
 {
     embediq_osal_critical_enter();
+#ifdef EMBEDIQ_TEST_HOOKS
     embediq_osal_atomic32_store(&g_in_critical, 1u);
+#endif
 }
 
 static void obs_critical_exit(void)
 {
+#ifdef EMBEDIQ_TEST_HOOKS
     embediq_osal_atomic32_store(&g_in_critical, 0u);
+#endif
     embediq_osal_critical_exit();
 }
 
@@ -373,9 +385,11 @@ static void obs_critical_exit(void)
  * (the one linearization point for both paths). */
 static uint32_t next_sequence(void)
 {
+#ifdef EMBEDIQ_TEST_HOOKS
     if (embediq_osal_atomic32_load(&g_in_critical) == 0u) {
         (void)embediq_osal_atomic32_add(&g_seq_outside_crit, 1u);
     }
+#endif
     return embediq_osal_atomic32_add(&g_sequence, 1u) - 1u;
 }
 
@@ -415,7 +429,9 @@ static uint32_t drain_isr_ring_locked(EmbedIQ_Event_t *out, uint32_t cap)
         embediq_osal_atomic32_store(&g_isr_tail, tail);
         e.sequence = next_sequence();   /* R3: sequence at ring entry, drain order */
         ring_push(&e, true);
+#ifdef EMBEDIQ_TEST_HOOKS
         g_total++;
+#endif
         if (out && copied < cap) out[copied++] = e;
     }
     uint32_t dropped = embediq_osal_atomic32_load(&g_isr_dropped);
@@ -523,7 +539,9 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
         };
         g_overflow = 0u;
         ring_push(&ovf, false);
+#ifdef EMBEDIQ_TEST_HOOKS
         g_total++;
+#endif
         have_ovf = true;
     }
 
@@ -537,7 +555,9 @@ void embediq_obs_emit(uint8_t event_type, uint8_t source, uint8_t target,
         .sequence      = next_sequence(),
     };
     ring_push(&evt, true);   /* may increment g_overflow if ring full */
+#ifdef EMBEDIQ_TEST_HOOKS
     g_total++;
+#endif
 
     obs_critical_exit();
     /* ---- end critical section ---- */
@@ -696,10 +716,11 @@ int embediq_obs_capture_end(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Package-internal + test-only API (EMBEDIQ_PLATFORM_HOST)
+ * Package-internal + test-only API (EMBEDIQ_TEST_HOOKS, host only: the hooks
+ * read the host ring state)
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#if defined(EMBEDIQ_TEST_HOOKS) && defined(EMBEDIQ_PLATFORM_HOST)
 
 /**
  * Reset all Observatory state.
@@ -828,6 +849,10 @@ void obs__format_event(const EmbedIQ_Event_t *evt, char *buf, size_t n)
     format_event_internal(evt, buf, n);
 }
 
+#endif /* EMBEDIQ_TEST_HOOKS && EMBEDIQ_PLATFORM_HOST */
+
+#ifdef EMBEDIQ_PLATFORM_HOST
+
 /* ---------------------------------------------------------------------------
  * ISR-safe emit — host implementation (host form of the Phase-2 MCU design)
  *
@@ -851,7 +876,9 @@ void embediq_obs_emit_from_isr(uint8_t event_type, uint8_t source,
         uint32_t tail = embediq_osal_atomic32_load(&g_isr_tail);
         if (head - tail >= (uint32_t)EMBEDIQ_OBS_ISR_RING_DEPTH) {
             (void)embediq_osal_atomic32_add(&g_isr_dropped, 1u);
+#ifdef EMBEDIQ_TEST_HOOKS
             (void)embediq_osal_atomic32_add(&g_isr_dropped_total, 1u);
+#endif
             return;
         }
         if (embediq_osal_atomic32_cas(&g_isr_head, head, head + 1u)) break;

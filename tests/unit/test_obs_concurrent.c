@@ -10,7 +10,7 @@
  * Zero external test framework — stdlib + pthread only.
  *
  * Run:      ./build/tests/unit/test_obs_concurrent
- * Expected: "All 10 tests passed. (0 failed)"
+ * Expected: "All 12 tests passed. (0 failed)"
  *
  * TSan:
  *   cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON
@@ -45,7 +45,7 @@
 #include <unistd.h>
 
 /* ---------------------------------------------------------------------------
- * Package-internal API (EMBEDIQ_PLATFORM_HOST)
+ * Package-internal API (EMBEDIQ_TEST_HOOKS)
  * ------------------------------------------------------------------------- */
 
 extern void     obs__reset(void);
@@ -54,12 +54,9 @@ extern uint32_t obs__ring_count(void);
 extern bool     obs__ring_read(uint32_t idx, EmbedIQ_Event_t *out);
 extern void     obs__set_level(uint8_t level);
 extern void     fb_engine__reset(void);
-/* Weak fallback so this file links before obs.c provides the hook (TDD-first
- * commit). obs.c's strong definition replaces it once implemented. */
-__attribute__((weak)) uint32_t obs__isr_dropped_total(void) { return 0u; }
-__attribute__((weak)) bool     obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out)
-{ (void)idx; (void)out; return false; }
-__attribute__((weak)) uint32_t obs__sequence_outside_critical(void) { return 0u; }
+extern uint32_t obs__isr_dropped_total(void);
+extern bool     obs__isr_ring_peek(uint32_t idx, EmbedIQ_Event_t *out);
+extern uint32_t obs__sequence_outside_critical(void);
 
 /* ---------------------------------------------------------------------------
  * Named test constants
@@ -257,6 +254,22 @@ static void test_emit_before_init_is_safe(void)
     embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 1u, 0xFFu, 2u, 0u);
     embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 2u, 0xFFu, 2u, 0u);
     ASSERT(obs__ring_count() == 3u, "emit before init must land in the ring");
+}
+
+/* ---------------------------------------------------------------------------
+ * test_event_count_counts_every_emit
+ * One thread, one ring's worth of emits (no overflow record is written): the
+ * test-only event counter rises by exactly one per emit.
+ * ------------------------------------------------------------------------- */
+
+static void test_event_count_counts_every_emit(void)
+{
+    use_file_transport(&k_discard_ops);
+    for (uint32_t i = 0u; i < EMBEDIQ_OBS_RING_DEPTH; i++) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_LIFECYCLE, 0u, 0xFFu, 2u, 0u);
+    }
+    ASSERT(obs__event_count() == EMBEDIQ_OBS_RING_DEPTH,
+           "event counter must count every emit exactly once");
 }
 
 /* ===========================================================================
@@ -474,6 +487,8 @@ static void test_isr_ring_overflow_counted(void)
         }
     }
     ASSERT(found, "OVERFLOW meta-event must report the 5 dropped ISR events");
+    ASSERT(obs__isr_dropped_total() == OBS_ISR_EXTRA,
+           "test-only ISR drop counter must count the 5 dropped ISR events");
 }
 
 /* ===========================================================================
@@ -769,6 +784,7 @@ static void test_capture_end_while_emitting(void)
 int main(void)
 {
     test_emit_before_init_is_safe();          /* must be first */
+    test_event_count_counts_every_emit();
     test_sequence_strictly_monotonic_across_threads();
     test_mixed_path_transport_order_strictly_increasing();
     test_isr_records_have_no_sequence_before_drain();

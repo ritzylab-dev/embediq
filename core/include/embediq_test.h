@@ -2,8 +2,8 @@
  * embediq_test.h — Test harness public API
  *
  * Declares bus_inject(), EMBEDIQ_TEST_SOURCE_ID, and the scenario runner.
- * All declarations are guarded by EMBEDIQ_PLATFORM_HOST — these symbols
- * must never appear in production (MCU / FreeRTOS) builds.
+ * Declared only when EMBEDIQ_TEST_HOOKS is defined; never present in a
+ * release build; enforced by tools/ci/check_release_symbols.sh.
  *
  * bus_inject() is the only supported way to inject test messages onto the
  * bus without a registered FB handle. It stamps source_endpoint_id with
@@ -26,7 +26,7 @@
 #include "embediq_msg.h"
 #include <stddef.h>
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,6 +81,6 @@ void embediq_test_run_scenario(const embediq_test_scenario_step_t *steps,
 }
 #endif
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */
 
 #endif /* EMBEDIQ_TEST_H */

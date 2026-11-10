@@ -25,7 +25,7 @@
  * Public API:
  *   fb_temp_controller_register() — register FB with framework
  *
- * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
+ * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   ctrl__reading_count() — total MSG_TEMP_READING messages processed
  *
  * R-02: no malloc in this file.
@@ -47,7 +47,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 #include <stdatomic.h>   /* host-only test counter */
 #endif
 
@@ -81,10 +81,11 @@ static EmbedIQ_FB_Handle_t g_ctrl_fb = NULL;
  * ctrl_init: static storage cannot be initialised by a call. */
 static uint8_t s_ep = 0xFFu;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
-/* Incremented in ctrl_run on the FB's thread, read by the host-only
+#ifdef EMBEDIQ_TEST_HOOKS
+/* Incremented in ctrl_run on the FB's thread, read by the test-only
  * ctrl__reading_count() accessor on the test thread: a C11 atomic counter,
- * so the handler needs no lock. The counter and accessor exist only on host. */
+ * so the handler needs no lock. The counter and accessor exist only with
+ * EMBEDIQ_TEST_HOOKS. */
 static _Atomic uint32_t g_reading_count = 0u;
 #endif
 
@@ -196,7 +197,7 @@ static void ctrl_run(EmbedIQ_FB_Handle_t fb, const void *msg,
     /* Prove liveness to the watchdog. */
     embediq_wdg_checkin(fb);
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     g_reading_count++;
 #endif
 }
@@ -250,10 +251,10 @@ EmbedIQ_FB_Handle_t fb_temp_controller_register(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only API — EMBEDIQ_PLATFORM_HOST only
+ * Test-only API — EMBEDIQ_TEST_HOOKS only
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 /** Total MSG_TEMP_READING messages processed since last fb_engine__reset(). */
 uint32_t ctrl__reading_count(void)
@@ -261,4 +262,4 @@ uint32_t ctrl__reading_count(void)
     return g_reading_count;
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

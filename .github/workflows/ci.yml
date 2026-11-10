@@ -215,3 +215,34 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with: { name: tsan-reports, path: build_tsan/tsan.*, if-no-files-found: ignore }
+
+  release-symbols:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate message catalogs (messages.iq → C headers)
+        run: |
+          python3 tools/messages_iq/generate.py messages/core.iq \
+              --out generated/ --output-name embediq_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/thermostat.iq \
+              --out generated/ --output-name thermostat_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/telemetry.iq \
+              --out generated/ --output-name telemetry_msg_catalog.h
+
+      - name: Generate config_iq artifacts
+        run: |
+          python3 tools/config_iq/generate.py config/config.iq \
+              --out generated/
+
+      # Builds the host release profile (test hooks off) and checks every
+      # framework library against tools/ci/test_hook_inventory.txt (I-05, R-07).
+      - name: No test hooks in the host release build
+        run: tools/ci/check_release_symbols.sh
+
+      # The check must reject each of its known failure shapes and accept the
+      # unmodified tree; runs in a scratch copy of the checkout.
+      - name: Release symbol check self-test
+        run: tools/ci/test_check_release_symbols.sh

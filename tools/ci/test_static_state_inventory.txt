@@ -1,0 +1,18 @@
+# tools/ci/test_static_state_inventory.txt — test-only static state, by name
+#
+# File-scope statics that exist only for test hooks (counters and checks read
+# by nothing but the hook accessors). check_release_symbols.sh rule (f) fails
+# if any of them appears in the full symbol table, locals included, of the
+# release core library. Kept apart from test_hook_inventory.txt, whose every
+# line is a global hook symbol. One name per line, sorted; lines starting with
+# '#' and blank lines are ignored.
+#
+# @author  Ritesh Anand
+# @company embediq.com | ritzylab.com
+#
+# SPDX-License-Identifier: Apache-2.0
+
+g_in_critical
+g_isr_dropped_total
+g_seq_outside_crit
+g_total

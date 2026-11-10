@@ -48,6 +48,8 @@ sudo usermod -aG gpio $USER
 
 On a Linux or macOS host, the HAL writes to /tmp files instead of sysfs.
 The LED state is visible in /tmp/embediq_gpio17_value (reads "0" or "1").
+This simulation (`EMBEDIQ_GPIO_SIM`) is on only when test hooks are on; a
+release build (`-DCMAKE_BUILD_TYPE=Release`) drives the real `/sys/class/gpio`.
 
 ```sh
 ./build/examples/gpio_blink/embediq_gpio_blink --pin 17 --duration 2

@@ -82,7 +82,7 @@ void embediq_platform_lib_deinit_all(void)
     }
 }
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 void embediq_platform_lib_reset(void)
 {
     uint8_t i;
@@ -92,4 +92,4 @@ void embediq_platform_lib_reset(void)
     }
     s_count = 0u;
 }
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

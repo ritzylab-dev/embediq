@@ -63,7 +63,7 @@
  * R-sub-ORDER: sub-fns stored in ascending init_order via insertion sort at
  *              registration time — dispatch is always deterministic.
  *
- * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
+ * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   fb_engine__reset()           — clear registry between test cases
  *   fb_engine__obs_event_count() — inspect emitted event count
  *   fb_engine__deliver_msg()     — direct sub-fn dispatch (bypasses queue)
@@ -185,7 +185,7 @@ static embediq_osal_atomic32_t  g_dispatch_shutdown    = EMBEDIQ_OSAL_ATOMIC32_I
 static _Thread_local bool    tl_exec_held[EMBEDIQ_MAX_ENDPOINTS];
 static _Thread_local uint8_t tl_exec_depth = 0u;
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /* Test hook: called by report_fault between accepting a reason and acting on
  * it. Read and written inside the critical section. */
 typedef void (*fb_engine_report_hook_t)(void);
@@ -297,7 +297,7 @@ static void fault_drain_pass_locked(EmbedIQ_FB_t *fb, exec_role_t role)
         embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, fb->ep_idx,
                          (uint8_t)EMBEDIQ_FAULT_PENDING_OVERFLOW,
                          (uint16_t)(dropped > UINT16_MAX ? UINT16_MAX : dropped));
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
         (void)embediq_osal_atomic32_add(&g_fault_overflow_total, dropped);
 #endif
     }
@@ -416,12 +416,12 @@ void embediq_fb_report_fault(EmbedIQ_FB_Handle_t handle, uint32_t reason)
         fb->inbox_dropped++;
     }
     uint8_t owner = fb->fault_owner;
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     fb_engine_report_hook_t hook = s_report_hook;
 #endif
     embediq_osal_critical_exit();
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     if (hook) hook();
 #endif
 
@@ -978,13 +978,13 @@ int embediq_engine_dispatch_shutdown(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Host / test-only API
+ * Test-only API
  *
- * Guarded by EMBEDIQ_PLATFORM_HOST so these symbols are absent from MCU
- * production builds (Invariant I-05: zero test symbols in production binary).
+ * Guarded by EMBEDIQ_TEST_HOOKS so these symbols are absent from MCU and host
+ * release builds (Invariant I-05: zero test symbols in production binary).
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 /* Observatory package-internal API — implemented in observatory/obs.c */
 extern void     obs__reset(void);
@@ -1080,4 +1080,4 @@ embediq_sem_t fb_engine__dispatch_sem(uint8_t ep_id)
     return g_dispatch_args[ep_id].sem;
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

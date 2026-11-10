@@ -65,9 +65,9 @@ void embediq_platform_lib_init_all(void);
  */
 void embediq_platform_lib_deinit_all(void);
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 /**
- * Reset the registry to empty. Test isolation only — host builds only.
+ * Reset the registry to empty. Test isolation only — EMBEDIQ_TEST_HOOKS builds.
  * Never call from production firmware.
  */
 void embediq_platform_lib_reset(void);

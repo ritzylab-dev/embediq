@@ -31,7 +31,7 @@
  * R-02: no malloc/free in this file. Queue memory is allocated inside the
  *       OSAL implementation (the approved R-02 exception site).
  *
- * Host/test-only API (EMBEDIQ_PLATFORM_HOST):
+ * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   message_bus__reset()        — clear routing state between test cases
  *   message_bus__test_recv()    — non-blocking queue recv (bypasses task loop)
  *   message_bus__drop_count()   — total drop events emitted since last reset
@@ -96,9 +96,9 @@ static ep_queues_t g_ep[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t     g_ep_count   = 0;
 static bool        g_bus_booted = false;
 
-/* Drop event counter (host/test builds only). Atomic: incremented from
+/* Drop event counter (EMBEDIQ_TEST_HOOKS builds only). Atomic: incremented from
  * every publishing thread. */
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 static embediq_osal_atomic32_t g_drop_count = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 #endif
 
@@ -281,7 +281,7 @@ static void bus_obs_emit(bool async, uint8_t evt, uint8_t src, uint8_t dst,
 
 static void count_drop(void)
 {
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
     (void)embediq_osal_atomic32_add(&g_drop_count, 1u);
 #endif
 }
@@ -452,7 +452,7 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
  * Host / test-only API
  * ------------------------------------------------------------------------- */
 
-#ifdef EMBEDIQ_PLATFORM_HOST
+#ifdef EMBEDIQ_TEST_HOOKS
 
 #include "embediq_test.h"   /* for EMBEDIQ_TEST_SOURCE_ID */
 
@@ -511,4 +511,4 @@ uint32_t message_bus__drop_count(void)
     return embediq_osal_atomic32_load(&g_drop_count);
 }
 
-#endif /* EMBEDIQ_PLATFORM_HOST */
+#endif /* EMBEDIQ_TEST_HOOKS */

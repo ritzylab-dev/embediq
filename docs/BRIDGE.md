@@ -35,7 +35,7 @@ via environment variables:
 | Env var | Default | Meaning |
 | ------- | ------- | ------- |
 | `EMBEDIQ_BRIDGE_SOCK` | `/tmp/embediq_bridge.sock` | Unix socket path. Empty string disables the listener. |
-| `EMBEDIQ_BRIDGE_PORT` | _(unset = TCP off)_ | TCP port. **Deferred to Item 6 — read but no TCP socket is opened in this release.** |
+| `EMBEDIQ_BRIDGE_PORT` | _(unset = TCP off)_ | TCP port. **Deferred to Item 6 — reserved; not read and no TCP socket is opened in this release.** |
 | `EMBEDIQ_BRIDGE_HOST` | `127.0.0.1` | TCP bind address. `0.0.0.0` for remote access. _(Reserved; effective once TCP transport ships.)_ |
 | `EMBEDIQ_BRIDGE_HEARTBEAT_MS` | `5000` | Heartbeat interval; three missed `HEALTH_RSP` → disconnect. |
 
@@ -132,9 +132,8 @@ the bridge layer itself.
 
 ## 6. Deferred / future
 
-- **TCP transport.** Item 5 reads `EMBEDIQ_BRIDGE_PORT` and
-  `EMBEDIQ_BRIDGE_HOST` for forward compatibility but does not open the TCP
-  socket. Remote access without authentication would be unsafe; both TCP and
+- **TCP transport.** `EMBEDIQ_BRIDGE_PORT` and `EMBEDIQ_BRIDGE_HOST` are
+  reserved for it; Item 5 neither reads them nor opens the TCP socket. Remote access without authentication would be unsafe; both TCP and
   authentication ship together in **Item 6**.
 - **Async Python wrapper.** The synchronous (threading-based) API ships in
   Item 5. An `asyncio` wrapper is a thin layer above the same transport and

@@ -640,7 +640,7 @@ void embediq_obs_session_begin(const EmbedIQ_Obs_Session_t *session);
  * Return a const pointer to the stored session record.
  * Returns NULL if embediq_obs_session_begin() has not been called.
  * The pointer is valid until the next call to embediq_obs_session_begin()
- * or obs__reset() (host builds only).
+ * or obs__reset() (EMBEDIQ_TEST_HOOKS builds only).
  * Calling context: any thread.
  */
 const EmbedIQ_Obs_Session_t *embediq_obs_session_get(void);
