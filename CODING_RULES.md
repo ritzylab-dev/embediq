@@ -643,7 +643,7 @@ Violating this rule causes silent ecosystem corruption between community FBs.
 **Rules:**
 - Message IDs are never reused. A retired ID is tombstoned in messages_registry.json.
 - Community FBs must reserve a range BEFORE publishing. No reservation = undefined collision risk.
-- CI lint checks that no two messages.iq files in the repo define the same ID.
+- tools/ci/check_message_ids.py (a blocking CI check) rejects any message ID or message name that is defined more than once across the message catalogs and core/include/embediq_platform_msgs.h.
 - AI agents: verify message IDs fall in the correct namespace range before emitting any message definition.
 
 ---

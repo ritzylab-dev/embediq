@@ -1017,19 +1017,22 @@ not with the layer that implements it.
 
 ## Layer Boundary Rules
 
-Enforced by `tools/boundary_checker.py` in CI. Violations = CI failure.
+Enforced by `tools/boundary_checker.py` in CI. A quote include of a first-party header that is not listed for the source location is rejected; a header in the same source location is always allowed; violations fail CI.
 
-| Source location | May include | Must NOT include |
-| --------------- | ----------- | ---------------- |
-| `core/src/` | `core/include/`, system headers | `hal/`, `osal/`, `platform/`, `fbs/` |
-| `osal/posix/` | `core/include/`, system + OS headers | `hal/`, `fbs/`, `examples/` |
-| `osal/freertos/` | `core/include/`, FreeRTOS headers | `hal/`, `fbs/`, `examples/` |
-| `hal/posix/` | `core/include/hal/`, system + OS headers | `osal/`, `core/src/`, `fbs/` |
-| `hal/esp32/` | `core/include/hal/`, ESP-IDF headers | `osal/`, `core/src/`, `fbs/` |
-| `fbs/drivers/` | `core/include/` (incl. `hal/`), C stdlib | `hal/` impl paths, vendor BSP, `examples/` |
-| `fbs/services/` | `core/include/` (excl. `hal/`), C stdlib | `core/include/hal/`, `hal/`, `osal/` impl |
-| `examples/` | `core/include/`, `fbs/drivers/`, `fbs/services/` | `hal/` impl headers, `osal/` impl |
-| `tests/` | `core/include/`, `examples/`, `fbs/` contracts | `hal/` impl, `osal/` impl |
+| Source location | First-party headers it may include | Rejected |
+| --------------- | ---------------------------------- | -------- |
+| `core/src/` | `core/include/` except `core/include/hal/` | every other first-party header (hal, osal, platform, fbs) |
+| `osal/posix/`, `osal/freertos/` | `core/include/` except `core/include/hal/` | every other first-party header |
+| `hal/posix/`, `hal/freertos/`, `hal/esp32/`, `hal/stm32/` | `core/include/hal/`, `core/include/ops/`, `embediq_config.h`, `embediq_obs.h`, `embediq_platform.h` | every other `core/include` header and every other first-party header |
+| `fbs/drivers/` | `core/include/` including `hal/`, `components/`, `generated/` headers | every other first-party header; any quote include that resolves to no first-party or generated header |
+| `fbs/services/`, `fbs/bridge/` | `core/include/` except `core/include/hal/`, `components/`, `generated/` headers | `core/include/hal/` and every other first-party header; any quote include that resolves to no first-party or generated header |
+| `components/` | none outside `components/` | every other first-party header |
+| `examples/` | `core/include/` including `hal/`, `fbs/drivers/`, `fbs/services/` | every other first-party header |
+| `tests/` | `core/include/` including `hal/`, `examples/`, `fbs/drivers/`, `fbs/services/` | every other first-party header |
+
+**What is inspected.** A header in the same source location as the including file is always allowed. Angle-bracket includes are never inspected. A quote include that resolves to no first-party header is ignored, except in fbs/drivers, fbs/services and fbs/bridge, where it is rejected unless it is a generated header. A generated header is a file inside generated/, identified by the location the include resolves to, never by its name. platform/ is recognised only as a target that core/src must not include; files under it are not checked.
+
+**Exception.** The POSIX provisioning HAL reads and writes provisioning state through the configuration and NVM interfaces — a HAL calling a Driver FB's interface, which the layer rule forbids. It is tolerated for this one file and these two headers only; the same include anywhere else is rejected. Removal criterion: provisioning state reaches the HAL through its ops-table arguments, and this file includes neither header.
 
 ---
 

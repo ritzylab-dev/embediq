@@ -8,7 +8,8 @@
  * absolute timespec so accumulated sleep overshoot is compensated each tick.
  *
  * Only includes: hal_timer.h (core/include/hal) and C stdlib headers
- * (<stdatomic.h> is C11 libc — the HAL layer takes no embediq_*.h).
+ * (<stdatomic.h> is C11 libc; this file includes no embediq_*.h — what a HAL
+ * source may include is listed in ARCHITECTURE.md, Layer Boundary Rules)
  * R-02: no malloc in this file.
  *
  * @author  Ritesh Anand

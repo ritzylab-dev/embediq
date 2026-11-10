@@ -209,7 +209,7 @@ embediq/
 │   ├── posix/              ← macOS + Linux + WSL
 │   └── freertos/           ← FreeRTOS bare-metal (Phase 2)
 │
-├── hal/                    ← HAL implementations (no embediq_*.h allowed)
+├── hal/                    ← HAL implementations (HAL contracts, ops tables and three named core headers only — see ARCHITECTURE.md, Layer Boundary Rules)
 │   ├── posix/              ← hal_timer_posix.c · hal_flash_posix.c ·
 │   │                          hal_wdg_posix.c · hal_obs_stream_posix.c
 │   └── esp32/              ← Phase 2
