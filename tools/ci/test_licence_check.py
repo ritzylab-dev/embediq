@@ -6,7 +6,11 @@ Verifies that licence_check.py:
   - Fails a first-party file with no SPDX identifier under --strict, and only
     warns without it.
   - Does not check files under a third_party/ directory, and says so once.
-  - Fails a first-party file whose identifier is not Apache-2.0.
+  - Fails a first-party file whose identifier is not Apache-2.0, comparing the
+    whole expression (`Apache-2.0 OR MIT` fails); a closing `*/` on the same
+    line is not part of it.
+  - Skips only build, build_* and build-* directories (a `builder` directory is
+    checked).
   - Under --strict, fails a file it cannot read and a directory it cannot list.
   - Passes a clean tree without printing the third_party notice.
 
@@ -149,6 +153,38 @@ def test_clean_tree():
                f"output: {out!r}")
 
 
+# ── Test 7 — the whole expression is the identifier ─────────────────────────
+
+def test_compound_expression_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/src/a.c", "/* SPDX-License-Identifier: Apache-2.0 OR MIT */\nint x;\n")
+        rc, out = _run(tmp)
+        _check("compound_expression: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+
+
+def test_comment_forms_accepted():
+    for n, line in enumerate((" * SPDX-License-Identifier: Apache-2.0 */",
+                              "// SPDX-License-Identifier: Apache-2.0"), 1):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(tmp, "core/src/a.c", line + "\nint x;\n")
+            rc, out = _run(tmp)
+            _check(f"comment_form_{n} {line!r}: exits 0", rc == 0,
+                   f"got rc={rc}. output: {out!r}")
+
+
+# ── Test 8 — only build, build_* and build-* directories are skipped ────────
+
+def test_build_directory_names():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/src/builder/a.c", NONE)
+        rc, out = _run(tmp)
+        _check("builder_directory_checked: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/src/build_x/a.c", NONE)
+        rc, out = _run(tmp)
+        _check("build_x_directory_skipped: exits 0", rc == 0, f"got rc={rc}. output: {out!r}")
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -159,6 +195,9 @@ if __name__ == "__main__":
         test_unreadable_file,
         test_unlistable_directory,
         test_clean_tree,
+        test_compound_expression_rejected,
+        test_comment_forms_accepted,
+        test_build_directory_names,
     ]
     for t in tests:
         t()

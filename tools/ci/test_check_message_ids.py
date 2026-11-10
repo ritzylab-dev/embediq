@@ -9,6 +9,8 @@ Verifies that check_message_ids.py:
   - Exits 2 on an unparsable catalog, an empty catalog directory, a catalog
     with zero messages, a header with no definitions and a missing header —
     never a silent pass.
+  - Exits 2, naming the file and line, on a header `#define MSG_...` it cannot
+    parse, and on a catalog that is not valid UTF-8 — never a traceback.
   - Exits 0 on a clean fixture and on the repository's own catalogs.
 
 Each test builds a throwaway catalog directory and header and runs the checker
@@ -138,6 +140,39 @@ def test_errors():
                   header_path=lambda tmp: os.path.join(tmp, "absent.h"))
 
 
+def _expect_unparsed(name, header, lineno=None):
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out = _run(tmp, {"a.iq": _catalog(("MSG_A", "0x1400"))}, header=header)
+        _check(f"{name}: exits 2", rc == 2, f"got rc={rc}. output: {out!r}")
+        _check(f"{name}: says 'cannot parse'", "cannot parse" in out, f"output: {out!r}")
+        if lineno is not None:
+            _check(f"{name}: names line {lineno}", f"msgs.h:{lineno}:" in out,
+                   f"output: {out!r}")
+        _check(f"{name}: no traceback", "Traceback" not in out, f"output: {out!r}")
+
+
+def test_unparsed_definitions():
+    _expect_unparsed("parenthesised_definition",
+                     "#define MSG_OK 0x9u\n#define MSG_B (0x0001u)\n", lineno=2)
+    for n, line in enumerate(("#define MSG_B 0x0001UL",
+                              "#define MSG_B 0X0001u",
+                              "#define MSG_b 0x0002u",
+                              "#define MSG_B MSG_OK",
+                              "#define MSG_B 010"), 1):
+        _expect_unparsed(f"unparsed_definition_{n} {line!r}",
+                         "#define MSG_OK 0x9u\n" + line + "\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = os.path.join(tmp, "messages", "bad.iq")
+        os.makedirs(os.path.dirname(bad))
+        with open(bad, "wb") as fh:
+            fh.write(b'version 1\nnamespace "x"\n\xff\n')
+        rc, out = _run(tmp, {"a.iq": _catalog(("MSG_A", "0x1400"))})
+        _check("catalog_not_utf8: exits 2", rc == 2, f"got rc={rc}. output: {out!r}")
+        _check("catalog_not_utf8: says 'cannot read'", "cannot read" in out,
+               f"output: {out!r}")
+        _check("catalog_not_utf8: no traceback", "Traceback" not in out, f"output: {out!r}")
+
+
 def test_clean_fixture():
     with tempfile.TemporaryDirectory() as tmp:
         rc, out = _run(tmp, {"a.iq": _catalog(("MSG_A", "0x1400"), ("MSG_B", "0x1401")),
@@ -159,7 +194,8 @@ def test_repository_tree():
 
 
 if __name__ == "__main__":
-    tests = [test_duplicates, test_errors, test_clean_fixture, test_repository_tree]
+    tests = [test_duplicates, test_errors, test_unparsed_definitions, test_clean_fixture,
+             test_repository_tree]
     for t in tests:
         t()
 

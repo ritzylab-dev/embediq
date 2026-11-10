@@ -10,7 +10,11 @@ Verifies that tsan_summarise.py:
   - Exits 2 on a usage error, an unknown option, a path that is not a
     directory, a directory it cannot list and a report it cannot read — and
     then prints no table, no annotation and writes no job summary.
-  - With --github, emits error annotations for findings and aborts.
+  - Exits 1 when a report file holds a ThreadSanitizer WARNING that is not read
+    as a table row, counts it as an unparsed report and lists the file.
+  - Treats "ThreadSanitizer: nested bug" as a runtime abort.
+  - With --github, emits error annotations for findings, aborts and unparsed
+    reports.
 And that the workflow uploads the reports and the recorded test output.
 
 Each test builds a throwaway directory and runs the script on it. Fixture text
@@ -69,6 +73,13 @@ CHECK_ABORT = (
 SEGV_ABORT = "==123==ERROR: ThreadSanitizer: SEGV on unknown address 0x000000000000\n"
 
 STARTUP_ABORT = "FATAL: ThreadSanitizer: unexpected memory mapping 0x5555-0x5556\n"
+
+UNSEPARATED = (
+    "WARNING: ThreadSanitizer: data race (pid=1)\n"
+    "    #0 worker /src/tests/unit/test_race.c:10 (test_race+0x1234)\n"
+)
+
+NESTED_ABORT = "ThreadSanitizer: nested bug in the same thread, aborting.\n"
 
 
 def _write(base, rel_path, content):
@@ -315,6 +326,66 @@ def test_workflow_preserves_evidence():
            and indent(with_l[0]) == indent(uses_l[0]), text)
 
 
+# ── Case 15 — a report with no separator lines → unparsed, exit 1 ──────────
+
+def test_unseparated_report_is_unparsed():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tsan.1", UNSEPARATED)
+        rc, out = _run([tmp])
+        _check("unseparated_report: exits 1", rc == 1, f"got rc={rc}, output: {out!r}")
+        _check("unseparated_report: unparsed reports: 1",
+               "unparsed reports: 1" in out, f"output: {out!r}")
+        _check("unseparated_report: UNPARSED REPORTS listed",
+               "UNPARSED REPORTS" in out, f"output: {out!r}")
+
+
+# ── Case 16 — a stray WARNING beside a well-formed report → unparsed, exit 1 ─
+
+def test_stray_warning_beside_report():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tsan.1", "WARNING: ThreadSanitizer: data race\n" + RACE_REPORT)
+        rc, out = _run([tmp])
+        _check("stray_warning: exits 1", rc == 1, f"got rc={rc}, output: {out!r}")
+        _check("stray_warning: unparsed reports: 1", "unparsed reports: 1" in out,
+               f"output: {out!r}")
+        rows = [l for l in out.splitlines() if l.startswith("| 1 |")]
+        _check("stray_warning: table still has the data-race row",
+               any("data race" in r for r in rows), f"output: {out!r}")
+
+
+# ── Case 17 — a well-formed report alone → unparsed reports: 0 ──────────────
+
+def test_parsed_report_counts_zero_unparsed():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tsan.1", RACE_REPORT)
+        rc, out = _run([tmp])
+        _check("parsed_report: unparsed reports: 0", "unparsed reports: 0" in out,
+               f"output: {out!r}")
+        _check("parsed_report: exits 1 for its finding", rc == 1, f"got rc={rc}")
+
+
+# ── Case 18 — --github with an unparsed report → ::error:: ──────────────────
+
+def test_github_unparsed_is_error():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tsan.1", UNSEPARATED)
+        rc, out = _run(["--github", tmp])
+        _check("github_unparsed: ::error:: annotation",
+               "::error::ThreadSanitizer: 1 report(s) could not be parsed" in out,
+               f"output: {out!r}")
+
+
+# ── Case 19 — a nested-bug abort → exit 1, listed ───────────────────────────
+
+def test_nested_bug_abort_exits_one():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tsan.1", NESTED_ABORT)
+        rc, out = _run([tmp])
+        _check("nested_bug_abort: exits 1", rc == 1, f"got rc={rc}, output: {out!r}")
+        _check("nested_bug_abort: abort listed",
+               "RUNTIME ABORTS" in out and "nested bug" in out, f"output: {out!r}")
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -332,7 +403,12 @@ if __name__ == "__main__":
               test_regular_file_exits_two,
               test_unlistable_directory_exits_two,
               test_unknown_option_exits_two,
-              test_workflow_preserves_evidence):
+              test_workflow_preserves_evidence,
+              test_unseparated_report_is_unparsed,
+              test_stray_warning_beside_report,
+              test_parsed_report_counts_zero_unparsed,
+              test_github_unparsed_is_error,
+              test_nested_bug_abort_exits_one):
         _test(t)
 
     print()

@@ -15,6 +15,13 @@ Verifies that boundary_checker.py:
   - fbs/drivers/ files must not reach into hal/posix/, hal/esp32/ etc. or vendor BSP headers.
   - fbs/services/ files may include core/include/ framework headers and C stdlib.
   - fbs/services/ files must NOT include core/include/hal/ or any hal/ path.
+  - Every include directive form the compiler accepts is read: no space before
+    the quote, block comments on the directive's line, `%:` for `#`; a
+    commented-out include is not.
+  - A source under core/, osal/, hal/ or fbs/ outside every listed location is
+    rejected; only build, build_* and build-* directories are skipped.
+  - A link inside generated/ to a file outside it is not a generated header,
+    and a directory that cannot be listed fails the check.
 
 Run: python3 tools/test_boundary_checker.py
 All output lines start with PASS or FAIL. Exit 0 iff all pass.
@@ -39,10 +46,13 @@ def _write(base, rel_path, content):
 
 
 def _run(repo_root):
-    result = subprocess.run(
-        [sys.executable, CHECKER, repo_root],
-        capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, CHECKER, repo_root],
+            capture_output=True, text=True, timeout=20
+        )
+    except subprocess.TimeoutExpired:
+        return None, "timed out after 20 s"
     return result.returncode, result.stdout + result.stderr
 
 
@@ -459,6 +469,106 @@ def test_unreadable_file_fails():
                "VIOLATION: core/src/x.c: cannot read" in out, f"output: {out!r}")
 
 
+def test_unlistable_directory_fails():
+    if os.geteuid() == 0:
+        print("SKIP  unlistable_directory_fails  (running as root)")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "core/src/a.c", '#include <stdint.h>\n')
+        _write(tmp, "core/src/locked/x.c", '#include <stdint.h>\n')
+        locked = os.path.join(tmp, "core", "src", "locked")
+        os.chmod(locked, 0)
+        try:
+            rc, out = _run(tmp)
+        finally:
+            os.chmod(locked, 0o755)
+        _check("unlistable_directory_fails: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+        _check("unlistable_directory_fails: cannot read line",
+               "cannot read" in out, f"output: {out!r}")
+
+
+# ── Include recognition: every directive form the compiler accepts ──────────
+
+BUS = {"core/include/embediq_bus.h": "/* stub */\n"}
+
+
+def test_include_forms_recognised():
+    for n, line in enumerate((
+            '#include"embediq_bus.h"',
+            '/* note */ #include "embediq_bus.h"',
+            '#include /* c */ "embediq_bus.h"',
+            '# /* c */ include "embediq_bus.h"',
+            '#include/**/"embediq_bus.h"',
+            '%:include "embediq_bus.h"'), 1):
+        _expect(f"include_form_{n} {line!r}",
+                dict(BUS, **{"hal/posix/x.c": line + "\n"}), 1, "hal/posix/x.c")
+
+
+def test_long_comment_line_scanned_quickly():
+    _expect("long_comment_line", dict(BUS, **{
+        "hal/posix/x.c": "/* a */ " * 200 + "int x;\n"}), 0)
+
+
+def test_commented_out_include_ignored():
+    _expect("commented_out_include", dict(BUS, **{
+        "hal/posix/x.c": '// #include "embediq_bus.h"\n'
+                         '/* #include "embediq_bus.h" */\n'}), 0)
+
+
+# ── Every source under core/, osal/, hal/ and fbs/ has a known location ─────
+
+UNRECOGNISED = "unrecognised source location"
+
+
+def test_unrecognised_source_location():
+    with tempfile.TemporaryDirectory() as tmp:
+        _tree(tmp, dict(BUS, **{"hal/zephyr/x.c": '#include "embediq_bus.h"\n'}))
+        rc, out = _run(tmp)
+        _check("unrecognised_hal_target: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+        _check("unrecognised_hal_target: names hal/zephyr/x.c",
+               f"VIOLATION: hal/zephyr/x.c: {UNRECOGNISED}" in out, f"output: {out!r}")
+    with tempfile.TemporaryDirectory() as tmp:
+        _tree(tmp, {"fbs/apps/x.c": "int x;\n"})
+        rc, out = _run(tmp)
+        _check("unrecognised_fbs_directory: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+        _check("unrecognised_fbs_directory: names fbs/apps/x.c",
+               f"VIOLATION: fbs/apps/x.c: {UNRECOGNISED}" in out, f"output: {out!r}")
+    _expect("outside_checked_roots", dict(BUS, **{
+        "tools/x.c": '#include "embediq_bus.h"\n'}), 0)
+
+
+# ── Build directories: exactly build, build_* and build-* ───────────────────
+
+def test_build_directory_names():
+    with tempfile.TemporaryDirectory() as tmp:
+        files = dict(BUS)
+        for d in ("builder", "build-x", "build_x", "build"):
+            files[f"hal/posix/{d}/x.c"] = '#include "embediq_bus.h"\n'
+        _tree(tmp, files)
+        rc, out = _run(tmp)
+        _check("build_directory_names: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+        _check("build_directory_names: builder/ is checked",
+               "VIOLATION: hal/posix/builder/x.c:" in out, f"output: {out!r}")
+        for d in ("build-x", "build_x", "build"):
+            _check(f"build_directory_names: {d}/ not reported",
+                   f"hal/posix/{d}/" not in out, f"output: {out!r}")
+
+
+# ── A link inside generated/ to a file outside it is not a generated header ─
+
+def test_generated_link_to_outside_rejected():
+    with tempfile.TemporaryDirectory() as tmp:
+        _tree(tmp, {"third_party/bsp/v.h": "/* vendor */\n",
+                    "fbs/services/x.c": '#include "link.h"\n'})
+        os.makedirs(os.path.join(tmp, "generated"))
+        os.symlink(os.path.join("..", "third_party", "bsp", "v.h"),
+                   os.path.join(tmp, "generated", "link.h"))
+        rc, out = _run(tmp)
+        _check("generated_link_to_outside: exits 1", rc == 1, f"got rc={rc}. output: {out!r}")
+        _check("generated_link_to_outside: VIOLATION names fbs/services/x.c",
+               "VIOLATION: fbs/services/x.c:" in out, f"output: {out!r}")
+
+
 def test_clean_fixture_ok_line():
     with tempfile.TemporaryDirectory() as tmp:
         _tree(tmp, {
@@ -511,6 +621,13 @@ if __name__ == "__main__":
         test_generated_header_identity,
         test_unreadable_file_fails,
         test_clean_fixture_ok_line,
+        test_unlistable_directory_fails,
+        test_include_forms_recognised,
+        test_long_comment_line_scanned_quickly,
+        test_commented_out_include_ignored,
+        test_unrecognised_source_location,
+        test_build_directory_names,
+        test_generated_link_to_outside_rejected,
     ]
     for t in tests:
         t()
