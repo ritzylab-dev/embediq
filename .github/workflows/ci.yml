@@ -22,6 +22,10 @@ jobs:
               --out generated/ --output-name thermostat_msg_catalog.h
           python3 tools/messages_iq/generate.py messages/telemetry.iq \
               --out generated/ --output-name telemetry_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/gateway.iq \
+              --out generated/ --output-name gateway_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/provisioning.iq \
+              --out generated/ --output-name provisioning_msg_catalog.h
 
       - name: Verify generated headers match .iq source (drift check)
         run: |
@@ -32,9 +36,15 @@ jobs:
               --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h
           python3 tools/messages_iq/generate.py messages/telemetry.iq \
               --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/gateway.iq \
+              --out /tmp/iq_fresh/ --output-name gateway_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/provisioning.iq \
+              --out /tmp/iq_fresh/ --output-name provisioning_msg_catalog.h
           diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h
           diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
           diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
+          diff generated/gateway_msg_catalog.h /tmp/iq_fresh/gateway_msg_catalog.h
+          diff generated/provisioning_msg_catalog.h /tmp/iq_fresh/provisioning_msg_catalog.h
 
       - name: Generate config_iq artifacts
         run: |
@@ -78,8 +88,8 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
 
-      - name: Validate — no hardcoded sizing constants (Invariant I-08)
-        run: python3 tools/validator.py
+      - name: Static checks (blocking and advisory — see tools/ci/README.md)
+        run: bash tools/ci/static_checks.sh
 
       - name: Compat — v1 API surface (Invariant I-14, only if file exists)
         run: |
@@ -88,42 +98,6 @@ jobs:
               -DEMBEDIQ_MSG_MAX_PAYLOAD=64 \
               -c tests/compat/fb_v1_compat.c
           fi
-
-      - name: Library Observatory obligation check — strict (R-lib-1)
-        run: python3 tools/ci/check_lib_obs.py --strict
-
-      - name: OSAL Observatory obligation check — strict (XOBS-1, R-osal-01)
-        run: python3 tools/ci/check_osal_obs.py --strict
-
-      - name: HAL Observatory obligation check — strict (XOBS-2)
-        run: python3 tools/ci/check_hal_obs.py --strict
-
-      - name: Component OSAL handle storage check — warning (R-lib-4)
-        run: python3 tools/ci/component_globals_check.py
-
-      - name: Component OSAL API call check — warning (R-lib-4)
-        run: python3 tools/ci/component_state_check.py
-
-      - name: Vendoring manifest completeness check — warning (R-lib-3)
-        run: python3 tools/ci/vendoring_check.py
-
-      - name: Vendoring anomaly date staleness check — warning (R-lib-3)
-        run: python3 tools/ci/vendoring_date_check.py
-
-      - name: Ops table ABI version field check — warning (R-lib-4, D-LIB-5)
-        run: python3 tools/ci/ops_version_check.py
-
-      - name: SPDX licence identifier check — warning
-        run: python3 tools/ci/licence_check.py
-
-      - name: FB layer call enforcement — strict (I-07, R-02, R-sub-03)
-        run: python3 tools/ci/check_fb_calls.py
-
-      - name: FB layer call checker — per-rule allowance tests
-        run: python3 tools/ci/test_check_fb_calls.py
-
-      - name: Binary blob detection — warning
-        run: python3 tools/ci/binary_blob_check.py
 
       - name: Install Mosquitto for MQTT tests
         run: sudo apt-get install -y mosquitto
@@ -139,7 +113,6 @@ jobs:
 
   tsan:
     runs-on: ubuntu-latest
-    continue-on-error: true        # F0 only — becomes blocking in F7 once the fixes land
 
     steps:
       - name: Checkout
@@ -153,6 +126,10 @@ jobs:
               --out generated/ --output-name thermostat_msg_catalog.h
           python3 tools/messages_iq/generate.py messages/telemetry.iq \
               --out generated/ --output-name telemetry_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/gateway.iq \
+              --out generated/ --output-name gateway_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/provisioning.iq \
+              --out generated/ --output-name provisioning_msg_catalog.h
 
       - name: Verify generated headers match .iq source (drift check)
         run: |
@@ -163,9 +140,15 @@ jobs:
               --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h
           python3 tools/messages_iq/generate.py messages/telemetry.iq \
               --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/gateway.iq \
+              --out /tmp/iq_fresh/ --output-name gateway_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/provisioning.iq \
+              --out /tmp/iq_fresh/ --output-name provisioning_msg_catalog.h
           diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h
           diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
           diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
+          diff generated/gateway_msg_catalog.h /tmp/iq_fresh/gateway_msg_catalog.h
+          diff generated/provisioning_msg_catalog.h /tmp/iq_fresh/provisioning_msg_catalog.h
 
       - name: Generate config_iq artifacts
         run: |
@@ -201,9 +184,19 @@ jobs:
       - name: Build (host, ThreadSanitizer)
         run: cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON && cmake --build build_tsan
 
-      # exitcode=0 (F0 only): a race report does not fail a test that passed its own
-      # assertions — races are inventoried below instead. Assertion failures, crashes
-      # and timeouts still fail this step. F7 removes exitcode=0 to make races blocking.
+      - name: ThreadSanitizer gate self-check (a deliberate race must be caught)
+        run: |
+          mkdir -p build_tsan/canary
+          cc -std=c11 -fsanitize=thread -g -O1 -o build_tsan/tsan_canary tools/ci/tsan_canary.c -lpthread
+          TSAN_OPTIONS="halt_on_error=0 exitcode=0 log_path=$PWD/build_tsan/canary/tsan" ./build_tsan/tsan_canary 2> build_tsan/canary/tsan.stderr
+          set +e; python3 tools/ci/tsan_summarise.py build_tsan/canary > build_tsan/canary/summary.txt; rc=$?; set -e
+          cat build_tsan/canary/summary.txt
+          [ "$rc" -eq 1 ] && grep -q "data race" build_tsan/canary/summary.txt && grep -q "tsan_canary" build_tsan/canary/summary.txt \
+            || { echo "gate self-check FAILED: expected exit 1 with a data race in tsan_canary; got exit $rc"; exit 1; }
+
+      # Every test runs to completion and every sanitizer report is written (halt_on_error=0 exitcode=0). A test
+      # assertion failure or timeout fails this step; sanitizer findings, runtime aborts and sanitizer-handled crashes are failed by the summary step
+      # below, which always runs.
       - name: Run tests under ThreadSanitizer
         run: TSAN_OPTIONS="halt_on_error=0 exitcode=0 suppressions=$PWD/tools/ci/tsan.supp log_path=$PWD/build_tsan/tsan" ctest --test-dir build_tsan --output-on-failure --timeout 300
 
@@ -214,7 +207,12 @@ jobs:
       - name: Upload TSan reports
         if: always()
         uses: actions/upload-artifact@v4
-        with: { name: tsan-reports, path: build_tsan/tsan.*, if-no-files-found: ignore }
+        with:
+          name: tsan-reports
+          path: |
+            build_tsan/tsan.*
+            build_tsan/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
 
   release-symbols:
     runs-on: ubuntu-latest
@@ -231,6 +229,10 @@ jobs:
               --out generated/ --output-name thermostat_msg_catalog.h
           python3 tools/messages_iq/generate.py messages/telemetry.iq \
               --out generated/ --output-name telemetry_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/gateway.iq \
+              --out generated/ --output-name gateway_msg_catalog.h
+          python3 tools/messages_iq/generate.py messages/provisioning.iq \
+              --out generated/ --output-name provisioning_msg_catalog.h
 
       - name: Generate config_iq artifacts
         run: |

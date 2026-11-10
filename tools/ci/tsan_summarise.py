@@ -16,14 +16,19 @@ third_party/); sanitizer and libc interceptor frames are skipped.
 Usage:
   python3 tools/ci/tsan_summarise.py [--github] <dir-containing-tsan-files>
 
-  --github  also emit ::warning annotations and append the table to
+  --github  also emit ::error annotations and append the table to
             $GITHUB_STEP_SUMMARY.
 
-Runtime aborts (TSan "CHECK failed" / FATAL) are listed separately: the test
-binary stopped part-way and its remaining tests did not run.
+Runtime aborts are listed separately: a line containing "ThreadSanitizer: CHECK
+failed", "FATAL: ThreadSanitizer" or "ERROR: ThreadSanitizer" (a crash the
+sanitizer handled, such as SEGV). They are read from the tsan.* files and from
+<dir>/Testing/Temporary/LastTest.log when it exists — the test output ctest
+recorded, the only record of a sanitizer start-up abort.
 
-Exits 0 always — the inventory is informational (the tsan CI job is advisory
-until Set 2 / F7). Python 3 standard library only.
+Exit codes: 0 = no finding and no runtime abort; 1 = at least one finding or
+runtime abort; 2 = usage error, an argument that is not a readable directory,
+or a report that cannot be read (no table is printed). Python 3 standard
+library only.
 
 @author  Ritesh Anand
 @company embediq.com | ritzylab.com
@@ -31,7 +36,7 @@ until Set 2 / F7). Python 3 standard library only.
 SPDX-License-Identifier: Apache-2.0
 """
 
-import glob
+import fnmatch
 import os
 import re
 import sys
@@ -51,6 +56,9 @@ FRAME = re.compile(r"^\s*#(\d+)\s+(\S+)\s+(.*?)\s*(?:\((\S+?)\+0x[0-9a-f]+\))?\s
 THREAD_REF = re.compile(r"by (main thread|thread (T\d+))")
 THREAD_DEF = re.compile(r"^\s*Thread (T\d+)(?: '([^']*)')? \(tid=")
 LOCATION = re.compile(r"^\s*Location is (.*)$")
+# A sanitizer runtime abort: CHECK failure, fatal error or handled crash.
+ABORT = re.compile(r"ThreadSanitizer: CHECK failed|FATAL: ThreadSanitizer|"
+                   r"ERROR: ThreadSanitizer")
 
 KIND_NAMES = (
     ("data race", "data race"),
@@ -214,9 +222,12 @@ def parse_report(lines):
     }
 
 
-def read_reports(path):
+def read_lines(path):
     with open(path, errors="replace") as fh:
-        text = fh.read().splitlines()
+        return fh.read().splitlines()
+
+
+def read_reports(text):
     report, inside = [], False
     for line in text:
         if SEPARATOR.match(line):
@@ -230,18 +241,16 @@ def read_reports(path):
         yield report
 
 
-def read_aborts(path):
-    """Yield the frames of every TSan runtime CHECK failure / FATAL in a file.
+def read_aborts(lines):
+    """Yield the frames of every TSan runtime abort (ABORT) in a file's lines.
 
     These are not WARNING reports: the sanitizer runtime itself aborted the
-    process, so the test binary stopped part-way through. With
-    TSAN_OPTIONS=exitcode=0 such a process exits 0 and ctest reports a pass,
-    which is why they must be surfaced here.
+    process or handled a crash, so the test binary stopped part-way through.
+    With TSAN_OPTIONS=exitcode=0 such a process exits 0 and ctest reports a
+    pass, which is why they must be surfaced here.
     """
-    with open(path, errors="replace") as fh:
-        lines = fh.read().splitlines()
     for i, line in enumerate(lines):
-        if "ThreadSanitizer: CHECK failed" in line or "FATAL: ThreadSanitizer" in line:
+        if ABORT.search(line):
             frames = []
             for nxt in lines[i + 1:]:
                 f = parse_frame(nxt)
@@ -252,17 +261,43 @@ def read_aborts(path):
 
 
 def main(argv):
-    args = [a for a in argv[1:] if not a.startswith("--")]
-    github = "--github" in argv
-    if len(args) != 1:
+    github = "--github" in argv[1:]
+    args = [a for a in argv[1:] if a != "--github"]
+    if len(args) != 1 or args[0].startswith("-"):
         print("usage: tsan_summarise.py [--github] <dir-containing-tsan-files>")
-        return 0
-    files = sorted(glob.glob(os.path.join(args[0], "tsan.*")))
+        return 2
+    report_dir = args[0]
+    if not os.path.isdir(report_dir):
+        print("tsan_summarise: not a directory: {}".format(report_dir))
+        return 2
+    try:
+        names = os.listdir(report_dir)
+    except OSError as e:
+        print("tsan_summarise: cannot read {}: {}".format(report_dir, e))
+        return 2
+    files = sorted(os.path.join(report_dir, n)
+                   for n in fnmatch.filter(names, "tsan.*"))
+    texts = []
+    for path in files:
+        try:
+            texts.append(read_lines(path))
+        except OSError as e:
+            print("tsan_summarise: cannot read {}: {}".format(path, e))
+            return 2
+    last_test = os.path.join(report_dir, "Testing", "Temporary", "LastTest.log")
+    try:
+        last_test_lines = read_lines(last_test)
+    except (FileNotFoundError, NotADirectoryError):
+        last_test_lines = []
+    except OSError as e:
+        print("tsan_summarise: cannot read {}: {}".format(last_test, e))
+        return 2
+
     rows = OrderedDict()
     aborts = []
     total = 0
-    for path in files:
-        for lines in read_reports(path):
+    for text in texts:
+        for lines in read_reports(text):
             r = parse_report(lines)
             if r is None:
                 continue
@@ -272,9 +307,11 @@ def main(argv):
             rows[r["key"]]["count"] += 1
             if r["module"]:
                 rows[r["key"]]["modules"].add(r["module"])
-        for msg, frames in read_aborts(path):
-            tf = top_frame(frames)
-            aborts.append((msg, tf))
+        for msg, frames in read_aborts(text):
+            aborts.append((msg, top_frame(frames)))
+    # The recorded test output is scanned for abort lines only.
+    for msg, frames in read_aborts(last_test_lines):
+        aborts.append((msg, top_frame(frames)))
 
     out = []
     out.append("TSan report files: {}   reports: {}   distinct findings: {}   "
@@ -308,16 +345,16 @@ def main(argv):
             loc = tf[1] if tf else ""
             m = re.match(r"^(.*):(\d+)$", loc)
             pos = "file={},line={}".format(m.group(1), m.group(2)) if m else ""
-            print("::warning {}::TSan runtime abort in {} — remaining tests did not run "
+            print("::error {}::TSan runtime abort in {} — remaining tests did not run "
                   "({})".format(pos, tf[2] if tf else "?", msg))
         if rows:
-            print("::warning::ThreadSanitizer: {} distinct findings (advisory until F7) — "
+            print("::error::ThreadSanitizer: {} distinct findings — "
                   "see the job summary and the tsan-reports artifact".format(len(rows)))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with open(summary, "a") as fh:
-                fh.write("## ThreadSanitizer inventory (advisory)\n\n" + text + "\n")
-    return 0
+                fh.write("## ThreadSanitizer inventory\n\n" + text + "\n")
+    return 1 if rows or aborts else 0
 
 
 if __name__ == "__main__":

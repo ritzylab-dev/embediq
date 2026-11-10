@@ -2,6 +2,10 @@
 # licence_check.py — SPDX-License-Identifier presence checker
 # Rule: CODING_RULES.md — all .c and .h files must carry
 # SPDX-License-Identifier: Apache-2.0.
+# Scope: first-party sources only. Every directory named third_party (at any
+# depth) is skipped — vendored code keeps its upstream licence notices; this is
+# not a dependency licence review. Under --strict a file that cannot be read or
+# a directory that cannot be listed is a violation.
 # Usage: python3 tools/ci/licence_check.py [--root <repo>] [--strict]
 #
 # @author  Ritesh Anand
@@ -16,14 +20,31 @@ import sys
 
 _SPDX_PATTERN = re.compile(r'SPDX-License-Identifier:\s*(\S+)')
 _SKIP_DIRS = {'.git', '__pycache__', 'generated'}
+_VENDORED = 'third_party'
+_VENDORED_NOTICE = ('third_party/: not checked — vendored code keeps its upstream '
+                    'licence notices; this check covers first-party sources only '
+                    'and is not a dependency licence review.')
 
 
 def run(repo_root, strict=False):
     violations = []
+    pruned_vendored = False
+    tag = 'VIOLATION' if strict else 'WARNING'
 
-    for dirpath, dirnames, filenames in os.walk(repo_root):
+    def cannot_read(path, err):
+        if strict:
+            violations.append(f'VIOLATION: {os.path.relpath(path, repo_root)}: '
+                              f'cannot read ({err})')
+
+    def onerror(err):
+        cannot_read(err.filename, err.strerror)
+
+    for dirpath, dirnames, filenames in os.walk(repo_root, onerror=onerror):
+        if _VENDORED in dirnames:
+            pruned_vendored = True
         dirnames[:] = [d for d in dirnames
-                       if d not in _SKIP_DIRS and not d.startswith('build')]
+                       if d not in _SKIP_DIRS and d != _VENDORED
+                       and not d.startswith('build')]
         for fname in filenames:
             if not fname.endswith(('.c', '.h')):
                 continue
@@ -33,10 +54,10 @@ def run(repo_root, strict=False):
             try:
                 with open(abs_path, 'r', errors='replace') as fh:
                     content = fh.read()
-            except (IOError, OSError):
+            except OSError as e:
+                cannot_read(abs_path, e.strerror)
                 continue
 
-            tag = 'VIOLATION' if strict else 'WARNING'
             m = _SPDX_PATTERN.search(content)
             if not m:
                 violations.append(
@@ -64,6 +85,9 @@ def run(repo_root, strict=False):
                     f'the file to Layer 3+\n'
                     f'  See-also: https://spdx.dev/ids/'
                 )
+
+    if pruned_vendored:
+        print(_VENDORED_NOTICE)
 
     for v in sorted(violations):
         print(v)
