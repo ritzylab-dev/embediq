@@ -4,7 +4,7 @@
     "Message IDs are never reused. Retired IDs are tombstoned, not recycled.",
     "Community FBs must reserve a range here before publishing.",
     "A PR reserving a community range requires: name, range, owner, contact.",
-    "CI lint verifies no two messages.iq files in the repo define the same ID.",
+    "tools/ci/check_message_ids.py (a blocking CI check) rejects any message ID or message name that is defined more than once across the message catalogs and core/include/embediq_platform_msgs.h.",
     "Ranges are first-come, first-served within the community namespace."
   ],
   "namespaces": {

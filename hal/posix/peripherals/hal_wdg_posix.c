@@ -7,7 +7,7 @@
  * monitoring loop.
  *
  * Only includes: hal_wdg.h (core/include/hal) and C stdlib headers.
- * Zero embediq_*.h includes — HAL has no knowledge of the framework.
+ * This file includes no embediq_*.h; what a HAL source may include is listed in ARCHITECTURE.md, Layer Boundary Rules.
  * R-02: no malloc in this file.
  *
  * @author  Ritesh Anand

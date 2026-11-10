@@ -9,33 +9,58 @@ Checks that no .c or .h file includes headers from a layer it is not
 permitted to access (AGENTS.md §3 layer dependency rule).
 
 Layer rules (a file in layer X may only include from allowed layers):
-  core/src/        → allowed: core/include/, core/include/hal/
-  osal/posix/      → allowed: core/include/, core/include/hal/
-  osal/freertos/   → allowed: core/include/, core/include/hal/
-  components/      → allowed: C stdlib + own third_party/<name>/ only (no embediq_*.h)
+  core/src/        → allowed: core/include/ (NO core/include/hal/)
+  osal/posix/      → allowed: core/include/ (NO core/include/hal/)
+  osal/freertos/   → allowed: core/include/ (NO core/include/hal/)
+  components/      → allowed: nothing outside components/ (no embediq_*.h)
   examples/        → allowed: core/include/, core/include/hal/, fbs/drivers/, fbs/services/
   tests/           → allowed: core/include/, core/include/hal/, examples/, fbs/drivers/, fbs/services/
-  hal/posix/       → allowed: core/include/hal/ only (no framework headers)
-  hal/esp32/       → allowed: core/include/hal/ only
-  hal/stm32/       → allowed: core/include/hal/ only
+  hal/posix/, hal/freertos/, hal/esp32/, hal/stm32/
+                   → allowed: core/include/hal/; and from core/include/ only
+                     (a) headers under core/include/ops/,
+                     (b) embediq_config.h, embediq_obs.h, embediq_platform.h,
+                     (c) the scoped exception: hal/posix/ops/hal_provisioning_posix.c
+                         may include embediq_cfg.h and embediq_nvm.h
   fbs/drivers/     → allowed: core/include/, core/include/hal/, components/, generated/
-                     STRICT: unrecognised quote-includes treated as vendor BSP
   fbs/services/    → allowed: core/include/ (NO core/include/hal/ — service FBs are platform-agnostic),
                      components/, generated/
-                     STRICT: unrecognised quote-includes treated as vendor BSP
+  fbs/bridge/      → allowed: core/include/ (NO core/include/hal/), components/, generated/
 
 Rules:
-  - Same-layer includes are always allowed.
-  - System headers (#include <...>) are always allowed.
+  - A header in the same source location as the including file is always allowed.
+  - Angle-bracket includes are never inspected. A quote include that resolves
+    to no first-party header is ignored, except in fbs/drivers, fbs/services
+    and fbs/bridge, where it is rejected unless it is a generated header. A
+    generated header is a file inside generated/, identified by the location
+    the include resolves to, never by its name.
+  - platform/ is recognised only as a target that core/src must not include;
+    files under it are not checked.
+  - Strict layers: fbs/drivers/, fbs/services/, fbs/bridge/.
+  - Include resolution: a name containing '/' is looked up relative to the
+    including file's directory, then under core/include/, then under
+    generated/; a bare name through the header index (first-party headers),
+    then under generated/.
   - components/ utility libraries (e.g. embediq_crc — LIB-3) carry zero
     framework dependencies and exist to be consumed by the layers above them;
     Driver and Service FBs may include them directly.
-  - generated/ headers are auto-generated framework contracts (message
-    catalogs, config schema). They live on the global include path
-    (CMakeLists include_directories(generated)) and are sanctioned for
-    Driver/Service FB use — they are NOT treated as vendor BSPs.
-  - Headers in unknown layers (build/, tools/) are skipped, EXCEPT in strict
-    layers (fbs/drivers/, fbs/services/) where they are violations.
+  - Directories named build, or whose name starts with build_ or build-, are
+    skipped, as are .git and __pycache__. A file that cannot be opened or a
+    directory that cannot be listed is a violation ("cannot read").
+  - An include is recognised when the directive starts its line; block
+    comments that open and close on that line, before or inside the
+    directive, are skipped and `%:` is read as `#`. An include written through
+    a macro, split by a line continuation, or preceded or interrupted by a
+    block comment that spans lines is not inspected. A source file under
+    core/, osal/, hal/ or fbs/ that is neither under core/include/ nor in one
+    of the source locations above is rejected as an unrecognised source
+    location. This check does not reject an include that resolves to a file
+    inside generated/, from any source location. A source file's location is
+    its path in the tree: symbolic links are not followed when deciding it,
+    and a directory reached through a symbolic link is not walked. A
+    generated header is identified by its canonical path: a link inside
+    generated/ to a file outside it is not a generated header.
+
+On success prints one line: boundary_checker.py: OK — <n> file(s) checked, 0 violations.
 
 Exit codes: 0 = clean, 1 = violations found.
 
@@ -65,108 +90,142 @@ def _layer_of(rel_path):
     if p.startswith('examples/'):          return 'examples'
     if p.startswith('tests/'):             return 'tests'
     if p.startswith('hal/posix/'):         return 'hal/posix'
+    if p.startswith('hal/freertos/'):      return 'hal/freertos'
     if p.startswith('hal/esp32/'):         return 'hal/esp32'
     if p.startswith('hal/stm32/'):         return 'hal/stm32'
     if p.startswith('fbs/drivers/'):       return 'fbs/drivers'
     if p.startswith('fbs/services/'):      return 'fbs/services'
-    return None  # build/, generated/, tools/, docs/ — not checked
+    if p.startswith('fbs/bridge/'):        return 'fbs/bridge'
+    return None  # build/, generated/, tools/, docs/, third_party/ — not checked
 
 
 # Allowed cross-layer include sets (same-layer is always permitted separately)
+_HAL_LAYERS = ('hal/posix', 'hal/freertos', 'hal/esp32', 'hal/stm32')
 _ALLOWED = {
     'core/src':        {'core/include'},
-    'osal/posix':      {'core/include', 'core/include/hal'},
-    'osal/freertos':   {'core/include', 'core/include/hal'},
+    'osal/posix':      {'core/include'},
+    'osal/freertos':   {'core/include'},
     'components':      set(),  # stdlib + own third_party/<name>/ only; no embediq_*.h
     'examples':        {'core/include', 'core/include/hal', 'fbs/drivers', 'fbs/services'},
     'tests':           {'core/include', 'core/include/hal', 'examples', 'fbs/drivers', 'fbs/services'},
-    # HAL implementation layers — HAL contracts + core/include for ops table registration
-    'hal/posix':       {'core/include/hal', 'core/include'},
-    'hal/esp32':       {'core/include/hal', 'core/include'},
-    'hal/stm32':       {'core/include/hal', 'core/include'},
+    # HAL implementation layers — HAL contracts; core/include headers only as
+    # the header-level rule below allows.
+    'hal/posix':       {'core/include/hal'},
+    'hal/freertos':    {'core/include/hal'},
+    'hal/esp32':       {'core/include/hal'},
+    'hal/stm32':       {'core/include/hal'},
     # Driver FBs — may use all framework contracts (incl. HAL), component
     # utility libraries (LIB-3), and generated contracts; but not impl paths.
     'fbs/drivers':     {'core/include', 'core/include/hal', 'components'},
-    # Service FBs — platform-agnostic: must NOT include HAL contracts, but
-    # may use component utility libraries and generated contracts.
+    # Service FBs and the bridge — platform-agnostic: must NOT include HAL
+    # contracts, but may use component utility libraries and generated contracts.
     'fbs/services':    {'core/include', 'components'},
+    'fbs/bridge':      {'core/include', 'components'},
 }
 
-# Layers where an unresolvable quote-include is a vendor BSP violation
-_VENDOR_BSP_STRICT = {'fbs/drivers', 'fbs/services'}
+# Layers where a quote include that resolves to no first-party header is a
+# violation unless it resolves to a file inside generated/.
+_VENDOR_BSP_STRICT = {'fbs/drivers', 'fbs/services', 'fbs/bridge'}
 
-# ── Header index (basename → layer) ─────────────────────────────────────────
+# Header-level rule for HAL layers: the core/include headers a HAL source may
+# include besides core/include/ops/.
+_HAL_CORE_HEADERS = {'embediq_config.h', 'embediq_obs.h', 'embediq_platform.h'}
 
-def _build_header_index(repo_root):
+# Scoped exception. The POSIX provisioning HAL reads and writes provisioning state through the configuration and NVM interfaces — a HAL calling
+# a Driver FB's interface, which the layer rule forbids. It is tolerated for this one file and these two headers only; the same include anywhere
+# else is rejected. Removal criterion: provisioning state reaches the HAL through its ops-table arguments, and this file includes neither header.
+_HAL_EXCEPTIONS = {
+    ('hal/posix/ops/hal_provisioning_posix.c', 'embediq_cfg.h'),
+    ('hal/posix/ops/hal_provisioning_posix.c', 'embediq_nvm.h'),
+}
+
+_HEADER_EXT = ('.h', '.hpp')
+_SOURCE_EXT = ('.c', '.h', '.cpp', '.hpp')
+
+
+_CHECKED_ROOTS = ('core', 'osal', 'hal', 'fbs')
+
+
+def _skip_dir(name):
+    return (name == 'build' or name.startswith(('build_', 'build-'))
+            or name in ('.git', '__pycache__'))
+
+
+def _rel(path, repo_root):
+    return os.path.relpath(path, repo_root).replace(os.sep, '/')
+
+
+# ── Header index (basename → (layer, repo-relative path)) ────────────────────
+
+def _build_header_index(repo_root, errors):
     """
-    Return dict: header_basename → layer.
+    Return dict: header_basename → (layer, repo-relative path).
 
-    core/include/ is indexed first so it wins when the same header name
-    exists in multiple layers (e.g. shim + canonical).
-    core/include/hal/ is indexed in Pass 1 as well (wins over any shim).
+    core/include/ and core/include/hal/ direct children are indexed first so
+    they win when the same header name exists in multiple layers (e.g. shim +
+    canonical). Every other first-party header follows, first found wins.
     """
     idx = {}
 
-    # Pass 1 — core/include/ wins all ties (direct children)
     core_inc = os.path.join(repo_root, 'core', 'include')
-    if os.path.isdir(core_inc):
-        for fname in os.listdir(core_inc):
-            if fname.endswith(('.h', '.hpp')):
-                idx[fname] = 'core/include'
+    for sub, layer in ((core_inc, 'core/include'),
+                       (os.path.join(core_inc, 'hal'), 'core/include/hal')):
+        if os.path.isdir(sub):
+            for fname in sorted(os.listdir(sub)):
+                full = os.path.join(sub, fname)
+                if fname.endswith(_HEADER_EXT) and os.path.isfile(full):
+                    idx[fname] = (layer, _rel(full, repo_root))
 
-        # Pass 1b — core/include/hal/ also wins all ties
-        core_hal = os.path.join(core_inc, 'hal')
-        if os.path.isdir(core_hal):
-            for fname in os.listdir(core_hal):
-                if fname.endswith(('.h', '.hpp')):
-                    idx[fname] = 'core/include/hal'
+    def onerror(err):
+        errors.append(f'VIOLATION: {_rel(err.filename, repo_root)}: cannot read')
 
-    # Pass 2 — everything else (first-found wins after core/include)
-    skip = {'build', '.git', '__pycache__'}
-    for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = [d for d in dirnames if d not in skip]
-        for fname in filenames:
-            if not fname.endswith(('.h', '.hpp')):
+    for dirpath, dirnames, filenames in os.walk(repo_root, onerror=onerror):
+        dirnames[:] = sorted(d for d in dirnames if not _skip_dir(d))
+        for fname in sorted(filenames):
+            if not fname.endswith(_HEADER_EXT) or fname in idx:
                 continue
-            if fname in idx:
-                continue  # already indexed (core/include wins)
-            full  = os.path.join(dirpath, fname)
-            rel   = os.path.relpath(full, repo_root)
+            rel = _rel(os.path.join(dirpath, fname), repo_root)
             layer = _layer_of(rel)
             if layer:
-                idx[fname] = layer
+                idx[fname] = (layer, rel)
     return idx
 
-# ── Generated-header index ───────────────────────────────────────────────────
 
-def _build_generated_headers(repo_root):
-    """
-    Return a set of header basenames living in generated/.
+# ── Include resolution ───────────────────────────────────────────────────────
 
-    These are auto-generated framework contracts (message catalogs, config
-    schema). They are sanctioned for Driver/Service FB use even though
-    generated/ is not itself a recognised layer — see the strict-layer
-    exception in _check_file(). Indexing them separately (rather than via
-    _layer_of) keeps every other layer's resolution unchanged: a generated
-    header included from a non-strict layer is still skipped as "unknown".
-    """
-    gen = set()
-    gen_dir = os.path.join(repo_root, 'generated')
-    if os.path.isdir(gen_dir):
-        for dirpath, _dirnames, filenames in os.walk(gen_dir):
-            for fname in filenames:
-                if fname.endswith(('.h', '.hpp')):
-                    gen.add(fname)
-    return gen
+def _resolve(inc, file_dir, repo_root, header_index):
+    """Return the absolute path of the file an include resolves to, or None."""
+    if '/' in inc or '\\' in inc:
+        for base in (file_dir,
+                     os.path.join(repo_root, 'core', 'include'),
+                     os.path.join(repo_root, 'generated')):
+            cand = os.path.normpath(os.path.join(base, inc))
+            if os.path.isfile(cand):
+                return cand
+        return None
+    hit = header_index.get(inc)
+    if hit:
+        return os.path.join(repo_root, hit[1])
+    cand = os.path.join(repo_root, 'generated', inc)
+    return cand if os.path.isfile(cand) else None
+
+
+def _is_generated(path, repo_root):
+    gen = os.path.realpath(os.path.join(repo_root, 'generated'))
+    real = os.path.realpath(path)
+    return real.startswith(gen + os.sep)
 
 
 # ── Per-file include check ───────────────────────────────────────────────────
 
-_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
+# A directive that starts its line; block comments that open and close on the
+# line are skipped before and inside it, and `%:` is the digraph for `#`.
+_BLOCK_COMMENT = r'/\*(?:[^*]|\*(?!/))*\*/'
+_GAP = r'\s*(?:' + _BLOCK_COMMENT + r'\s*)*'
+_INCLUDE_RE = re.compile(r'^' + _GAP + r'(?:#|%:)' + _GAP + r'include' + _GAP + r'"([^"]+)"')
 
 
-def _check_file(abs_path, rel_path, repo_root, file_layer, header_index,
-                generated_headers):
+def _check_file(abs_path, rel_path, repo_root, file_layer, header_index):
     """Return a list of violation strings for the given file."""
     allowed  = _ALLOWED[file_layer]
     file_dir = os.path.dirname(abs_path)
@@ -174,94 +233,118 @@ def _check_file(abs_path, rel_path, repo_root, file_layer, header_index,
 
     try:
         with open(abs_path, 'r', errors='replace') as fh:
-            for lineno, line in enumerate(fh, 1):
-                m = _INCLUDE_RE.match(line)
-                if not m:
+            lines = fh.readlines()
+    except OSError:
+        return [f'VIOLATION: {rel_path}: cannot read']
+
+    for lineno, line in enumerate(lines, 1):
+        m = _INCLUDE_RE.match(line)
+        if not m:
+            continue
+        inc = m.group(1)
+
+        resolved = _resolve(inc, file_dir, repo_root, header_index)
+        inc_rel   = _rel(resolved, repo_root) if resolved else None
+        inc_layer = _layer_of(inc_rel) if inc_rel else None
+
+        if inc_layer is None:
+            # Resolves to no first-party header (vendor, third_party/, generated/,
+            # or nothing at all).
+            if file_layer in _VENDOR_BSP_STRICT:
+                # generated/ headers are auto-generated framework contracts
+                # (catalogs, config schema) — sanctioned for FB use, decided
+                # by where the include resolves, never by its name.
+                if resolved and _is_generated(resolved, repo_root):
                     continue
-                inc = m.group(1)
+                violations.append(
+                    f'VIOLATION: {rel_path}:{lineno}: '
+                    f'{file_layer} must not include unrecognised headers '
+                    f'("{inc}") — possible vendor BSP or unknown include'
+                )
+            continue
 
-                # Resolve which layer the included file belongs to
-                if '/' in inc or '\\' in inc:
-                    # Path includes a separator → resolve relative to file dir
-                    resolved      = os.path.normpath(os.path.join(file_dir, inc))
-                    inc_from_root = os.path.relpath(resolved, repo_root)
-                    inc_layer     = _layer_of(inc_from_root)
-                else:
-                    # Simple basename → look up in the pre-built index
-                    inc_layer = header_index.get(os.path.basename(inc))
+        if inc_layer == file_layer:
+            continue  # same-layer include always allowed
 
-                if inc_layer is None:
-                    # Unknown layer (generated/, tools/, vendor BSP, etc.)
-                    if file_layer in _VENDOR_BSP_STRICT:
-                        # generated/ headers are auto-generated framework
-                        # contracts (catalogs, config schema) — sanctioned for
-                        # Driver/Service FB use, not vendor BSPs.
-                        if os.path.basename(inc) in generated_headers:
-                            continue
-                        violations.append(
-                            f'VIOLATION: {rel_path}:{lineno}: '
-                            f'{file_layer} must not include unrecognised headers '
-                            f'("{inc}") — possible vendor BSP or unknown include'
-                        )
-                    continue
+        if file_layer in _HAL_LAYERS and inc_layer == 'core/include':
+            base = os.path.basename(inc_rel)
+            if (inc_rel.startswith('core/include/ops/')
+                    or base in _HAL_CORE_HEADERS
+                    or (rel_path, base) in _HAL_EXCEPTIONS):
+                continue
+            violations.append(
+                f'VIOLATION: {rel_path}:{lineno}: '
+                f'{file_layer} must not include {inc_rel} ("{inc}") — a HAL '
+                f'source may include from core/include/ only (a) headers under '
+                f'core/include/ops/ and (b) embediq_config.h, embediq_obs.h, '
+                f'embediq_platform.h'
+            )
+            continue
 
-                if inc_layer == file_layer:
-                    continue  # same-layer include always allowed
-
-                if inc_layer not in allowed:
-                    if file_layer == 'components':
-                        violations.append(
-                            f'VIOLATION: {rel_path}:{lineno}:\n'
-                            f'  Issue: components/ includes framework header '
-                            f'from {inc_layer} ("{inc}")\n'
-                            f'  Rule: R-lib-2 (emit through ops table only), '
-                            f'R-lib-4 (ops table required) — CODING_RULES.md\n'
-                            f'  Why: components/ must not include embediq_*.h '
-                            f'directly — the ops table is the only framework '
-                            f'interface\n'
-                            f'  Fix: remove the include; access framework '
-                            f'services through the ops table function pointers\n'
-                            f'  See-also: ARCHITECTURE.md — Library Architecture '
-                            f'(D-LIB-1, D-LIB-4)'
-                        )
-                    else:
-                        violations.append(
-                            f'VIOLATION: {rel_path}:{lineno}: '
-                            f'{file_layer} must not include from {inc_layer} '
-                            f'("{inc}")'
-                        )
-    except (IOError, OSError):
-        pass
+        if inc_layer not in allowed:
+            if file_layer == 'components':
+                violations.append(
+                    f'VIOLATION: {rel_path}:{lineno}:\n'
+                    f'  Issue: components/ includes framework header '
+                    f'from {inc_layer} ("{inc}")\n'
+                    f'  Rule: R-lib-2 (emit through ops table only), '
+                    f'R-lib-4 (ops table required) — CODING_RULES.md\n'
+                    f'  Why: components/ must not include embediq_*.h '
+                    f'directly — the ops table is the only framework '
+                    f'interface\n'
+                    f'  Fix: remove the include; access framework '
+                    f'services through the ops table function pointers\n'
+                    f'  See-also: ARCHITECTURE.md — Library Architecture '
+                    f'(D-LIB-1, D-LIB-4)'
+                )
+            else:
+                violations.append(
+                    f'VIOLATION: {rel_path}:{lineno}: '
+                    f'{file_layer} must not include from {inc_layer} '
+                    f'("{inc}")'
+                )
 
     return violations
 
 # ── Main walker ──────────────────────────────────────────────────────────────
 
 def run(repo_root):
-    header_index      = _build_header_index(repo_root)
-    generated_headers = _build_generated_headers(repo_root)
-    all_violations    = []
-    skip              = {'build', '.git', '__pycache__'}
+    all_violations = []
+    header_index   = _build_header_index(repo_root, all_violations)
+    checked        = 0
 
-    for dirpath, dirnames, filenames in os.walk(repo_root):
-        dirnames[:] = [d for d in dirnames if d not in skip]
-        for fname in filenames:
-            if not fname.endswith(('.c', '.h', '.cpp', '.hpp')):
+    def onerror(err):
+        all_violations.append(f'VIOLATION: {_rel(err.filename, repo_root)}: cannot read')
+
+    for dirpath, dirnames, filenames in os.walk(repo_root, onerror=onerror):
+        dirnames[:] = sorted(d for d in dirnames if not _skip_dir(d))
+        for fname in sorted(filenames):
+            if not fname.endswith(_SOURCE_EXT):
                 continue
             abs_path   = os.path.join(dirpath, fname)
-            rel_path   = os.path.relpath(abs_path, repo_root)
+            rel_path   = _rel(abs_path, repo_root)
             file_layer = _layer_of(rel_path)
+            if file_layer is None and rel_path.split('/')[0] in _CHECKED_ROOTS:
+                all_violations.append(
+                    f'VIOLATION: {rel_path}: unrecognised source location — every '
+                    f'source under core/, osal/, hal/ and fbs/ belongs to a location '
+                    f'listed in ARCHITECTURE.md, Layer Boundary Rules')
+                continue
             if file_layer not in _ALLOWED:
                 continue  # layer not under our rules
-            violations = _check_file(abs_path, rel_path, repo_root,
-                                     file_layer, header_index,
-                                     generated_headers)
-            all_violations.extend(violations)
+            checked += 1
+            all_violations.extend(_check_file(abs_path, rel_path, repo_root,
+                                              file_layer, header_index))
 
-    for v in sorted(all_violations):
+    # A directory that cannot be listed is reported by both walks once each.
+    all_violations = sorted(set(all_violations))
+    for v in all_violations:
         print(v)
 
-    return 1 if all_violations else 0
+    if all_violations:
+        return 1
+    print(f'boundary_checker.py: OK — {checked} file(s) checked, 0 violations.')
+    return 0
 
 
 if __name__ == '__main__':
