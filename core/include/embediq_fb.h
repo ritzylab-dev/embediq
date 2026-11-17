@@ -70,9 +70,17 @@ typedef enum {
  * the existing boot FAULT events carry in the same field.
  * ------------------------------------------------------------------------- */
 
-/** Boot failed: a required per-FB resource (the FB execution lock) could not
- *  be allocated. source_fb_id = 0xFF, target_fb_id = the FB's endpoint. */
+/** Boot failed: a required per-FB resource could not be allocated, before
+ *  any initializer ran. source_fb_id = 0xFF, target_fb_id = the FB's
+ *  endpoint, msg_id = which resource (EMBEDIQ_BOOT_RESOURCE_*). */
 #define EMBEDIQ_FAULT_BOOT_RESOURCE     0x80u
+
+/** msg_id of an EMBEDIQ_FAULT_BOOT_RESOURCE event: the resource that failed. */
+#define EMBEDIQ_BOOT_RESOURCE_EXEC_LOCK     0u   /**< the FB execution lock      */
+#define EMBEDIQ_BOOT_RESOURCE_QUEUE_HIGH    1u   /**< the FB's HIGH queue        */
+#define EMBEDIQ_BOOT_RESOURCE_QUEUE_NORMAL  2u   /**< the FB's NORMAL queue      */
+#define EMBEDIQ_BOOT_RESOURCE_QUEUE_LOW     3u   /**< the FB's LOW queue         */
+#define EMBEDIQ_BOOT_RESOURCE_DISPATCH_SEM  4u   /**< the FB's dispatch semaphore */
 
 /** Fault reports on one FB exceeded EMBEDIQ_FB_FAULT_INBOX_DEPTH pending
  *  reasons; msg_id = number of reports counted and not executed, saturating
@@ -84,6 +92,12 @@ typedef enum {
  *  target_fb_id = the FB's endpoint, msg_id = number of reports discarded,
  *  saturating at 65535. */
 #define EMBEDIQ_FAULT_BOOT_ABORTED      0x82u
+
+/** A message was published, posted or routed while the message bus was not
+ *  ready (before a successful boot, or after a boot that failed to prepare
+ *  it): it was delivered to no one. Not a queue drop. source_fb_id = the
+ *  message's source endpoint, target_fb_id = 0xFF, msg_id = the message ID. */
+#define EMBEDIQ_FAULT_BUS_NOT_READY     0x83u
 
 /* ---------------------------------------------------------------------------
  * Subscription / publication array macros
@@ -258,14 +272,26 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
 /**
  * Boot the framework: sort all registered FBs by phase (1→2→3→4), resolve
  * depends_on order within each phase via topological sort, then call each
- * FB's init_fn in the computed order.  Also boots the message bus so that
- * queues exist before any Phase-1 FB tasks start publishing.
+ * FB's init_fn in the computed order.
  *
- * Must be called exactly once, after all embediq_fb_register() calls are done.
- * Returns 0 on success. Returns -1 and emits an Observatory FAULT event if a
- * dependency cycle or missing dependency is detected, or if a per-FB
- * execution lock cannot be allocated (EMBEDIQ_FAULT_BOOT_RESOURCE; no init_fn
- * has run). On failure, latched fault reports are not executed; one
+ * Before any platform-library initializer or init_fn runs, boot prepares
+ * every required resource: each FB's execution lock, each FB's three
+ * priority queues and the routing table (the bus is marked ready only when
+ * all of them exist), and each subscribing FB's dispatch semaphore. If one
+ * cannot be allocated, boot emits one EMBEDIQ_FAULT_BOOT_RESOURCE event
+ * naming the FB and the resource, destroys the resources it allocated in
+ * this attempt (never one that already existed), leaves the bus not ready
+ * if it was not ready before, runs no initializer, marks no FB RUNNING and
+ * returns -1; a later call with the same registrations retries. Resources
+ * that existed before the call — from an earlier attempt that got further —
+ * are reused, never replaced or destroyed.
+ *
+ * Must be called after all embediq_fb_register() calls are done.
+ * Returns 0 on success (and on a call after success, which does nothing).
+ * Returns -1 and emits an Observatory FAULT event if a required resource
+ * cannot be allocated (above), or a dependency cycle or missing dependency
+ * is detected (after the platform libraries were initialised; resources are
+ * kept). On failure, latched fault reports are not executed; one
  * EMBEDIQ_FAULT_BOOT_ABORTED event per FB carries the count. A reason
  * already taken from the inbox when boot fails is executed to completion on
  * the thread that took it and is not included in the BOOT_ABORTED count;

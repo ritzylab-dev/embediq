@@ -41,6 +41,27 @@ target_compile_options(test_fb_engine PRIVATE
 add_test(NAME unit_fb_engine COMMAND test_fb_engine)
 
 # ---------------------------------------------------------------------------
+# Boot readiness: every required resource before any initializer, a failed
+# allocation rolled back and retried without a reset
+# ---------------------------------------------------------------------------
+
+add_executable(test_boot_readiness test_boot_readiness.c)
+
+target_include_directories(test_boot_readiness PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_boot_readiness PRIVATE embediq_fb_engine)
+
+target_compile_options(test_boot_readiness PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_boot_readiness COMMAND test_boot_readiness)
+
+# ---------------------------------------------------------------------------
 # Message bus unit tests (P1-T3)
 # ---------------------------------------------------------------------------
 

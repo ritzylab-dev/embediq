@@ -10,7 +10,10 @@
  *
  * Responsibilities:
  *   1. embediq_fb_register()   — static registry, up to EMBEDIQ_MAX_ENDPOINTS
- *   2. embediq_engine_boot()   — phase sort (1→4), topo sort within phase,
+ *   2. embediq_engine_boot()   — required resources first (execution locks,
+ *                                bus queues and routing, dispatch semaphores;
+ *                                rolled back on failure), then phase sort
+ *                                (1→4), topo sort within phase,
  *                                cycle/missing-dep detection, init_fn dispatch
  *   3. embediq_fb_report_fault() — accepts the reason into the FB's fault
  *                                inbox; the FB's owner (boot thread, dispatch
@@ -84,6 +87,7 @@
 #include "embediq_config.h"
 #include "embediq_platform.h"
 #include "embediq_msg.h"
+#include "../bus/message_bus_internal.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -593,6 +597,95 @@ static int boot_abort(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Required boot resources — prepared before any initializer runs
+ *
+ * Execution locks, then the bus (every endpoint's three queues and the
+ * routing table, marked ready only when complete), then one dispatch
+ * semaphore per subscribing FB: a Platform FB's init_fn or a platform
+ * library may start a thread that publishes immediately (fb_timer), and that
+ * publish must find the queues, the target's semaphore and the notify
+ * pointer in place (TSan-found boot-order race).
+ * embediq_engine_dispatch_boot() starts the threads that block on the
+ * semaphores.
+ *
+ * A resource that already exists — an earlier attempt got past this point
+ * and then failed on a dependency or cycle, after initializers may have run
+ * — is reused, never replaced or destroyed: a platform thread may hold it.
+ * On a failure, exactly the resources this call created are destroyed and
+ * their pointers cleared, the bus is rolled back only if this call made it
+ * ready, and one EMBEDIQ_FAULT_BOOT_RESOURCE event names the FB and the
+ * resource (the bus emits its own for a queue).
+ * Returns 0, or -1 on a failure. Boot thread only.
+ * ------------------------------------------------------------------------- */
+
+static int boot_prepare_resources(void)
+{
+    bool lock_new[EMBEDIQ_MAX_ENDPOINTS] = { false };
+    bool sem_new[EMBEDIQ_MAX_ENDPOINTS]  = { false };
+    int  bus = MESSAGE_BUS_PREPARE_FAILED;   /* not prepared by this call */
+    uint8_t fail_ep      = 0u;
+    uint8_t fail_res     = 0u;
+    bool    failed       = false;
+    bool    bus_reported = false;   /* the bus emitted the failure itself */
+
+    for (uint8_t i = 0u; i < g_reg_count && !failed; i++) {
+        if (g_registry[i].exec_lock) continue;
+        g_registry[i].exec_lock = embediq_osal_mutex_create();
+        if (!g_registry[i].exec_lock) {
+            failed = true;
+            fail_ep = g_registry[i].ep_idx;
+            fail_res = (uint8_t)EMBEDIQ_BOOT_RESOURCE_EXEC_LOCK;
+        } else {
+            lock_new[i] = true;
+        }
+    }
+
+    if (!failed) {
+        bus = message_bus_prepare();
+        if (bus == MESSAGE_BUS_PREPARE_FAILED) {
+            failed       = true;
+            bus_reported = true;   /* with the endpoint and the queue */
+        }
+    }
+
+    for (uint8_t i = 0u; i < g_reg_count && !failed; i++) {
+        if (g_registry[i].config.subscription_count == 0u) continue;
+        g_dispatch_args[i].fb    = &g_registry[i];
+        g_dispatch_args[i].ep_id = g_registry[i].ep_idx;
+        if (g_dispatch_args[i].sem) continue;
+        g_dispatch_args[i].sem = embediq_sem_create(0u, UINT32_MAX);
+        if (!g_dispatch_args[i].sem) {
+            failed = true;
+            fail_ep = g_registry[i].ep_idx;
+            fail_res = (uint8_t)EMBEDIQ_BOOT_RESOURCE_DISPATCH_SEM;
+        } else {
+            sem_new[i] = true;
+        }
+    }
+
+    if (!failed) return 0;
+
+    if (!bus_reported) {
+        embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, fail_ep,
+                         (uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE, (uint16_t)fail_res);
+    }
+    for (uint8_t i = 0u; i < g_reg_count; i++) {
+        if (sem_new[i]) {
+            embediq_sem_destroy(g_dispatch_args[i].sem);
+            g_dispatch_args[i].sem = NULL;
+        }
+        if (lock_new[i]) {
+            embediq_osal_mutex_destroy(g_registry[i].exec_lock);
+            g_registry[i].exec_lock = NULL;
+        }
+    }
+    if (bus == MESSAGE_BUS_PREPARED) {
+        message_bus_unprepare();   /* this call made it ready; no publisher yet */
+    }
+    return -1;
+}
+
+/* ---------------------------------------------------------------------------
  * Public: embediq_engine_boot()
  * ------------------------------------------------------------------------- */
 
@@ -603,22 +696,14 @@ int embediq_engine_boot(void)
     /* Observatory transport mutex — before any init_fn can emit. */
     embediq_obs_init();
 
-    /* Per-FB execution locks FIRST — a required boot resource. Before
-     * platform libs, queues, semaphores, notify_fn and any init_fn: if one
-     * cannot be allocated, nothing has run and boot fails cleanly. */
-    for (uint8_t i = 0u; i < g_reg_count; i++) {
-        if (g_registry[i].exec_lock) continue;   /* boot may be retried */
-        g_registry[i].exec_lock = embediq_osal_mutex_create();
-        if (!g_registry[i].exec_lock) {
-            embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, g_registry[i].ep_idx,
-                             (uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE, 0u);
-            for (uint8_t k = 0u; k < g_reg_count; k++) {
-                embediq_osal_mutex_destroy(g_registry[k].exec_lock);   /* NULL-safe */
-                g_registry[k].exec_lock = NULL;
-            }
-            return boot_abort();
-        }
+    /* Every required resource — execution locks, queues and routing,
+     * dispatch semaphores — before any platform library or init_fn can run
+     * or publish: if one cannot be allocated, nothing has run and boot fails
+     * cleanly, keeping only what existed before this call. */
+    if (boot_prepare_resources() != 0) {
+        return boot_abort();
     }
+    message_bus_set_notify_fn(embediq_engine_notify_fb);
 
     g_boot_count = 0;
 
@@ -628,13 +713,9 @@ int embediq_engine_boot(void)
      * This call invokes every registered init_fn in declaration order so that
      * ops tables are populated when any FB's init_fn queries them.
      * I-PL: platform libs are the seam between HAL implementations and
-     * framework services — they must be ready before Phase 1. */
+     * framework services — they must be ready before Phase 1. A thread a
+     * library starts here finds the bus ready and every semaphore in place. */
     embediq_platform_lib_init_all();
-
-    /* Boot the message bus first: builds subscription table and creates
-     * per-FB priority queues before any Phase-1 FB tasks start running.
-     * This must happen before embediq_publish() is called by any FB thread. */
-    message_bus_boot();
 
     /* --- Step 1: verify all dependencies exist (global, pre-phase) --- */
     for (uint8_t i = 0; i < g_reg_count; i++) {
@@ -648,20 +729,6 @@ int embediq_engine_boot(void)
             }
         }
     }
-
-    /* Create per-FB dispatch semaphores and install the bus notify callback
-     * BEFORE any init_fn runs: a Platform FB's init_fn may start a thread
-     * that publishes immediately (fb_timer), and that publish must find the
-     * notify pointer and the target's semaphore already in place (TSan-found
-     * boot-order race). embediq_engine_dispatch_boot() starts the threads that
-     * block on these semaphores. Only subscribing FBs get one. */
-    for (uint8_t i = 0u; i < g_reg_count; i++) {
-        if (g_registry[i].config.subscription_count == 0u) continue;
-        g_dispatch_args[i].fb    = &g_registry[i];
-        g_dispatch_args[i].ep_id = g_registry[i].ep_idx;
-        g_dispatch_args[i].sem   = embediq_sem_create(0u, UINT32_MAX);
-    }
-    message_bus_set_notify_fn(embediq_engine_notify_fb);
 
     /* --- Step 2: process each boot phase in order 1 → 2 → 3 → 4 --- */
     static const EmbedIQ_BootPhase_t k_phases[] = {

@@ -6,7 +6,10 @@
  * Implements the contracts declared in core/include/embediq_bus.h.
  *
  * Responsibilities:
- *   1. message_bus_boot()  — build subscription table; create per-FB queues
+ *   1. message_bus_prepare() — create per-FB queues, build the subscription
+ *                              table, mark the bus ready (all or nothing);
+ *      message_bus_unprepare() rolls it back; message_bus_boot() is the
+ *      unchecked legacy entry point
  *   2. embediq_publish()   — route message to all subscribers; enforce overflow
  *   3. embediq_bus_resolve_id() — endpoint index → FB name
  *
@@ -43,6 +46,7 @@
  */
 
 #include "embediq_bus.h"
+#include "message_bus_internal.h"
 #include "embediq_msg.h"
 #include "embediq_obs.h"
 #include "embediq_osal.h"
@@ -94,7 +98,18 @@ typedef struct {
 
 static ep_queues_t g_ep[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t     g_ep_count   = 0;
-static bool        g_bus_booted = false;
+
+/* 1 once every endpoint's three queues and the routing table exist. Written
+ * by the boot thread only: set last by message_bus_prepare(), cleared first
+ * by message_bus_unprepare(). Read by every publishing thread before it
+ * touches g_ep or g_subs; the sequentially consistent store/load orders the
+ * preparation before any routing that sees the bus ready. */
+static embediq_osal_atomic32_t g_bus_ready = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+
+/* Per endpoint, the queues (bit = priority) the last successful
+ * message_bus_prepare() created — the only ones message_bus_unprepare() may
+ * destroy. Boot thread only. */
+static uint8_t     g_ep_created[EMBEDIQ_MAX_ENDPOINTS];
 
 /* Drop event counter (EMBEDIQ_TEST_HOOKS builds only). Atomic: incremented from
  * every publishing thread. */
@@ -188,30 +203,54 @@ static int sub_first(uint16_t target)
 }
 
 /* ---------------------------------------------------------------------------
- * Public: message_bus_boot()
+ * Preparation: message_bus_prepare() / message_bus_unprepare() /
+ * message_bus_boot()
  * ------------------------------------------------------------------------- */
 
-void message_bus_boot(void)
+static const uint16_t k_queue_depth[3] = {
+    EMBEDIQ_HIGH_QUEUE_DEPTH, EMBEDIQ_NORMAL_QUEUE_DEPTH, EMBEDIQ_LOW_QUEUE_DEPTH,
+};
+
+/* Destroy the queues recorded in g_ep_created and clear their pointers. */
+static void destroy_created_queues(void)
 {
-    if (g_bus_booted) return;   /* idempotent */
+    for (uint8_t i = 0u; i < (uint8_t)EMBEDIQ_MAX_ENDPOINTS; i++) {
+        for (uint8_t p = 0u; p < 3u; p++) {
+            if ((g_ep_created[i] & (uint8_t)(1u << p)) != 0u) {
+                embediq_osal_queue_destroy(g_ep[i].q[p]);
+                g_ep[i].q[p]   = NULL;
+                g_ep[i].cap[p] = 0u;
+            }
+        }
+        g_ep_created[i] = 0u;
+    }
+}
+
+int message_bus_prepare(void)
+{
+    if (embediq_osal_atomic32_load(&g_bus_ready) != 0u) return MESSAGE_BUS_ALREADY_READY;
 
     uint8_t n = embediq_engine_fb_count();
-    g_ep_count = n;
+    memset(g_ep_created, 0, sizeof(g_ep_created));
 
-    /* Create three priority queues for each registered FB. */
+    /* Three priority queues for each registered FB. A queue left by an
+     * earlier owner is kept as it is and never destroyed here. */
     for (uint8_t i = 0u; i < n; i++) {
-        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_HIGH]    =
-            embediq_osal_queue_create(EMBEDIQ_HIGH_QUEUE_DEPTH,   sizeof(EmbedIQ_Msg_t));
-        g_ep[i].cap[EMBEDIQ_MSG_PRIORITY_HIGH]  = EMBEDIQ_HIGH_QUEUE_DEPTH;
-
-        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_NORMAL]  =
-            embediq_osal_queue_create(EMBEDIQ_NORMAL_QUEUE_DEPTH, sizeof(EmbedIQ_Msg_t));
-        g_ep[i].cap[EMBEDIQ_MSG_PRIORITY_NORMAL] = EMBEDIQ_NORMAL_QUEUE_DEPTH;
-
-        g_ep[i].q[EMBEDIQ_MSG_PRIORITY_LOW]     =
-            embediq_osal_queue_create(EMBEDIQ_LOW_QUEUE_DEPTH,    sizeof(EmbedIQ_Msg_t));
-        g_ep[i].cap[EMBEDIQ_MSG_PRIORITY_LOW]   = EMBEDIQ_LOW_QUEUE_DEPTH;
+        for (uint8_t p = 0u; p < 3u; p++) {
+            if (g_ep[i].q[p] != NULL) continue;
+            g_ep[i].q[p] = embediq_osal_queue_create(k_queue_depth[p], sizeof(EmbedIQ_Msg_t));
+            if (g_ep[i].q[p] == NULL) {
+                embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, 0xFFu, i,
+                                 (uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE,
+                                 (uint16_t)(EMBEDIQ_BOOT_RESOURCE_QUEUE_HIGH + p));
+                destroy_created_queues();
+                return MESSAGE_BUS_PREPARE_FAILED;
+            }
+            g_ep[i].cap[p]   = k_queue_depth[p];
+            g_ep_created[i] |= (uint8_t)(1u << p);
+        }
     }
+    g_ep_count = n;
 
     /* Build subscription table from each FB's subscription list. */
     g_sub_count = 0u;
@@ -229,7 +268,35 @@ void message_bus_boot(void)
     sub_sort();
     tokens_fill();   /* the only writer of g_tokens (R2) */
 
-    g_bus_booted = true;
+    embediq_osal_atomic32_store(&g_bus_ready, 1u);   /* last: publishes the above */
+    return MESSAGE_BUS_PREPARED;
+}
+
+void message_bus_unprepare(void)
+{
+    embediq_osal_atomic32_store(&g_bus_ready, 0u);   /* first: no routing from here */
+    destroy_created_queues();
+    g_sub_count = 0u;
+    g_ep_count  = 0u;
+}
+
+void message_bus_boot(void)
+{
+    if (message_bus_prepare() == MESSAGE_BUS_PREPARE_FAILED) {
+        /* Observed by message_bus_prepare(); the bus stays not ready, so
+         * every publish is refused and observed rather than lost silently. */
+        return;
+    }
+}
+
+/* Not ready: deliver nothing, observe it (never as a queue drop). */
+static int32_t refuse_not_ready(const EmbedIQ_Msg_t *msg, bool async)
+{
+    uint8_t evt   = EMBEDIQ_OBS_EVT_FAULT;
+    uint8_t state = (uint8_t)EMBEDIQ_FAULT_BUS_NOT_READY;
+    if (async) embediq_obs_emit_from_isr(evt, msg->source_endpoint_id, 0xFFu, state, msg->msg_id);
+    else       embediq_obs_emit(evt, msg->source_endpoint_id, 0xFFu, state, msg->msg_id);
+    return EMBEDIQ_ERR;
 }
 
 /* ---------------------------------------------------------------------------
@@ -269,7 +336,8 @@ const char *embediq_bus_resolve_id(uint8_t endpoint_id)
  *   no transport I/O.
  * Both: NORMAL full drops the oldest atomically (one queue-lock operation);
  *       LOW full drops the incoming message; drops are counted atomically.
- * Returns EMBEDIQ_OK, or EMBEDIQ_ERR if any async HIGH delivery failed.
+ * Returns EMBEDIQ_OK, or EMBEDIQ_ERR if any async HIGH delivery failed or the
+ * bus is not ready (nothing delivered; observed, not counted as a drop).
  * ------------------------------------------------------------------------- */
 
 static void bus_obs_emit(bool async, uint8_t evt, uint8_t src, uint8_t dst,
@@ -288,6 +356,8 @@ static void count_drop(void)
 
 static int32_t route_message_ex(EmbedIQ_Msg_t *msg, bool async)
 {
+    if (embediq_osal_atomic32_load(&g_bus_ready) == 0u) return refuse_not_ready(msg, async);
+
     uint16_t msg_id = msg->msg_id;
     uint8_t  prio   = msg->priority;
     int32_t  result = EMBEDIQ_OK;
@@ -377,16 +447,20 @@ static int32_t route_message_ex(EmbedIQ_Msg_t *msg, bool async)
     return result;
 }
 
-static void route_message(EmbedIQ_Msg_t *msg)
+/* Blocking path: EMBEDIQ_OK on a ready bus (by construction), EMBEDIQ_ERR
+ * when it is not ready (already observed). */
+static int32_t route_message(EmbedIQ_Msg_t *msg)
 {
-    (void)route_message_ex(msg, false);   /* blocking path returns OK by construction */
+    return route_message_ex(msg, false);
 }
 
 void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg)
 {
     if (!msg) return;
     msg->source_endpoint_id = embediq_engine_fb_ep(fb);
-    route_message(msg);
+    if (route_message(msg) != EMBEDIQ_OK) {
+        /* Bus not ready: observed by route_message_ex; void API, nothing to return. */
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -429,8 +503,7 @@ embediq_err_t embediq_bus_bridge_route(uint8_t virtual_ep_id,
         return EMBEDIQ_ERR_INVALID;
     }
     msg->source_endpoint_id = virtual_ep_id;
-    route_message(msg);
-    return EMBEDIQ_OK;
+    return route_message(msg);
 }
 
 /* ---------------------------------------------------------------------------
@@ -463,7 +536,9 @@ bool message_bus_recv_ep(uint8_t ep_id, uint8_t priority, EmbedIQ_Msg_t *out)
 void bus_inject(EmbedIQ_Msg_t *msg)
 {
     msg->source_endpoint_id = EMBEDIQ_TEST_SOURCE_ID;
-    route_message(msg);
+    if (route_message(msg) != EMBEDIQ_OK) {
+        /* Bus not ready: observed by route_message_ex. */
+    }
 }
 
 /**
@@ -478,9 +553,10 @@ void message_bus__reset(void)
     }
     memset(g_ep,   0, sizeof(g_ep));
     memset(g_subs, 0, sizeof(g_subs));
+    memset(g_ep_created, 0, sizeof(g_ep_created));
     g_sub_count   = 0u;
     g_ep_count    = 0u;
-    g_bus_booted  = false;
+    embediq_osal_atomic32_store(&g_bus_ready, 0u);
     embediq_osal_atomic32_store(&g_drop_count, 0u);
     tokens_fill();
     g_notify_fn   = NULL;

@@ -65,13 +65,22 @@ typedef void (*embediq_notify_fn_t)(uint8_t ep_id);
 void message_bus_set_notify_fn(embediq_notify_fn_t fn);
 
 /**
- * Build the subscription routing table and create per-FB priority queues.
- * Called automatically from embediq_engine_boot(). Do not call manually.
- * Safe to call again from tests (idempotent).
+ * Build the subscription routing table and create per-FB priority queues,
+ * then mark the bus ready. embediq_engine_boot() prepares the bus itself,
+ * with a checked result; do not call this manually (tests may: idempotent).
+ * All or nothing: if a queue cannot be created, no queue is kept, the bus
+ * stays not ready and the failure is observed (EMBEDIQ_FAULT_BOOT_RESOURCE).
+ * Calling context: boot thread only.
  */
 void message_bus_boot(void);
 
-/** Publish a message from fb onto the bus. msg is copied by value. */
+/**
+ * Publish a message from fb onto the bus. msg is copied by value.
+ * While the bus is not ready (see embediq_engine_boot()) the message is
+ * delivered to no one and an EMBEDIQ_FAULT_BUS_NOT_READY event is emitted;
+ * it is not counted as a queue drop.
+ * Calling context: any thread after boot.
+ */
 void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg);
 
 /* ---------------------------------------------------------------------------
@@ -152,9 +161,12 @@ embediq_bus_token_t *embediq_bus_token_for(EmbedIQ_FB_Handle_t fb);
  *
  * token: from embediq_bus_token_for().
  * msg:   message to post; copied by value.
- * Returns EMBEDIQ_OK unless a HIGH delivery failed (EMBEDIQ_ERR) or token/msg
- * is NULL (EMBEDIQ_ERR). NORMAL/LOW overflow follows the bus policy and is
- * counted and observed, not reported here.
+ * Returns EMBEDIQ_OK unless a HIGH delivery failed (EMBEDIQ_ERR), token/msg
+ * is NULL (EMBEDIQ_ERR), or the bus is not ready (EMBEDIQ_ERR: delivered to
+ * no one, observed as EMBEDIQ_FAULT_BUS_NOT_READY through the ISR path). On a
+ * ready bus a message no FB subscribes to returns EMBEDIQ_OK. NORMAL/LOW
+ * overflow follows the bus policy and is counted and observed, not reported
+ * here.
  * Calling context: any thread after boot (HAL / ops-table callbacks); ISR
  * only where the OSAL provides from-ISR primitives (see above).
  */
@@ -178,7 +190,10 @@ int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *
  * @param msg            Message to route. Modified in place: source_endpoint_id
  *                       is overwritten. Copied by value into subscriber queues
  *                       by the underlying routing path.
- * @return EMBEDIQ_OK on success, EMBEDIQ_ERR_INVALID if msg is NULL.
+ * @return EMBEDIQ_OK on success, EMBEDIQ_ERR_INVALID if msg is NULL,
+ *         EMBEDIQ_ERR if the bus is not ready (delivered to no one; observed
+ *         as EMBEDIQ_FAULT_BUS_NOT_READY).
+ * Calling context: any thread after boot.
  */
 int32_t embediq_bus_bridge_route(uint8_t virtual_ep_id, EmbedIQ_Msg_t *msg);
 
