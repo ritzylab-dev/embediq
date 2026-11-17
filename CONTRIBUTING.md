@@ -146,7 +146,7 @@ EmbedIQ has a clear public/private boundary. Contributions must respect it.
 ```bash
 cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON
 cmake --build build_tsan
-rm -f build_tsan/tsan.*
+find build_tsan -maxdepth 1 -name 'tsan.*' -delete
 TSAN_OPTIONS="halt_on_error=0 exitcode=0 suppressions=$PWD/tools/ci/tsan.supp log_path=$PWD/build_tsan/tsan" \
   ctest --test-dir build_tsan --output-on-failure --timeout 300
 python3 tools/ci/tsan_summarise.py build_tsan

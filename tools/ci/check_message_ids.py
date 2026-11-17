@@ -5,7 +5,9 @@ tools/ci/check_message_ids.py — rejects any message ID or message name defined
 Reads every messages/*.iq catalog through the catalog parser of
 tools/messages_iq/generate.py (parse_iq) and every `#define MSG_<NAME> <id>`
 in core/include/embediq_platform_msgs.h, and fails when one ID or one name
-has more than one definition across all of them together.
+has more than one definition across all of them together. In the header, <id>
+is an integer literal (hex or decimal, optional u/U suffix) as the whole value;
+only whitespace and comments may follow it on the line.
 
 Usage:
   python3 tools/ci/check_message_ids.py [--messages-dir DIR] [--header FILE]
@@ -39,7 +41,8 @@ REPO = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "..", ".."))
 GENERATOR = os.path.join(REPO, "tools", "messages_iq", "generate.py")
 HEADER_DEFINE = re.compile(
-    r"^\s*#\s*define\s+(MSG_[A-Z0-9_]+)\s+(0x[0-9A-Fa-f]+|[0-9]+)[uU]?\b")
+    r"^\s*#\s*define\s+(MSG_[A-Z0-9_]+)\s+(0x[0-9A-Fa-f]+|[0-9]+)[uU]?"
+    r"\s*(?:/\*(?:[^*]|\*(?!/))*\*/\s*)*(?://.*)?$")
 # Every line that starts a MSG_ definition; each must be matched by HEADER_DEFINE.
 HEADER_MSG_LINE = re.compile(r"^\s*#\s*define\s+MSG_")
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# tools/ci/check_core_headers.sh — every core header compiles standalone, includes only C freestanding headers and quote-includes only core and generated headers
+# tools/ci/check_core_headers.sh — every core header compiles standalone, includes only C freestanding headers and quote-includes only files inside core/include or generated
 #
 # For each header under <root>/core/include (recursive, sorted) a one-line
 # wrapper `#include "<header>"` is compiled with
@@ -10,9 +10,10 @@
 # -DEMBEDIQ_PLATFORM_HOST -DEMBEDIQ_TEST_HOOKS; -DEMBEDIQ_TEST_HOOKS.
 # Second rule: every `#include <...>` in a core header is <stdint.h>,
 # <stddef.h> or <stdbool.h>.
-# Third rule: every `#include "..."` in a core header names an existing file in
-# the header's own directory, <root>/core/include, <root>/core/include/hal or
-# <root>/generated.
+# Third rule: every quote include resolves — first existing file among the
+# header's own directory, core/include, core/include/hal and generated, in the
+# order the compiler searches them — to a file whose canonical path is inside
+# core/include or generated.
 # Rules two and three read a directive that starts its line with `#include`;
 # one preceded or interrupted by a comment is not read by them and is checked
 # by the standalone compile only.
@@ -20,14 +21,15 @@
 # Failures are listed one per line:
 #   "  compile  <header>  [<configuration>]  <first error line>"
 #   "  include  <header>  <system header>"
-#   "  include  <header>  \"<name>\""
+#   "  include  <header>  \"<name>\"  (<reason>)"
 #
 # Usage:   tools/ci/check_core_headers.sh [--root <dir>]
 #          (default root: the repository, located from this script's path)
 # Env:     CC (default: cc)
 # Exit:    0 = PASS, 1 = FAIL, 2 = tool error (compiler not found, no headers,
 #          header discovery failed, an include scan failed — a header that
-#          cannot be read included); a tool error never prints a result
+#          cannot be read included — or cannot resolve a path to its canonical
+#          form); a tool error never prints a result
 #
 # @author  Ritesh Anand
 # @company embediq.com | ritzylab.com
@@ -104,19 +106,41 @@ for h in "${HEADERS[@]}"; do
     done <<< "$scan"
 done
 
+# A path with every symbolic link and `..` resolved, so containment is decided
+# on where a file really is, not on how it is named.
+canonical() { python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+
+REAL_INC="$(canonical "$INC")"
+rc=$?
+if [ "$rc" -ne 0 ]; then echo "RESULT: ERROR (cannot resolve $INC: exit $rc)"; exit 2; fi
+REAL_GEN="$(canonical "$ROOT/generated")"
+rc=$?
+if [ "$rc" -ne 0 ]; then echo "RESULT: ERROR (cannot resolve $ROOT/generated: exit $rc)"; exit 2; fi
+
 quote_fail=()
 for h in "${HEADERS[@]}"; do
     scan="$(scan_includes 's/^[[:space:]]*#[[:space:]]*include[[:space:]]*"\([^"]*\)".*/\1/p' "$INC/$h")"
     rc=$?
     if [ "$rc" -ne 0 ]; then echo "RESULT: ERROR (include scan failed: $h: exit $rc)"; exit 2; fi
-    dir="$(dirname "$INC/$h")"
+    dir="$INC/$h"; dir="${dir%/*}"
     while IFS= read -r name; do
         [ -n "$name" ] || continue
-        found=0
+        # The target is the first existing file in the compiler's search order.
+        target=""
         for base in "$dir" "$INC" "$INC/hal" "$ROOT/generated"; do
-            if [ -f "$base/$name" ]; then found=1; break; fi
+            if [ -f "$base/$name" ]; then target="$base/$name"; break; fi
         done
-        [ "$found" -eq 1 ] || quote_fail+=("  include  $h  \"$name\"")
+        if [ -z "$target" ]; then
+            quote_fail+=("  include  $h  \"$name\"  (no such file in the header's directory, core/include, core/include/hal or generated)")
+            continue
+        fi
+        real="$(canonical "$target")"
+        rc=$?
+        if [ "$rc" -ne 0 ]; then echo "RESULT: ERROR (cannot resolve $target: exit $rc)"; exit 2; fi
+        case "$real" in
+            "$REAL_INC"/*|"$REAL_GEN"/*) ;;
+            *) quote_fail+=("  include  $h  \"$name\"  (resolves outside core/include and generated: $real)") ;;
+        esac
     done <<< "$scan"
 done
 
