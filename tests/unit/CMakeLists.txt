@@ -170,6 +170,39 @@ target_compile_options(test_fb_timer PRIVATE
 add_test(NAME unit_fb_timer COMMAND test_fb_timer)
 
 # ---------------------------------------------------------------------------
+# POSIX timer worker ownership: the HAL source is compiled into the test with
+# pthread_create / pthread_join renamed to the test's recording wrappers
+# (these definitions apply to this directory's targets only; the HAL library
+# compiles the file unchanged).
+# ---------------------------------------------------------------------------
+
+set(HAL_TIMER_POSIX_SRC ${CMAKE_SOURCE_DIR}/hal/posix/peripherals/hal_timer_posix.c)
+
+add_executable(test_hal_timer_lifecycle
+    test_hal_timer_lifecycle.c
+    ${HAL_TIMER_POSIX_SRC}
+)
+
+set_source_files_properties(${HAL_TIMER_POSIX_SRC} PROPERTIES
+    COMPILE_DEFINITIONS "pthread_create=timer_test_create;pthread_join=timer_test_join"
+)
+
+target_include_directories(test_hal_timer_lifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_hal_timer_lifecycle PRIVATE pthread)
+
+target_compile_options(test_hal_timer_lifecycle PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_hal_timer_lifecycle COMMAND test_hal_timer_lifecycle)
+
+# ---------------------------------------------------------------------------
 # Blocking dispatch unit tests (P2-T0)
 # ---------------------------------------------------------------------------
 

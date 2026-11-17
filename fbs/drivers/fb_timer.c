@@ -19,7 +19,8 @@
  *
  * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   fb_timer__start()         — init + start HAL timer without engine_boot
- *   fb_timer__stop_and_wait() — stop + deinit HAL timer
+ *   fb_timer__stop_and_wait() — deinit the HAL timer (returns after its
+ *                               worker and any callback in progress finished)
  *   fb_timer__reset_counts()  — zero all tick counters
  *   fb_timer__count_1ms()     — ticks fired since last reset
  *   fb_timer__count_10ms()
@@ -131,6 +132,29 @@ static void timer_callback(void *ctx)
     }
 }
 
+/* Fault states of the timer FB's Observatory FAULT event (state_or_flag). */
+#define TIMER_FAULT_HAL_INIT   1u   /* hal_timer_init() refused       */
+#define TIMER_FAULT_HAL_START  2u   /* hal_timer_start() failed       */
+
+/* Configure and start the 1 ms HAL timer. On a refusal the HAL has emitted
+ * its own error; the FB stops publishing ticks and emits a FAULT event that
+ * names which call failed. */
+static void timer_hal_start(void)
+{
+    embediq_osal_atomic32_store(&g_running, 1u);
+    uint8_t state = 0u;
+    if (hal_timer_init(1000u, timer_callback, NULL) != HAL_OK) {
+        state = TIMER_FAULT_HAL_INIT;
+    } else if (hal_timer_start() != HAL_OK) {
+        state = TIMER_FAULT_HAL_START;
+    }
+    if (state != 0u) {
+        embediq_osal_atomic32_store(&g_running, 0u);
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, embediq_engine_fb_ep(g_fb),
+                               0u, state, 0u);
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * FB init / exit (called by embediq_engine_boot)
  * ------------------------------------------------------------------------- */
@@ -155,17 +179,14 @@ static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     }
 
     s_token = embediq_bus_token_for(g_fb);
-    embediq_osal_atomic32_store(&g_running, 1u);
-    hal_timer_init(1000u, timer_callback, NULL);
-    hal_timer_start();
+    timer_hal_start();
 }
 
 static void timer_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
     embediq_osal_atomic32_store(&g_running, 0u);
-    hal_timer_stop();
-    hal_timer_deinit();
+    hal_timer_deinit();   /* stops the timer and retires its worker */
 }
 
 /* ---------------------------------------------------------------------------
@@ -202,20 +223,17 @@ EmbedIQ_FB_Handle_t fb_timer_register(void)
 void fb_timer__start(void)
 {
     s_token = g_fb ? embediq_bus_token_for(g_fb) : NULL;
-    embediq_osal_atomic32_store(&g_running, 1u);
-    hal_timer_init(1000u, timer_callback, NULL);
-    hal_timer_start();
+    timer_hal_start();
 }
 
 /**
- * Stop the HAL timer and wait for any in-flight callback to complete.
+ * Stop the HAL timer and wait for any in-flight callback to complete:
+ * hal_timer_deinit() joins the worker, which finishes its callback first.
  * Safe to call even if the timer is already stopped.
  */
 void fb_timer__stop_and_wait(void)
 {
     embediq_osal_atomic32_store(&g_running, 0u);
-    hal_timer_stop();
-    embediq_osal_delay_ms(20u);
     hal_timer_deinit();
 }
 
