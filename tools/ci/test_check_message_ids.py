@@ -10,7 +10,9 @@ Verifies that check_message_ids.py:
     with zero messages, a header with no definitions and a missing header —
     never a silent pass.
   - Exits 2, naming the file and line, on a header `#define MSG_...` it cannot
-    parse, and on a catalog that is not valid UTF-8 — never a traceback.
+    parse — including a value that is an expression rather than one integer
+    literal — and on a catalog that is not valid UTF-8 — never a traceback.
+  - Accepts a definition followed by trailing comments.
   - Exits 0 on a clean fixture and on the repository's own catalogs.
 
 Each test builds a throwaway catalog directory and header and runs the checker
@@ -173,6 +175,35 @@ def test_unparsed_definitions():
         _check("catalog_not_utf8: no traceback", "Traceback" not in out, f"output: {out!r}")
 
 
+def test_whole_value():
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out = _run(tmp, {"a.iq": _catalog(("MSG_ONE", "0x0001"))},
+                       header="#define MSG_OK 0x9u\n#define MSG_EXPR 0x0000u + 1u\n")
+        _check("expression_value: exits 2", rc == 2, f"got rc={rc}. output: {out!r}")
+        _check("expression_value: says 'cannot parse'", "cannot parse" in out,
+               f"output: {out!r}")
+        _check("expression_value: names msgs.h line 2", "msgs.h:2:" in out,
+               f"output: {out!r}")
+        _check("expression_value: no 'no duplicates'", "no duplicates" not in out,
+               f"output: {out!r}")
+    for n, line in enumerate(("#define MSG_B 0x8 + 1",
+                              "#define MSG_B 0x9u /* c */ + 1",
+                              "#define MSG_B 9.0",
+                              "#define MSG_B 0x9u /* open"), 1):
+        _expect_unparsed(f"not_one_literal_{n} {line!r}",
+                         "#define MSG_OK 0x9u\n" + line + "\n", lineno=2)
+    with tempfile.TemporaryDirectory() as tmp:
+        rc, out = _run(tmp, {"a.iq": _catalog(("MSG_A", "0x1400"))},
+                       header="#define MSG_OK 0x9u\n"
+                              "#define MSG_C 0x0A01u /**< doc */\n"
+                              "#define MSG_D 0x0A02u // note\n"
+                              "#define MSG_E 0x0A03u/* glued */\n"
+                              "#define MSG_F 0x0A04u /* a */ /* b */\n")
+        _check("trailing_comments: exits 0", rc == 0, f"got rc={rc}. output: {out!r}")
+        _check("trailing_comments: 5 header definitions",
+               "5 header definition(s)" in out, f"output: {out!r}")
+
+
 def test_clean_fixture():
     with tempfile.TemporaryDirectory() as tmp:
         rc, out = _run(tmp, {"a.iq": _catalog(("MSG_A", "0x1400"), ("MSG_B", "0x1401")),
@@ -194,8 +225,8 @@ def test_repository_tree():
 
 
 if __name__ == "__main__":
-    tests = [test_duplicates, test_errors, test_unparsed_definitions, test_clean_fixture,
-             test_repository_tree]
+    tests = [test_duplicates, test_errors, test_unparsed_definitions, test_whole_value,
+             test_clean_fixture, test_repository_tree]
     for t in tests:
         t()
 
