@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # scripts/check.sh — local CI runner
 #
-# Runs every check in .github/workflows/ci.yml in the same order.
+# Runs the message-catalog drift check, the host build, the tests and the
+# static checks (tools/ci/static_checks.sh — the same list CI runs). CI
+# additionally runs the configuration and Python-stub drift checks, the Python
+# SDK unit tests, the API compatibility compile, the MISRA scan, the
+# ThreadSanitizer job and the release-symbols job.
 # Run this before pushing to catch failures before GitHub Actions does.
 #
 # Usage:
@@ -44,7 +48,11 @@ run_step "Generate message catalogs" bash -c '
     python3 tools/messages_iq/generate.py messages/thermostat.iq \
         --out generated/ --output-name thermostat_msg_catalog.h &&
     python3 tools/messages_iq/generate.py messages/telemetry.iq \
-        --out generated/ --output-name telemetry_msg_catalog.h
+        --out generated/ --output-name telemetry_msg_catalog.h &&
+    python3 tools/messages_iq/generate.py messages/gateway.iq \
+        --out generated/ --output-name gateway_msg_catalog.h &&
+    python3 tools/messages_iq/generate.py messages/provisioning.iq \
+        --out generated/ --output-name provisioning_msg_catalog.h
 '
 
 # ── Drift check ────────────────────────────────────────────────────────
@@ -56,9 +64,15 @@ run_step "Generated header drift check" bash -c '
         --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h &&
     python3 tools/messages_iq/generate.py messages/telemetry.iq \
         --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h &&
+    python3 tools/messages_iq/generate.py messages/gateway.iq \
+        --out /tmp/iq_fresh/ --output-name gateway_msg_catalog.h &&
+    python3 tools/messages_iq/generate.py messages/provisioning.iq \
+        --out /tmp/iq_fresh/ --output-name provisioning_msg_catalog.h &&
     diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h &&
     diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h &&
-    diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
+    diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h &&
+    diff generated/gateway_msg_catalog.h /tmp/iq_fresh/gateway_msg_catalog.h &&
+    diff generated/provisioning_msg_catalog.h /tmp/iq_fresh/provisioning_msg_catalog.h
 '
 
 # ── Build ──────────────────────────────────────────────────────────────
@@ -73,44 +87,8 @@ run_step "ctest" bash -c '
 '
 
 # ── Static checks ──────────────────────────────────────────────────────
-run_step "validator.py (I-08)" \
-    python3 tools/validator.py
-
-run_step "check_lib_obs.py --strict (R-lib-1)" \
-    python3 tools/ci/check_lib_obs.py --strict
-
-run_step "check_osal_obs.py --strict (XOBS-1, R-osal-01)" \
-    python3 tools/ci/check_osal_obs.py --strict
-
-run_step "check_hal_obs.py --strict (XOBS-2)" \
-    python3 tools/ci/check_hal_obs.py --strict
-
-run_step "check_fb_calls.py (I-07, R-02, R-sub-03)" \
-    python3 tools/ci/check_fb_calls.py
-
-run_step "boundary_checker.py" \
-    python3 tools/boundary_checker.py
-
-run_step "component_globals_check.py (R-lib-4)" \
-    python3 tools/ci/component_globals_check.py
-
-run_step "component_state_check.py (R-lib-4)" \
-    python3 tools/ci/component_state_check.py
-
-run_step "vendoring_check.py (R-lib-3)" \
-    python3 tools/ci/vendoring_check.py
-
-run_step "vendoring_date_check.py (R-lib-3)" \
-    python3 tools/ci/vendoring_date_check.py
-
-run_step "ops_version_check.py (R-lib-4, D-LIB-5)" \
-    python3 tools/ci/ops_version_check.py
-
-run_step "licence_check.py (SPDX)" \
-    python3 tools/ci/licence_check.py
-
-run_step "binary_blob_check.py" \
-    python3 tools/ci/binary_blob_check.py
+run_step "Static checks (tools/ci/static_checks.sh)" \
+    bash tools/ci/static_checks.sh
 
 # ── Summary ────────────────────────────────────────────────────────────
 printf '\n══════════════════════════════════════════\n'

@@ -31,7 +31,7 @@
  * hal_flash__fail_next_write) for a counted number of failures.
  *
  * Only includes: hal_flash.h (core/include/hal) and C stdlib/POSIX headers.
- * Zero embediq_*.h includes — HAL has no knowledge of the framework.
+ * This file includes no embediq_*.h; what a HAL source may include is listed in ARCHITECTURE.md, Layer Boundary Rules.
  * R-02: no malloc in this file.
  *
  * @author  Ritesh Anand

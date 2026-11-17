@@ -4,7 +4,7 @@
 #   peripherals/ — HAL peripheral implementations (timer, flash, wdg, obs_stream)
 #   ops/         — Ops table implementations (TLS: mbedTLS; MQTT: Paho MQTT C)
 #
-# Peripheral files: zero embediq_*.h includes (layer boundary enforced by boundary_checker).
+# HAL sources: permitted includes are listed in ARCHITECTURE.md, Layer Boundary Rules (enforced by tools/boundary_checker.py)
 # Ops files: include ops table headers from core/include/ops/ — this is correct.
 # The ops table implementation bridges the HAL and ops contract layers by design.
 #

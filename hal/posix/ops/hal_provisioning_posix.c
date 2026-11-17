@@ -10,7 +10,7 @@
  *
  * mbedTLS and filesystem I/O are permitted in this HAL layer ONLY. The Service
  * FB (fbs/services/fb_provisioning.c) calls these ops via function pointers and
- * never includes mbedTLS or <stdio.h> (boundary_checker.py enforced).
+ * never includes mbedTLS or <stdio.h>.
  *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com

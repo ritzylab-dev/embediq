@@ -26,7 +26,8 @@
 #
 # Usage:   tools/ci/test_check_release_symbols.sh   (from the repo root)
 # Env:     CMAKE (default: cmake)
-# Exit:    0 when every case gives its expected verdict, 1 otherwise.
+# Exit:    0 when every case gives its expected verdict, 1 otherwise, 2 when
+#          not run from a git checkout or the tree cannot be copied.
 #
 # @author  Ritesh Anand
 # @company embediq.com | ritzylab.com
@@ -35,7 +36,9 @@
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" && top="$(cd "$top" && pwd -P)"
+[ "$top" = "$ROOT" ] || { echo "SELF-TEST: ERROR (not a git checkout — run from a clone)"; exit 2; }
 export CMAKE="${CMAKE:-cmake}"
 REAL_NM="$(command -v nm)" || { echo "nm not found"; exit 1; }
 
@@ -45,8 +48,11 @@ TREE="$SCRATCH/tree"
 mkdir -p "$TREE" "$SCRATCH/pristine" "$SCRATCH/logs"
 
 echo "== Copy the working tree into $TREE"
-(cd "$ROOT" && git ls-files -co --exclude-standard | grep -vE '^build[^/]*/' > "$SCRATCH/files")
-(cd "$ROOT" && tar -cf - -T "$SCRATCH/files") | (cd "$TREE" && tar -xf -)
+(cd "$ROOT" && git ls-files -co --exclude-standard | grep -vE '^build[^/]*/' > "$SCRATCH/files") \
+    || { echo "SELF-TEST: ERROR (cannot copy the tree)"; exit 2; }
+(cd "$ROOT" && tar -cf - -T "$SCRATCH/files") | (cd "$TREE" && tar -xf -) \
+    || { echo "SELF-TEST: ERROR (cannot copy the tree)"; exit 2; }
+[ -f "$TREE/tools/ci/check_release_symbols.sh" ] || { echo "SELF-TEST: ERROR (cannot copy the tree)"; exit 2; }
 
 export BUILD_DIR="$TREE/build-release"
 export DEBUG_BUILD_DIR="$TREE/build-debug-check"
