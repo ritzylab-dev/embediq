@@ -7,8 +7,9 @@
  * delete, reset_defaults, schema version persistence, and missing-key error.
  * Also tests the HAL flash contract (hal_flash.h) directly.
  *
- * All tests use EMBEDIQ_NVM_PATH env var to point to /tmp — never touches
- * the user's ~/.embediq/ directory.
+ * The tests use stores in a private directory this process creates
+ * (embediq_test_store_select()) — never an inherited EMBEDIQ_NVM_PATH and
+ * never the user's ~/.embediq/ directory.
  *
  * Run:      ./build/tests/unit/test_fb_nvm
  * Expected: "All 34 tests passed. (0 failed)"
@@ -24,6 +25,7 @@
 #include "embediq_config.h"
 #include "embediq_obs.h"
 #include "hal/hal_flash.h"
+#include "embediq_test_store.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -34,6 +36,7 @@
 #include <unistd.h>     /* getpid, rmdir */
 #include <sys/stat.h>   /* mkdir */
 #include <dirent.h>     /* opendir — test directory removal */
+#include <limits.h>     /* PATH_MAX */
 
 /* ---------------------------------------------------------------------------
  * Public NVM API (matches embediq_nvm.h contract)
@@ -80,22 +83,24 @@ static int g_tests_failed = 0;
 } while (0)
 
 /* ---------------------------------------------------------------------------
- * Test path (in /tmp — never touches ~/.embediq)
+ * Test paths — this process's private store directory, selected by main()
+ * before the first test (never ~/.embediq, never an inherited path)
  * ------------------------------------------------------------------------- */
 
-#define TEST_NVM_PATH  "/tmp/test_nvm_store.bin"
-#define TEST_HAL_PATH  "/tmp/test_hal_flash.bin"
+static const char *g_nvm_path = NULL;          /* the NVM store       */
+static const char *g_hal_path = NULL;          /* the HAL flash store */
+static char        g_nvm_tmp_path[PATH_MAX];   /* g_nvm_path + ".tmp" */
 
 static void setup(void)
 {
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
+    setenv("EMBEDIQ_NVM_PATH", g_nvm_path, 1);
     nvm__init_state();
 }
 
 static void hal_setup(void)
 {
-    setenv("EMBEDIQ_NVM_PATH", TEST_HAL_PATH, 1);
-    remove(TEST_HAL_PATH);
+    setenv("EMBEDIQ_NVM_PATH", g_hal_path, 1);
+    remove(g_hal_path);
 }
 
 /* ---------------------------------------------------------------------------
@@ -134,13 +139,13 @@ static void test_nvm_set_atomic_write_creates_tmp_then_renames(void)
     embediq_nvm_set("atomic_key", val, 2u);
 
     /* .tmp file must NOT be present (it was renamed). */
-    FILE *f_tmp = fopen(TEST_NVM_PATH ".tmp", "rb");
+    FILE *f_tmp = fopen(g_nvm_tmp_path, "rb");
     ASSERT(f_tmp == NULL,
            "no leftover .tmp file — atomic rename completed successfully");
     if (f_tmp) fclose(f_tmp);
 
     /* backing file must exist. */
-    FILE *f_bin = fopen(TEST_NVM_PATH, "rb");
+    FILE *f_bin = fopen(g_nvm_path, "rb");
     ASSERT(f_bin != NULL,
            "nvm_store.bin exists after atomic write");
     if (f_bin) fclose(f_bin);
@@ -316,7 +321,7 @@ static void test_blob_file_starts_with_magic(void)
     const uint8_t val[] = {0x11};
     embediq_nvm_set("blob_hdr_check", val, 1u);
 
-    FILE *f = fopen(TEST_NVM_PATH, "rb");
+    FILE *f = fopen(g_nvm_path, "rb");
     ASSERT(f != NULL, "backing file exists for magic-header check");
     if (!f) return;
     uint8_t hdr[4] = {0};
@@ -346,7 +351,7 @@ static void test_blob_file_size_after_persist(void)
     const uint8_t val[] = {0x22};
     embediq_nvm_set("size_check", val, 1u);
 
-    FILE *f = fopen(TEST_NVM_PATH, "rb");
+    FILE *f = fopen(g_nvm_path, "rb");
     ASSERT(f != NULL, "backing file exists for size check");
     if (!f) return;
     fseek(f, 0L, SEEK_END);
@@ -397,7 +402,7 @@ static void test_blob_crc_corrupt_causes_fallback(void)
     embediq_nvm_set("crc_test", val, 1u);
 
     /* Corrupt one byte of the backing file at offset 80. */
-    FILE *f = fopen(TEST_NVM_PATH, "r+b");
+    FILE *f = fopen(g_nvm_path, "r+b");
     ASSERT(f != NULL, "backing file exists for CRC corruption test");
     if (!f) return;
     fseek(f, 80L, SEEK_SET);
@@ -650,7 +655,7 @@ static void test_real_read_failure_puts_store_in_unreadable_state(void)
     char dir[96];
     snprintf(dir, sizeof(dir), "/tmp/test_nvm_store_dir_%d", (int)getpid());
     (void)mkdir(dir, 0755);
-    (void)remove(TEST_NVM_PATH);
+    (void)remove(g_nvm_path);
     uint32_t k = 0x5Bu, got = 0u;
     obs__reset();
     embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_TCP);   /* ring only, no output */
@@ -671,7 +676,7 @@ static void test_real_read_failure_puts_store_in_unreadable_state(void)
                                     (uint8_t)EMBEDIQ_NVM_PERSIST_FLASH_UNREADABLE);
     uint32_t persist_fails = count_persist_fail_events();
 
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);   /* absent: an empty store */
+    setenv("EMBEDIQ_NVM_PATH", g_nvm_path, 1);   /* absent: an empty store */
     embediq_err_t rc_flush = embediq_nvm_flush();
     uint32_t no_blob = count_events(EMBEDIQ_OBS_EVT_CFG_BLOB_INVALID, 0u);
 
@@ -883,7 +888,7 @@ static void test_first_configuration_is_durable_only_after_parent_sync(void)
     embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_NULL);
 
     home_restore();
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
+    setenv("EMBEDIQ_NVM_PATH", g_nvm_path, 1);
     rm_tree(home);
 
     printf("      created_by_load=%d set_k=%d persist_fail_events=%u with_hal_code=%u "
@@ -1028,6 +1033,14 @@ static void test_skip_rule_never_skips_an_unpersisted_change(void)
 
 int main(void)
 {
+    g_nvm_path = embediq_test_store_select();
+    g_hal_path = embediq_test_store_file("hal_flash.bin");
+    int tmp_len = snprintf(g_nvm_tmp_path, sizeof(g_nvm_tmp_path), "%s.tmp", g_nvm_path);
+    if (tmp_len < 0 || (size_t)tmp_len >= sizeof(g_nvm_tmp_path)) {
+        fprintf(stderr, "store path too long\n");
+        return 2;
+    }
+
     /* NVM Driver FB tests */
     test_nvm_set_and_get_roundtrip();
     test_nvm_set_atomic_write_creates_tmp_then_renames();

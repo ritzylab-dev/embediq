@@ -15,7 +15,7 @@ target_include_directories(test_thermostat_observable PRIVATE
     ${CMAKE_SOURCE_DIR}/examples/thermostat
 )
 
-target_link_libraries(test_thermostat_observable PRIVATE embediq_driver_fbs)
+target_link_libraries(test_thermostat_observable PRIVATE embediq_driver_fbs embediq_test_store)
 
 target_compile_options(test_thermostat_observable PRIVATE
     -Wall
@@ -45,6 +45,7 @@ target_include_directories(test_thermostat_full PRIVATE
 
 target_link_libraries(test_thermostat_full PRIVATE
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_options(test_thermostat_full PRIVATE
@@ -73,6 +74,7 @@ target_include_directories(test_thermostat_capture PRIVATE
 
 target_link_libraries(test_thermostat_capture PRIVATE
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_definitions(test_thermostat_capture PRIVATE
@@ -104,6 +106,7 @@ target_include_directories(test_gateway_full PRIVATE
 
 target_link_libraries(test_gateway_full PRIVATE
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_options(test_gateway_full PRIVATE

@@ -48,6 +48,7 @@
 
 #include "embediq_fb.h"
 #include "embediq_obs.h"
+#include "embediq_test_store.h"
 #include "embediq_osal.h"
 #include "embediq_platform_msgs.h"
 #include "thermostat_msgs.h"
@@ -56,7 +57,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <stdlib.h>     /* setenv */
 
 /* ---------------------------------------------------------------------------
  * Package-internal test APIs
@@ -97,12 +97,6 @@ static int g_tests_failed = 0;
         printf("PASS  %s\n", __func__);                                        \
     }                                                                          \
 } while (0)
-
-/* ---------------------------------------------------------------------------
- * NVM redirect — never touches ~/.embediq in tests
- * ------------------------------------------------------------------------- */
-
-#define TEST_NVM_PATH  "/tmp/test_thermostat_nvm.bin"
 
 /* ---------------------------------------------------------------------------
  * Shared handles
@@ -160,7 +154,7 @@ static void test_engine_boot_succeeds(void)
 {
     fb_engine__reset();
     obs__set_level(2u);       /* verbose: capture FSM_TRANS events */
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
+    (void)embediq_test_store_select();   /* private NVM store for this process */
 
     g_h_timer  = fb_timer_register();
     g_h_nvm    = fb_nvm_register();

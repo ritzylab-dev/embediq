@@ -223,6 +223,7 @@ target_include_directories(test_fb_nvm PRIVATE
 
 target_link_libraries(test_fb_nvm PRIVATE
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_options(test_fb_nvm PRIVATE
@@ -358,6 +359,7 @@ target_include_directories(test_embediq_cfg PRIVATE
 target_link_libraries(test_embediq_cfg PRIVATE
     embediq_cfg
     embediq_driver_fbs
+    embediq_test_store
     m
 )
 
@@ -368,6 +370,43 @@ target_compile_options(test_embediq_cfg PRIVATE
 )
 
 add_test(NAME unit_embediq_cfg COMMAND test_embediq_cfg)
+
+# ---------------------------------------------------------------------------
+# Private NVM store for test processes, and the regression that proves the
+# configuration test never uses an inherited store
+# ---------------------------------------------------------------------------
+
+add_library(embediq_test_store STATIC embediq_test_store.c)
+
+target_include_directories(embediq_test_store PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_options(embediq_test_store PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_executable(test_cfg_store_isolation test_cfg_store_isolation.c)
+
+target_include_directories(test_cfg_store_isolation PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_cfg_store_isolation PRIVATE
+    embediq_test_store
+    embediq_driver_fbs
+)
+
+target_compile_options(test_cfg_store_isolation PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_cfg_store_isolation
+         COMMAND test_cfg_store_isolation $<TARGET_FILE:test_embediq_cfg>)
 
 # ---------------------------------------------------------------------------
 # Telemetry Service FB unit tests (Phase 2 S2)
@@ -436,6 +475,7 @@ target_link_libraries(test_fb_provisioning PRIVATE
     embediq_service_fbs
     embediq_cfg
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_options(test_fb_provisioning PRIVATE

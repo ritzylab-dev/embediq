@@ -6,6 +6,12 @@
  * key handling. Each test calls nvm__init_state() first to start from
  * a clean in-memory cache.
  *
+ * The tests write through the real file-backed flash HAL, so main() selects
+ * a private store (embediq_test_store_select) before the first NVM
+ * operation: an inherited EMBEDIQ_NVM_PATH or the default store under $HOME
+ * is never read or written, and the process exits non-zero if no private
+ * store can be created.
+ *
  * Run:      ./build/tests/unit/test_embediq_cfg
  * Expected: "All N tests passed. (0 failed)"
  *
@@ -17,6 +23,7 @@
 
 #include "embediq_cfg.h"
 #include "embediq_nvm.h"   /* for EMBEDIQ_NVM_KEY_MAX */
+#include "embediq_test_store.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -174,6 +181,8 @@ static void test_boundary_key_length(void)
 
 int main(void)
 {
+    (void)embediq_test_store_select();   /* before any NVM operation */
+
     test_absent_key_returns_default();
     test_float_round_trip();
     test_i32_round_trip();

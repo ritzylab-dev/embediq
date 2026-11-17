@@ -6,6 +6,10 @@
  * Boots all 6 FBs on real POSIX threads and runs for 30 seconds.
  * Pass criterion: process exits with 0 (no crash, no boot failure).
  *
+ * fb_nvm reads the real file-backed store at boot, so main() selects a
+ * private store first: an inherited EMBEDIQ_NVM_PATH or the default store
+ * under $HOME is never read or written.
+ *
  * @author  Ritesh Anand
  * @company embediq.com | ritzylab.com
  *
@@ -15,6 +19,7 @@
 #include "embediq_fb.h"
 #include "embediq_obs.h"
 #include "embediq_osal.h"
+#include "embediq_test_store.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +34,8 @@ extern void embediq_obs_stream_posix_register(void);
 
 int main(void)
 {
+    (void)embediq_test_store_select();   /* before fb_nvm reads the store */
+
     embediq_obs_stream_posix_register();
     embediq_obs_set_transport(EMBEDIQ_OBS_TRANSPORT_STDOUT);
     embediq_obs_set_level(1u);
