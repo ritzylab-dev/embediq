@@ -14,68 +14,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate message catalogs (messages.iq → C headers)
-        run: |
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --out generated/ --output-name embediq_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/thermostat.iq \
-              --out generated/ --output-name thermostat_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --out generated/ --output-name telemetry_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/gateway.iq \
-              --out generated/ --output-name gateway_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/provisioning.iq \
-              --out generated/ --output-name provisioning_msg_catalog.h
-
-      - name: Verify generated headers match .iq source (drift check)
-        run: |
-          mkdir -p /tmp/iq_fresh
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --out /tmp/iq_fresh/ --output-name embediq_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/thermostat.iq \
-              --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/gateway.iq \
-              --out /tmp/iq_fresh/ --output-name gateway_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/provisioning.iq \
-              --out /tmp/iq_fresh/ --output-name provisioning_msg_catalog.h
-          diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h
-          diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
-          diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
-          diff generated/gateway_msg_catalog.h /tmp/iq_fresh/gateway_msg_catalog.h
-          diff generated/provisioning_msg_catalog.h /tmp/iq_fresh/provisioning_msg_catalog.h
-
-      - name: Generate config_iq artifacts
-        run: |
-          python3 tools/config_iq/generate.py config/config.iq \
-              --out generated/
-
-      - name: Verify config_iq generated files match schema (drift check)
-        run: |
-          mkdir -p /tmp/cfg_fresh
-          python3 tools/config_iq/generate.py config/config.iq \
-              --out /tmp/cfg_fresh/
-          diff generated/embediq_cfg_validate.h /tmp/cfg_fresh/embediq_cfg_validate.h
-          diff generated/embediq_cfg_generated.h /tmp/cfg_fresh/embediq_cfg_generated.h
-          diff generated/embediq_cfg_validate.c   /tmp/cfg_fresh/embediq_cfg_validate.c
-
-      - name: Generate Python message stubs (--lang python)
-        run: |
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --lang python --out tools/embediq_python/embediq/msgs/
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --lang python --out tools/embediq_python/embediq/msgs/
-
-      - name: Verify Python stubs match .iq source (drift check)
-        run: |
-          mkdir -p /tmp/py_fresh/
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --lang python --out /tmp/py_fresh/
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --lang python --out /tmp/py_fresh/
-          diff tools/embediq_python/embediq/msgs/core_msgs.py /tmp/py_fresh/core_msgs.py
-          diff tools/embediq_python/embediq/msgs/telemetry_msgs.py /tmp/py_fresh/telemetry_msgs.py
+      - name: Generated files match their sources (committed files, untouched checkout)
+        run: python3 tools/ci/check_generated_artifacts.py
 
       - name: Python SDK unit tests
         run: python3 tests/python/test_ext_fb.py
@@ -118,68 +58,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate message catalogs (messages.iq → C headers)
-        run: |
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --out generated/ --output-name embediq_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/thermostat.iq \
-              --out generated/ --output-name thermostat_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --out generated/ --output-name telemetry_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/gateway.iq \
-              --out generated/ --output-name gateway_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/provisioning.iq \
-              --out generated/ --output-name provisioning_msg_catalog.h
-
-      - name: Verify generated headers match .iq source (drift check)
-        run: |
-          mkdir -p /tmp/iq_fresh
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --out /tmp/iq_fresh/ --output-name embediq_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/thermostat.iq \
-              --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/gateway.iq \
-              --out /tmp/iq_fresh/ --output-name gateway_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/provisioning.iq \
-              --out /tmp/iq_fresh/ --output-name provisioning_msg_catalog.h
-          diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h
-          diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h
-          diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h
-          diff generated/gateway_msg_catalog.h /tmp/iq_fresh/gateway_msg_catalog.h
-          diff generated/provisioning_msg_catalog.h /tmp/iq_fresh/provisioning_msg_catalog.h
-
-      - name: Generate config_iq artifacts
-        run: |
-          python3 tools/config_iq/generate.py config/config.iq \
-              --out generated/
-
-      - name: Verify config_iq generated files match schema (drift check)
-        run: |
-          mkdir -p /tmp/cfg_fresh
-          python3 tools/config_iq/generate.py config/config.iq \
-              --out /tmp/cfg_fresh/
-          diff generated/embediq_cfg_validate.h /tmp/cfg_fresh/embediq_cfg_validate.h
-          diff generated/embediq_cfg_generated.h /tmp/cfg_fresh/embediq_cfg_generated.h
-          diff generated/embediq_cfg_validate.c   /tmp/cfg_fresh/embediq_cfg_validate.c
-
-      - name: Generate Python message stubs (--lang python)
-        run: |
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --lang python --out tools/embediq_python/embediq/msgs/
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --lang python --out tools/embediq_python/embediq/msgs/
-
-      - name: Verify Python stubs match .iq source (drift check)
-        run: |
-          mkdir -p /tmp/py_fresh/
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --lang python --out /tmp/py_fresh/
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --lang python --out /tmp/py_fresh/
-          diff tools/embediq_python/embediq/msgs/core_msgs.py /tmp/py_fresh/core_msgs.py
-          diff tools/embediq_python/embediq/msgs/telemetry_msgs.py /tmp/py_fresh/telemetry_msgs.py
+      - name: Generated files match their sources (committed files, untouched checkout)
+        run: python3 tools/ci/check_generated_artifacts.py
 
       - name: Build (host, ThreadSanitizer)
         run: cmake -B build_tsan -DEMBEDIQ_PLATFORM=host -DEMBEDIQ_TSAN=ON && cmake --build build_tsan
@@ -221,23 +101,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate message catalogs (messages.iq → C headers)
-        run: |
-          python3 tools/messages_iq/generate.py messages/core.iq \
-              --out generated/ --output-name embediq_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/thermostat.iq \
-              --out generated/ --output-name thermostat_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/telemetry.iq \
-              --out generated/ --output-name telemetry_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/gateway.iq \
-              --out generated/ --output-name gateway_msg_catalog.h
-          python3 tools/messages_iq/generate.py messages/provisioning.iq \
-              --out generated/ --output-name provisioning_msg_catalog.h
-
-      - name: Generate config_iq artifacts
-        run: |
-          python3 tools/config_iq/generate.py config/config.iq \
-              --out generated/
+      - name: Generated files match their sources (committed files, untouched checkout)
+        run: python3 tools/ci/check_generated_artifacts.py
 
       # Builds the host release profile (test hooks off) and checks every
       # framework library against tools/ci/test_hook_inventory.txt (I-05, R-07).

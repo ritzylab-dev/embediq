@@ -11,7 +11,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Checks
 
-`static_checks.sh` runs the nine blocking checks and the six advisory checks
+`static_checks.sh` runs the ten blocking checks and the six advisory checks
 below, with their self-tests, in one list; the CI `build` job and
 `scripts/check.sh` both run it. A blocking check that fails fails the run; an
 advisory check is reported only. `check_release_symbols.sh` runs in the CI job
@@ -20,6 +20,7 @@ blocking.
 
 | Check | Enforces | Reference | Class | Self-test |
 | ----- | -------- | --------- | ----- | --------- |
+| `check_generated_artifacts.py` | every committed generated file equals what its generator produces from the committed source; every catalog and schema has a declared output | I-16 | blocking | `test_check_generated_artifacts.py` |
 | `tools/validator.py` | no hardcoded sizing numbers where an `embediq_config.h` constant is required | I-08 | blocking | — |
 | `check_lib_obs.py --strict` | every library with a resource acquisition path emits the library init Observatory event | R-lib-1 | blocking | — |
 | `check_osal_obs.py --strict` | OSAL failure paths emit Observatory events; `embediq_err_t` is never negated | R-osal-01 | blocking | — |
@@ -37,6 +38,8 @@ blocking.
 | `binary_blob_check.py` | no compiled objects in source directories | CODING_RULES.md | advisory | — |
 | `check_release_symbols.sh` | no test hooks in the host release build | R-07, I-05 | blocking (job `release-symbols`) | `test_check_release_symbols.sh` |
 | `tsan_summarise.py` | no ThreadSanitizer finding, unparsed report, runtime abort or sanitizer-handled crash in the test run | ARCHITECTURE.md "Threads in EmbedIQ" | blocking (job `tsan`) | `test_tsan_summarise.py` |
+
+To regenerate after changing a schema, run the generator commands in CONTRIBUTING.md and commit the result; the check never writes into the checkout.
 
 The `tsan` job also builds `tsan_canary.c`, a deliberately racy program, and
 requires the summary to reject it before the test run — proof on every run

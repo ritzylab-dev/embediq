@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # scripts/check.sh — local CI runner
 #
-# Runs the message-catalog drift check, the host build, the tests and the
-# static checks (tools/ci/static_checks.sh — the same list CI runs). CI
-# additionally runs the configuration and Python-stub drift checks, the Python
-# SDK unit tests, the API compatibility compile, the MISRA scan, the
+# Runs the generated-file check, the host build, the tests and the static checks
+# (tools/ci/static_checks.sh — the same list CI runs). CI additionally runs the
+# Python SDK unit tests, the API compatibility compile, the MISRA scan, the
 # ThreadSanitizer job and the release-symbols job.
 # Run this before pushing to catch failures before GitHub Actions does.
 #
@@ -41,39 +40,8 @@ run_step() {
     fi
 }
 
-# ── Generate message catalogs ──────────────────────────────────────────
-run_step "Generate message catalogs" bash -c '
-    python3 tools/messages_iq/generate.py messages/core.iq \
-        --out generated/ --output-name embediq_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/thermostat.iq \
-        --out generated/ --output-name thermostat_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/telemetry.iq \
-        --out generated/ --output-name telemetry_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/gateway.iq \
-        --out generated/ --output-name gateway_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/provisioning.iq \
-        --out generated/ --output-name provisioning_msg_catalog.h
-'
-
-# ── Drift check ────────────────────────────────────────────────────────
-run_step "Generated header drift check" bash -c '
-    mkdir -p /tmp/iq_fresh &&
-    python3 tools/messages_iq/generate.py messages/core.iq \
-        --out /tmp/iq_fresh/ --output-name embediq_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/thermostat.iq \
-        --out /tmp/iq_fresh/ --output-name thermostat_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/telemetry.iq \
-        --out /tmp/iq_fresh/ --output-name telemetry_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/gateway.iq \
-        --out /tmp/iq_fresh/ --output-name gateway_msg_catalog.h &&
-    python3 tools/messages_iq/generate.py messages/provisioning.iq \
-        --out /tmp/iq_fresh/ --output-name provisioning_msg_catalog.h &&
-    diff generated/embediq_msg_catalog.h /tmp/iq_fresh/embediq_msg_catalog.h &&
-    diff generated/thermostat_msg_catalog.h /tmp/iq_fresh/thermostat_msg_catalog.h &&
-    diff generated/telemetry_msg_catalog.h /tmp/iq_fresh/telemetry_msg_catalog.h &&
-    diff generated/gateway_msg_catalog.h /tmp/iq_fresh/gateway_msg_catalog.h &&
-    diff generated/provisioning_msg_catalog.h /tmp/iq_fresh/provisioning_msg_catalog.h
-'
+# ── Generated files ────────────────────────────────────────────────────
+run_step "Generated files match their sources" python3 tools/ci/check_generated_artifacts.py
 
 # ── Build ──────────────────────────────────────────────────────────────
 run_step "Build (host platform)" bash -c '
