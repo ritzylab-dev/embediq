@@ -44,6 +44,8 @@ check() {
     RESULTS+=("$res")
 }
 
+check BLOCKING python3 tools/ci/check_generated_artifacts.py
+check BLOCKING python3 tools/ci/test_check_generated_artifacts.py
 check BLOCKING python3 tools/validator.py
 check BLOCKING python3 tools/ci/check_lib_obs.py --strict
 check BLOCKING python3 tools/ci/check_osal_obs.py --strict

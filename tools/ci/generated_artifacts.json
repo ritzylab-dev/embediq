@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "artifacts": [
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/core.iq", "args": ["--output-name", "embediq_msg_catalog.h"], "out_dir": "generated", "outputs": ["embediq_msg_catalog.h"]},
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/thermostat.iq", "args": ["--output-name", "thermostat_msg_catalog.h"], "out_dir": "generated", "outputs": ["thermostat_msg_catalog.h"]},
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/telemetry.iq", "args": ["--output-name", "telemetry_msg_catalog.h"], "out_dir": "generated", "outputs": ["telemetry_msg_catalog.h"]},
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/gateway.iq", "args": ["--output-name", "gateway_msg_catalog.h"], "out_dir": "generated", "outputs": ["gateway_msg_catalog.h"]},
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/provisioning.iq", "args": ["--output-name", "provisioning_msg_catalog.h"], "out_dir": "generated", "outputs": ["provisioning_msg_catalog.h"]},
+    {"generator": "tools/config_iq/generate.py", "source": "config/config.iq", "args": [], "out_dir": "generated", "outputs": ["embediq_cfg_validate.h", "embediq_cfg_generated.h", "embediq_cfg_validate.c"]},
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/core.iq", "args": ["--lang", "python"], "out_dir": "tools/embediq_python/embediq/msgs", "outputs": ["core_msgs.py"]},
+    {"generator": "tools/messages_iq/generate.py", "source": "messages/telemetry.iq", "args": ["--lang", "python"], "out_dir": "tools/embediq_python/embediq/msgs", "outputs": ["telemetry_msgs.py"]}
+  ],
+  "sources_must_be_mapped": [
+    {"glob": "messages/*.iq", "out_dir": "generated"},
+    {"glob": "config/*.iq", "out_dir": "generated"}
+  ],
+  "outputs_must_be_mapped": ["generated/*.h", "generated/*.c", "tools/embediq_python/embediq/msgs/*_msgs.py"]
+}
