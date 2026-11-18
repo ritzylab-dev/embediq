@@ -275,13 +275,15 @@ uint8_t embediq_engine_fb_ep(EmbedIQ_FB_Handle_t handle);
  * FB's init_fn in the computed order.
  *
  * Before any platform-library initializer or init_fn runs, boot prepares
- * every required resource: each FB's execution lock, each FB's three
- * priority queues and the routing table (the bus is marked ready only when
- * all of them exist), and each subscribing FB's dispatch semaphore. If one
- * cannot be allocated, boot emits one EMBEDIQ_FAULT_BOOT_RESOURCE event
- * naming the FB and the resource, destroys the resources it allocated in
- * this attempt (never one that already existed), leaves the bus not ready
- * if it was not ready before, runs no initializer, marks no FB RUNNING and
+ * every required resource: each FB's execution lock, each subscribing FB's
+ * dispatch semaphore, and last each FB's three priority queues and the
+ * routing table — the bus is marked ready only when all of them exist, and
+ * nothing can fail after that, so a failed boot never tears down a ready
+ * bus. If one cannot be allocated, boot emits one
+ * EMBEDIQ_FAULT_BOOT_RESOURCE event naming the FB and the resource, destroys
+ * the resources it allocated in this attempt (never one that already
+ * existed), leaves the bus not ready if it was not ready before, runs no
+ * initializer, marks no FB RUNNING and
  * returns -1; a later call with the same registrations retries. Resources
  * that existed before the call — from an earlier attempt that got further —
  * are reused, never replaced or destroyed.

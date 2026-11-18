@@ -36,6 +36,12 @@ typedef struct embediq_ext_fb_s embediq_ext_fb_t;  /* opaque */
 embediq_ext_fb_t *embediq_ext_fb_init(const char *name);
 embediq_err_t     embediq_ext_fb_subscribe(embediq_ext_fb_t *h,
                                             const uint16_t *ids, uint8_t n);
+/**
+ * Publish msg on the bus as External FB h.
+ * Returns EMBEDIQ_OK when the message was accepted for delivery; EMBEDIQ_ERR
+ * when it was not, including when the bus is not ready yet (QUEUE transport
+ * before boot).
+ */
 embediq_err_t     embediq_ext_fb_publish(embediq_ext_fb_t *h,
                                           const EmbedIQ_Msg_t *msg);
 embediq_err_t     embediq_ext_fb_recv(embediq_ext_fb_t *h,

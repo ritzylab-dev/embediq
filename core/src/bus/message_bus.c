@@ -8,8 +8,7 @@
  * Responsibilities:
  *   1. message_bus_prepare() — create per-FB queues, build the subscription
  *                              table, mark the bus ready (all or nothing);
- *      message_bus_unprepare() rolls it back; message_bus_boot() is the
- *      unchecked legacy entry point
+ *      message_bus_boot() is the unchecked legacy entry point
  *   2. embediq_publish()   — route message to all subscribers; enforce overflow
  *   3. embediq_bus_resolve_id() — endpoint index → FB name
  *
@@ -67,12 +66,16 @@
  * ------------------------------------------------------------------------- */
 
 
-/* Notify callback — registered by the engine, called after each enqueue. */
+/* Notify callback — registered by the engine, called after each enqueue.
+ * Written by the boot thread before the bus is made ready, and read only by
+ * publishers that have seen it ready. A boot retry on a ready bus passes the
+ * same function: it is then not written again, so the pointer is never
+ * written while a publisher may read it. */
 static embediq_notify_fn_t g_notify_fn = NULL;
 
 void message_bus_set_notify_fn(embediq_notify_fn_t fn)
 {
-    g_notify_fn = fn;
+    if (g_notify_fn != fn) g_notify_fn = fn;
 }
 
 /* ---------------------------------------------------------------------------
@@ -99,16 +102,22 @@ typedef struct {
 static ep_queues_t g_ep[EMBEDIQ_MAX_ENDPOINTS];
 static uint8_t     g_ep_count   = 0;
 
-/* 1 once every endpoint's three queues and the routing table exist. Written
- * by the boot thread only: set last by message_bus_prepare(), cleared first
- * by message_bus_unprepare(). Read by every publishing thread before it
- * touches g_ep or g_subs; the sequentially consistent store/load orders the
- * preparation before any routing that sees the bus ready. */
+/* 1 once every endpoint's three queues and the routing table exist.
+ * Publishing rule: every publishing entry point reads g_bus_ready first, and
+ * while it is 0 refuses the message and reads no other bus state — no
+ * token, routing table, queue or notify function. Everything a publisher
+ * reads (queues, routing table, tokens, and the engine's semaphores and
+ * notify function) is completely written before the single store that sets
+ * it, which the engine makes last in boot; nothing can fail after it, so it
+ * is never cleared outside the test reset hook. A thread that exists before
+ * boot may therefore publish at any time. The sequentially consistent
+ * store/load orders the preparation before any routing that sees the bus
+ * ready. */
 static embediq_osal_atomic32_t g_bus_ready = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 
-/* Per endpoint, the queues (bit = priority) the last successful
- * message_bus_prepare() created — the only ones message_bus_unprepare() may
- * destroy. Boot thread only. */
+/* Per endpoint, the queues (bit = priority) the running
+ * message_bus_prepare() created — the only ones its failure path destroys.
+ * Boot thread only. */
 static uint8_t     g_ep_created[EMBEDIQ_MAX_ENDPOINTS];
 
 /* Drop event counter (EMBEDIQ_TEST_HOOKS builds only). Atomic: incremented from
@@ -119,10 +128,11 @@ static embediq_osal_atomic32_t g_drop_count = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 
 /* Async-post tokens — one static slot per endpoint (R-02: no allocation).
  * Opaque to callers; the token is the only thing a callback may hold.
- * Ownership: written by message_bus_boot() only (boot thread, before any
- * dispatch or platform thread exists; message_bus__reset() refills it in
- * host tests); read-only after boot. embediq_bus_token_for() and
- * embediq_bus_post_async() only read it (review R2). */
+ * Ownership: written by message_bus_prepare() only, before the bus is made
+ * ready (message_bus__reset() refills it in host tests); read-only after.
+ * embediq_bus_token_for() only returns a pointer into it, and
+ * embediq_bus_post_async() reads a token only after it has seen the bus
+ * ready. */
 struct embediq_bus_token {
     uint8_t source_ep;
 };
@@ -203,8 +213,7 @@ static int sub_first(uint16_t target)
 }
 
 /* ---------------------------------------------------------------------------
- * Preparation: message_bus_prepare() / message_bus_unprepare() /
- * message_bus_boot()
+ * Preparation: message_bus_prepare() / message_bus_boot()
  * ------------------------------------------------------------------------- */
 
 static const uint16_t k_queue_depth[3] = {
@@ -268,16 +277,9 @@ int message_bus_prepare(void)
     sub_sort();
     tokens_fill();   /* the only writer of g_tokens (R2) */
 
+    memset(g_ep_created, 0, sizeof(g_ep_created));   /* kept now: never destroyed */
     embediq_osal_atomic32_store(&g_bus_ready, 1u);   /* last: publishes the above */
     return MESSAGE_BUS_PREPARED;
-}
-
-void message_bus_unprepare(void)
-{
-    embediq_osal_atomic32_store(&g_bus_ready, 0u);   /* first: no routing from here */
-    destroy_created_queues();
-    g_sub_count = 0u;
-    g_ep_count  = 0u;
 }
 
 void message_bus_boot(void)
@@ -478,6 +480,11 @@ int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *
 {
     if (!token || !msg) return EMBEDIQ_ERR;
     EmbedIQ_Msg_t copy = *msg;
+    if (embediq_osal_atomic32_load(&g_bus_ready) == 0u) {
+        /* Readiness first: the token table is not read before it is ready. */
+        copy.source_endpoint_id = 0xFFu;   /* source unknown until then */
+        return refuse_not_ready(&copy, true);
+    }
     copy.source_endpoint_id = token->source_ep;
     return route_message_ex(&copy, true);
 }

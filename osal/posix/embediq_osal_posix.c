@@ -210,8 +210,8 @@ void embediq_osal_delay_ms(uint32_t ms)
 }
 
 /* ---------------------------------------------------------------------------
- * Test-only failure injection and accounting for queues and semaphores
- * (EMBEDIQ_TEST_HOOKS builds only), like embediq_osal__fail_next_mutex_create()
+ * Test-only failure injection and accounting for queues and semaphores, and
+ * accounting for mutexes (EMBEDIQ_TEST_HOOKS builds only), like embediq_osal__fail_next_mutex_create()
  * below: the nth create call from now returns NULL, once (n = 0 disarms), as
  * a real allocation failure does. Every successful create and every destroy
  * of a non-NULL handle is counted, so a test can prove each created object is
@@ -225,6 +225,8 @@ static _Atomic uint32_t s_queues_destroyed     = 0u;
 static _Atomic uint32_t s_sem_fail_countdown   = 0u;
 static _Atomic uint32_t s_sems_created         = 0u;
 static _Atomic uint32_t s_sems_destroyed       = 0u;
+static _Atomic uint32_t s_mutexes_created      = 0u;
+static _Atomic uint32_t s_mutexes_destroyed    = 0u;
 
 /* Count down; true exactly when this call is the one armed to fail. */
 static bool injected_failure(_Atomic uint32_t *countdown)
@@ -255,6 +257,12 @@ void embediq_osal__sem_counts(uint32_t *created, uint32_t *destroyed)
 {
     if (created)   *created   = atomic_load(&s_sems_created);
     if (destroyed) *destroyed = atomic_load(&s_sems_destroyed);
+}
+
+void embediq_osal__mutex_counts(uint32_t *created, uint32_t *destroyed)
+{
+    if (created)   *created   = atomic_load(&s_mutexes_created);
+    if (destroyed) *destroyed = atomic_load(&s_mutexes_destroyed);
 }
 #endif
 
@@ -510,6 +518,9 @@ EmbedIQ_Mutex_t *embediq_osal_mutex_create(void)
     EmbedIQ_Mutex_t *m = malloc(sizeof(EmbedIQ_Mutex_t));
     if (!m) return NULL;
     pthread_mutex_init(&m->mutex, NULL);
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_mutexes_created, 1u);
+#endif
     return m;
 }
 
@@ -552,6 +563,9 @@ void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)
 void embediq_osal_mutex_destroy(EmbedIQ_Mutex_t *m)
 {
     if (!m) return;
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_mutexes_destroyed, 1u);
+#endif
     pthread_mutex_destroy(&m->mutex);
     free(m);
 }

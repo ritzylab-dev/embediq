@@ -79,7 +79,11 @@ void message_bus_boot(void);
  * While the bus is not ready (see embediq_engine_boot()) the message is
  * delivered to no one and an EMBEDIQ_FAULT_BUS_NOT_READY event is emitted;
  * it is not counted as a queue drop.
- * Calling context: any thread after boot.
+ * A thread that exists before embediq_engine_boot() returns may post; a post
+ * made before the bus is ready is refused and observed as
+ * EMBEDIQ_FAULT_BUS_NOT_READY, never queued. A boot that fails before any
+ * initializer runs never makes the bus ready.
+ * Calling context: any thread.
  */
 void embediq_publish(EmbedIQ_FB_Handle_t fb, EmbedIQ_Msg_t *msg);
 
@@ -167,7 +171,11 @@ embediq_bus_token_t *embediq_bus_token_for(EmbedIQ_FB_Handle_t fb);
  * ready bus a message no FB subscribes to returns EMBEDIQ_OK. NORMAL/LOW
  * overflow follows the bus policy and is counted and observed, not reported
  * here.
- * Calling context: any thread after boot (HAL / ops-table callbacks); ISR
+ * A thread that exists before embediq_engine_boot() returns may post; a post
+ * made before the bus is ready is refused (EMBEDIQ_ERR) and observed as
+ * EMBEDIQ_FAULT_BUS_NOT_READY, never queued. A boot that fails before any
+ * initializer runs never makes the bus ready.
+ * Calling context: any thread (HAL / ops-table callbacks); ISR
  * only where the OSAL provides from-ISR primitives (see above).
  */
 int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *msg);
@@ -193,7 +201,11 @@ int32_t embediq_bus_post_async(embediq_bus_token_t *token, const EmbedIQ_Msg_t *
  * @return EMBEDIQ_OK on success, EMBEDIQ_ERR_INVALID if msg is NULL,
  *         EMBEDIQ_ERR if the bus is not ready (delivered to no one; observed
  *         as EMBEDIQ_FAULT_BUS_NOT_READY).
- * Calling context: any thread after boot.
+ * A thread that exists before embediq_engine_boot() returns may post; a post
+ * made before the bus is ready is refused (EMBEDIQ_ERR) and observed as
+ * EMBEDIQ_FAULT_BUS_NOT_READY, never queued. A boot that fails before any
+ * initializer runs never makes the bus ready.
+ * Calling context: any thread.
  */
 int32_t embediq_bus_bridge_route(uint8_t virtual_ep_id, EmbedIQ_Msg_t *msg);
 

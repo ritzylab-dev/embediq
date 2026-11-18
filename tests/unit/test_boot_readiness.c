@@ -6,23 +6,30 @@
  *
  * Fixture: three FBs — A and B subscribe (one message each), C subscribes to
  * nothing — and one platform library. Boot creates, in order: the three
- * execution locks, then the HIGH, NORMAL and LOW queue of A, B and C (nine
- * queues), then the dispatch semaphores of A and B.
+ * execution locks, the dispatch semaphores of A and B, then the HIGH, NORMAL
+ * and LOW queue of A, B and C (nine queues); the bus becomes ready last.
  *
  * Fault-injection matrix — each of the nine queue allocations, each of the
- * two semaphore allocations (B's after A's succeeded), and the second
- * execution lock fails once. For every row:
+ * two semaphore allocations (B's after A's succeeded), and each of the three
+ * execution locks fails once. For every row:
  *   - boot returns -1; no platform-library initializer and no init_fn runs;
  *     every FB stays IDLE; no dispatch semaphore remains, and dispatch_boot
  *     starts nothing;
  *   - one EMBEDIQ_FAULT_BOOT_RESOURCE event names the FB and the resource;
- *   - every queue and semaphore created in the attempt is destroyed exactly
- *     once (OSAL create/destroy counts);
+ *   - every queue, semaphore and execution lock created in the attempt is
+ *     destroyed exactly once (OSAL create/destroy counts);
  *   - an async HIGH post returns EMBEDIQ_ERR, a publish is refused, both are
  *     observed as EMBEDIQ_FAULT_BUS_NOT_READY, and no queue drop is counted;
  *   - with the injection removed, boot succeeds without a reset: every init
  *     runs once, every FB is RUNNING, the queues are fresh, and HIGH, NORMAL
- *     and LOW messages reach their subscribers' dispatch threads.
+ *     and LOW messages reach their subscribers' dispatch threads; the failed
+ *     attempt and the retry together leave exactly one boot's resources.
+ * Publisher concurrent with boot: a thread started before boot posts
+ * continuously. While a semaphore or queue allocation fails, not one post is
+ * acknowledged; when boot succeeds, every acknowledged post is delivered.
+ * On a bus that is not ready, a bridge route is refused and observed; the
+ * legacy message_bus_boot() leaves the bus not ready after a queue failure
+ * and makes it ready on the next call.
  * Also: a successful boot called again creates nothing; a boot that fails
  * late (missing dependency) keeps the prepared resources, and its retry
  * reuses the same semaphore and creates or destroys nothing; on a ready bus
@@ -45,6 +52,7 @@
 #include "embediq_osal.h"
 #include "embediq_platform.h"
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -62,6 +70,7 @@ extern void          embediq_osal__fail_next_queue_create(uint32_t nth);
 extern void          embediq_osal__fail_next_sem_create(uint32_t nth);
 extern void          embediq_osal__queue_counts(uint32_t *created, uint32_t *destroyed);
 extern void          embediq_osal__sem_counts(uint32_t *created, uint32_t *destroyed);
+extern void          embediq_osal__mutex_counts(uint32_t *created, uint32_t *destroyed);
 
 #define MSG_BOOT_A      0x1440u   /* community range, unique to this file */
 #define MSG_BOOT_B      0x1441u
@@ -71,6 +80,14 @@ extern void          embediq_osal__sem_counts(uint32_t *created, uint32_t *destr
 #define FIXTURE_SUBSCRIBERS 2u    /* A, B */
 #define QUEUES_PER_FB       3u    /* HIGH, NORMAL, LOW */
 #define FIXTURE_QUEUES      (FIXTURE_FBS * QUEUES_PER_FB)
+#define FIXTURE_LOCKS       FIXTURE_FBS   /* one execution lock per FB */
+
+/* Boots per injected failure (and successful boots) with a concurrent
+ * publisher: each boot is a fresh chance for the publisher to land inside the
+ * window between readiness and a failure; 200 makes an open window show up
+ * reliably while keeping the sanitizer builds fast. */
+#define CONCURRENT_BOOTS    200u
+#define VIRTUAL_EP          0x40u  /* first External FB virtual endpoint */
 
 /* Hang guard for delivery waits: a dispatch thread wakes in microseconds. */
 #define DELIVERY_WAIT_MS    2000u
@@ -206,6 +223,19 @@ static EmbedIQ_Msg_t make_msg(uint16_t id, uint8_t prio)
     return m;
 }
 
+typedef struct {
+    uint32_t q_c, q_d, s_c, s_d, m_c, m_d;   /* queues, semaphores, mutexes */
+} counts_t;
+
+static counts_t counts_now(void)
+{
+    counts_t c;
+    embediq_osal__queue_counts(&c.q_c, &c.q_d);
+    embediq_osal__sem_counts(&c.s_c, &c.s_d);
+    embediq_osal__mutex_counts(&c.m_c, &c.m_d);
+    return c;
+}
+
 static bool wait_rx(embediq_osal_atomic32_t *counter, uint32_t want)
 {
     uint32_t t0 = embediq_osal_time_ms();
@@ -219,8 +249,7 @@ static bool wait_rx(embediq_osal_atomic32_t *counter, uint32_t want)
 typedef enum { INJECT_LOCK, INJECT_QUEUE, INJECT_SEM } inject_t;
 
 /* The failed boot leaves nothing behind that could look like a message path. */
-static void check_failed_boot(int rc, uint8_t fail_ep, uint16_t resource,
-                              uint32_t q_c0, uint32_t q_d0, uint32_t s_c0, uint32_t s_d0)
+static void check_failed_boot(int rc, uint8_t fail_ep, uint16_t resource, counts_t c0)
 {
     CHECK(rc == -1, "boot returns -1");
     CHECK(embediq_osal_atomic32_load(&g_lib_init) == 0u, "no platform-library initializer ran");
@@ -234,11 +263,11 @@ static void check_failed_boot(int rc, uint8_t fail_ep, uint16_t resource,
           && fault_events((uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE, -1, -1) == 1u,
           "one BOOT_RESOURCE event names the FB and the resource");
 
-    uint32_t q_c, q_d, s_c, s_d;
-    embediq_osal__queue_counts(&q_c, &q_d);
-    embediq_osal__sem_counts(&s_c, &s_d);
-    CHECK(q_c - q_c0 == q_d - q_d0, "every queue created in the attempt is destroyed exactly once");
-    CHECK(s_c - s_c0 == s_d - s_d0, "every semaphore created in the attempt is destroyed exactly once");
+    counts_t c = counts_now();
+    CHECK(c.q_c - c0.q_c == c.q_d - c0.q_d, "every queue created in the attempt is destroyed exactly once");
+    CHECK(c.s_c - c0.s_c == c.s_d - c0.s_d, "every semaphore created in the attempt is destroyed exactly once");
+    CHECK(c.m_c - c0.m_c == c.m_d - c0.m_d,
+          "every execution lock created in the attempt is destroyed exactly once");
 
     bool no_sem = true;
     for (uint8_t i = 0u; i < FIXTURE_FBS; i++) {
@@ -310,9 +339,7 @@ static void check_recovery(void)
 static void run_row(inject_t kind, uint32_t nth, uint8_t fail_ep, uint16_t resource)
 {
     fixture();
-    uint32_t q_c0, q_d0, s_c0, s_d0;
-    embediq_osal__queue_counts(&q_c0, &q_d0);
-    embediq_osal__sem_counts(&s_c0, &s_d0);
+    counts_t c0 = counts_now();
 
     switch (kind) {
     case INJECT_LOCK:  embediq_osal__fail_next_mutex_create(nth); break;
@@ -324,8 +351,14 @@ static void run_row(inject_t kind, uint32_t nth, uint8_t fail_ep, uint16_t resou
     embediq_osal__fail_next_queue_create(0u);
     embediq_osal__fail_next_sem_create(0u);
 
-    check_failed_boot(rc, fail_ep, resource, q_c0, q_d0, s_c0, s_d0);
+    check_failed_boot(rc, fail_ep, resource, c0);
     check_recovery();
+
+    counts_t c = counts_now();
+    CHECK(c.q_c - c.q_d - (c0.q_c - c0.q_d) == FIXTURE_QUEUES
+          && c.s_c - c.s_d - (c0.s_c - c0.s_d) == FIXTURE_SUBSCRIBERS
+          && c.m_c - c.m_d - (c0.m_c - c0.m_d) == FIXTURE_LOCKS,
+          "failed attempt plus retry hold exactly one boot's queues, semaphores and locks");
 }
 
 /* ---------------------------------------------------------------------------
@@ -351,9 +384,156 @@ static void test_fault_injection_matrix(void)
         snprintf(g_row, sizeof(g_row), "semaphore %c", k_fb[ep]);
         run_row(INJECT_SEM, nth, ep, (uint16_t)EMBEDIQ_BOOT_RESOURCE_DISPATCH_SEM);
     }
-    /* Execution lock: B's, after A's succeeded. */
-    snprintf(g_row, sizeof(g_row), "execution lock B");
-    run_row(INJECT_LOCK, 2u, 1u, (uint16_t)EMBEDIQ_BOOT_RESOURCE_EXEC_LOCK);
+    /* Execution locks: the first, the middle and the last FB's. */
+    for (uint32_t nth = 1u; nth <= FIXTURE_LOCKS; nth++) {
+        uint8_t ep = (uint8_t)(nth - 1u);
+        snprintf(g_row, sizeof(g_row), "execution lock %c", k_fb[ep]);
+        run_row(INJECT_LOCK, nth, ep, (uint16_t)EMBEDIQ_BOOT_RESOURCE_EXEC_LOCK);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Publisher concurrent with boot
+ * ------------------------------------------------------------------------- */
+
+static embediq_osal_atomic32_t g_pub_stop     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_pub_attempts = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_pub_ok       = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_bus_token_t    *g_pub_token;   /* written before the thread starts */
+
+/* Posts HIGH to A until stopped: with HIGH, EMBEDIQ_OK means queued (a full
+ * HIGH queue returns EMBEDIQ_ERR), so every acknowledged post is countable. */
+static void *publisher(void *arg)
+{
+    (void)arg;
+    EmbedIQ_Msg_t m = make_msg(MSG_BOOT_A, (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH);
+    while (embediq_osal_atomic32_load(&g_pub_stop) == 0u) {
+        if (embediq_bus_post_async(g_pub_token, &m) == EMBEDIQ_OK) {
+            (void)embediq_osal_atomic32_add(&g_pub_ok, 1u);
+        }
+        (void)embediq_osal_atomic32_add(&g_pub_attempts, 1u);
+    }
+    return NULL;
+}
+
+/* Start the publisher on a fresh fixture and wait until it is posting. */
+static pthread_t publisher_start(void)
+{
+    embediq_osal_atomic32_store(&g_pub_stop, 0u);
+    embediq_osal_atomic32_store(&g_pub_attempts, 0u);
+    embediq_osal_atomic32_store(&g_pub_ok, 0u);
+    g_pub_token = embediq_bus_token_for(g_h[2]);
+    pthread_t t;
+    (void)pthread_create(&t, NULL, publisher, NULL);
+    while (embediq_osal_atomic32_load(&g_pub_attempts) == 0u) { /* posting before boot */ }
+    return t;
+}
+
+static uint32_t publisher_stop(pthread_t t)
+{
+    embediq_osal_atomic32_store(&g_pub_stop, 1u);
+    (void)pthread_join(t, NULL);
+    return embediq_osal_atomic32_load(&g_pub_ok);
+}
+
+static void concurrent_failing_boots(inject_t kind, uint32_t nth)
+{
+    uint32_t acked = 0u, attempts_acked = 0u, not_failed = 0u;
+    for (uint32_t i = 0u; i < CONCURRENT_BOOTS; i++) {
+        fixture();
+        pthread_t t = publisher_start();
+        if (kind == INJECT_SEM) embediq_osal__fail_next_sem_create(nth);
+        else                    embediq_osal__fail_next_queue_create(nth);
+        int rc = embediq_engine_boot();
+        embediq_osal__fail_next_sem_create(0u);
+        embediq_osal__fail_next_queue_create(0u);
+        uint32_t ok = publisher_stop(t);
+        if (rc != -1) not_failed++;
+        if (ok > 0u) { attempts_acked++; acked += ok; }
+    }
+    printf("      %s: boots=%u not_failed=%u attempts_with_acknowledged_posts=%u "
+           "acknowledged_posts=%u\n", g_row, (unsigned)CONCURRENT_BOOTS,
+           (unsigned)not_failed, (unsigned)attempts_acked, (unsigned)acked);
+    CHECK(not_failed == 0u, "every boot with the injected failure returns -1");
+    CHECK(acked == 0u, "no post is acknowledged during a failed boot");
+}
+
+static void test_publisher_concurrent_with_failing_boot(void)
+{
+    for (uint32_t nth = 1u; nth <= FIXTURE_SUBSCRIBERS; nth++) {
+        snprintf(g_row, sizeof(g_row), "concurrent, semaphore %u fails", (unsigned)nth);
+        concurrent_failing_boots(INJECT_SEM, nth);
+    }
+    for (uint32_t nth = 1u; nth <= FIXTURE_QUEUES; nth++) {
+        snprintf(g_row, sizeof(g_row), "concurrent, queue %u fails", (unsigned)nth);
+        concurrent_failing_boots(INJECT_QUEUE, nth);
+    }
+}
+
+static void test_publisher_concurrent_with_successful_boot(void)
+{
+    snprintf(g_row, sizeof(g_row), "concurrent, boot succeeds");
+    uint32_t failed_boots = 0u, lost = 0u, acked_total = 0u;
+    uint8_t  ep_a = 0u;
+    for (uint32_t i = 0u; i < CONCURRENT_BOOTS; i++) {
+        fixture();
+        ep_a = embediq_engine_fb_ep(g_h[0]);
+        pthread_t t = publisher_start();
+        if (embediq_engine_boot() != 0) failed_boots++;
+        uint32_t ok = publisher_stop(t);
+        uint32_t got = 0u;
+        EmbedIQ_Msg_t rx;
+        while (message_bus__test_recv(ep_a, (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH, &rx)) got++;
+        if (got != ok) lost++;
+        acked_total += ok;
+    }
+    printf("      %s: boots=%u failed=%u boots_with_acknowledged_but_undelivered=%u "
+           "acknowledged_posts=%u\n", g_row, (unsigned)CONCURRENT_BOOTS,
+           (unsigned)failed_boots, (unsigned)lost, (unsigned)acked_total);
+    CHECK(failed_boots == 0u, "every boot succeeds");
+    CHECK(lost == 0u, "every acknowledged post is delivered, none acknowledged early");
+    CHECK(acked_total > 0u, "the publisher posts after the bus becomes ready");
+}
+
+/* ---------------------------------------------------------------------------
+ * Unready bus: bridge route and the legacy wrapper
+ * ------------------------------------------------------------------------- */
+
+static void test_bridge_route_refused_while_not_ready(void)
+{
+    snprintf(g_row, sizeof(g_row), "bridge route, not ready");
+    fixture();
+    uint32_t drops = message_bus__drop_count();
+    EmbedIQ_Msg_t m = make_msg(MSG_BOOT_A, (uint8_t)EMBEDIQ_MSG_PRIORITY_NORMAL);
+    CHECK(embediq_bus_bridge_route(VIRTUAL_EP, &m) == EMBEDIQ_ERR, "returns EMBEDIQ_ERR");
+    CHECK(fault_events((uint8_t)EMBEDIQ_FAULT_BUS_NOT_READY, -1, MSG_BOOT_A) == 1u,
+          "one BUS_NOT_READY event is observed");
+    CHECK(message_bus__drop_count() == drops, "no queue drop is counted");
+}
+
+static void test_legacy_bus_boot_after_queue_failure(void)
+{
+    snprintf(g_row, sizeof(g_row), "legacy message_bus_boot");
+    fixture();
+    counts_t c0 = counts_now();
+    embediq_osal__fail_next_queue_create(2u);
+    message_bus_boot();
+    embediq_osal__fail_next_queue_create(0u);
+    counts_t c = counts_now();
+    EmbedIQ_Msg_t hi = make_msg(MSG_BOOT_A, (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH);
+    CHECK(embediq_bus_post_async(embediq_bus_token_for(g_h[2]), &hi) == EMBEDIQ_ERR,
+          "after a queue failure the bus is not ready: a post is refused");
+    CHECK(c.q_c - c0.q_c == c.q_d - c0.q_d, "every queue it created is destroyed");
+    CHECK(fault_events((uint8_t)EMBEDIQ_FAULT_BOOT_RESOURCE, -1, -1) == 1u,
+          "exactly one BOOT_RESOURCE event");
+
+    message_bus_boot();
+    EmbedIQ_Msg_t rx;
+    CHECK(embediq_bus_post_async(embediq_bus_token_for(g_h[2]), &hi) == EMBEDIQ_OK
+          && message_bus__test_recv(embediq_engine_fb_ep(g_h[0]),
+                                    (uint8_t)EMBEDIQ_MSG_PRIORITY_HIGH, &rx)
+          && rx.msg_id == MSG_BOOT_A,
+          "a second call makes the bus ready and a post is delivered");
 }
 
 static void test_successful_boot_is_idempotent(void)
@@ -413,6 +593,10 @@ static void test_late_failure_keeps_resources_for_retry(void)
 int main(void)
 {
     test_fault_injection_matrix();
+    test_publisher_concurrent_with_failing_boot();
+    test_publisher_concurrent_with_successful_boot();
+    test_bridge_route_refused_while_not_ready();
+    test_legacy_bus_boot_after_queue_failure();
     test_successful_boot_is_idempotent();
     test_late_failure_keeps_resources_for_retry();
     fb_engine__reset();
