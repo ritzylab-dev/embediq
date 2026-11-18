@@ -19,6 +19,15 @@ directory, and never writes into the checkout:
   - Works from another working directory, under a path with a space, and in
     two concurrent runs (each with its own scratch directory, proven by a
     handshake, not timing); leaves no scratch directory behind.
+  - Accepts only three generator argument lists — none, one explicit header
+    name, or Python output — and rejects every other list (another output
+    directory, `--opt=value`, abbreviations, repeats, a name with a path or
+    not equal to the listed output) before any generator starts.
+  - Treats a discovery directory it cannot list, and a matching entry it
+    cannot inspect, that is a dangling link, resolves outside the root or is
+    not a regular file, as an error — never as "no match"; listing and
+    inspection failures are also injected in-process, so they do not depend
+    on the user the test runs as.
   - The CI workflow verifies before anything else in each of its three jobs,
     and that first step, run on a stale fixture, fails without touching it;
     the local runner fails its generated-file step on a stale fixture, still
@@ -39,7 +48,10 @@ One PASS, FAIL or SKIP line per case. Exit 0 iff all pass.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import re
@@ -71,7 +83,12 @@ _count = 0
 # ---------------------------------------------------------------------------
 
 _GEN_COMMON = r'''
-import hashlib, os, sys, time
+import argparse, hashlib, os, sys, time
+
+ran = os.environ.get("EMBEDIQ_TEST_GENERATOR_RAN")
+if ran:                                   # proves whether a generator started at all
+    with open(ran, "a") as fh:
+        fh.write(" ".join(sys.argv[1:]) + "\n")
 
 def handshake(out_dir):
     d = os.environ.get("EMBEDIQ_TEST_GENERATOR_HANDSHAKE")
@@ -96,37 +113,40 @@ def read_schema(path):
         sys.stderr.write("ERROR: cannot read %s: %s\n" % (path, e))
         sys.exit(1)
 
-def args():
-    a = sys.argv[1:]
-    schema, opts = a[0], {}
-    i = 1
-    while i < len(a):
-        opts[a[i]] = a[i + 1]
-        i += 2
-    return schema, opts
 '''
 
+# The same argument parser as the real message generator: options may be
+# abbreviated, given as --opt=value, and repeated (the last one wins).
 MSG_GEN = _GEN_COMMON + r'''
-schema, opts = args()
-out = opts["--out"]
+ap = argparse.ArgumentParser()
+ap.add_argument("schema")
+ap.add_argument("--out", required=True)
+ap.add_argument("--output-name", default=None)
+ap.add_argument("--lang", choices=["c", "python"], default="c")
+a = ap.parse_args()
+schema, out = a.schema, a.out
 handshake(out)
 data = read_schema(schema)
 if b"FAIL3" in data:
     sys.stderr.write("fixture generator failure for %s\n" % schema)
     sys.exit(3)
 stem = os.path.splitext(os.path.basename(schema))[0]
-if opts.get("--lang") == "python":
-    name = opts.get("--output-name", stem + "_msgs.py")
+if a.lang == "python":
+    name = a.output_name or stem + "_msgs.py"
 else:
-    name = opts.get("--output-name", stem + "_msg_catalog.h")
+    name = a.output_name or stem + "_msg_catalog.h"
 os.makedirs(out, exist_ok=True)
 with open(os.path.join(out, name), "wb") as fh:
     fh.write(body(data, name))
 '''
 
+# The same argument parser as the real configuration generator.
 CFG_GEN = _GEN_COMMON + r'''
-schema, opts = args()
-out = opts["--out"]
+ap = argparse.ArgumentParser()
+ap.add_argument("schema")
+ap.add_argument("--out", required=True)
+a = ap.parse_args()
+schema, out = a.schema, a.out
 handshake(out)
 data = read_schema(schema)
 os.makedirs(out, exist_ok=True)
@@ -204,18 +224,27 @@ def make_fixture(parent, name="fixture", with_verifier=False, manifest=None):
 
 
 def tree_hash(root):
-    """SHA-256 of every file under root (relative path → digest)."""
+    """SHA-256 of every regular file under root (relative path → digest);
+    links are recorded by their target and other entries by their type, so
+    a FIFO is never opened and a link is never followed."""
     out = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
-        for f in sorted(filenames):
+        for f in sorted(filenames + [d for d in dirnames
+                                     if os.path.islink(os.path.join(dirpath, d))]):
             p = os.path.join(dirpath, f)
             rel = os.path.relpath(p, root)
-            try:
-                with open(p, "rb") as fh:
-                    out[rel] = hashlib.sha256(fh.read()).hexdigest()
-            except OSError:
-                out[rel] = "unreadable"
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                out[rel] = "link:" + os.readlink(p)
+            elif not stat.S_ISREG(st.st_mode):
+                out[rel] = "type:%o" % stat.S_IFMT(st.st_mode)
+            else:
+                try:
+                    with open(p, "rb") as fh:
+                        out[rel] = hashlib.sha256(fh.read()).hexdigest()
+                except OSError:
+                    out[rel] = "unreadable"
     return out
 
 
@@ -578,6 +607,220 @@ def test_local_runner_order(parent):
          not problems, "; ".join(problems) + f"\n{out}")
 
 
+# ---------------------------------------------------------------------------
+# Generator arguments and discovery boundaries
+# ---------------------------------------------------------------------------
+
+_serial = [0]
+
+
+def edit_manifest(root, fn):
+    path = os.path.join(root, "tools", "ci", "generated_artifacts.json")
+    with open(path) as fh:
+        m = json.load(fh)
+    fn(m)
+    with open(path, "w") as fh:
+        json.dump(m, fh)
+
+
+def load_verifier():
+    spec = importlib.util.spec_from_file_location("generated_artifacts_under_test", VERIFIER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def run_in_process(root, patches):
+    """Run the verifier's main() in this process with module names replaced."""
+    mod = load_verifier()
+    for name, value in patches.items():
+        setattr(mod, name, value)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = mod.main([os.path.basename(VERIFIER), "--root", root])
+    return rc, buf.getvalue()
+
+
+def boundary(name, parent, mutate, want_rc, want_texts=(), reject_texts=(), stale=False,
+             must_not_run=False, around=None, patches=None):
+    """Fresh fixture (optionally with a stale committed header), mutate it,
+    hash it, run the verifier — as a process, or in-process with patches —
+    then require want_rc, the texts, an unchanged fixture and, when asked,
+    that no generator started."""
+    _serial[0] += 1
+    tag = f"b{_serial[0]:02d}"
+    root = make_fixture(parent, tag)
+    if stale:
+        append(root, "generated/embediq_msg_catalog.h", "/* edited */\n")
+    mutate(root)
+    before = tree_hash(root)
+    ran = os.path.join(parent, tag + ".ran")
+    env = dict(os.environ, EMBEDIQ_TEST_GENERATOR_RAN=ran)
+    if around:
+        around[0](root)
+    try:
+        if patches is not None:
+            rc, out = run_in_process(root, patches(root))
+        else:
+            rc, out = run_verifier(root, env=env)
+    finally:
+        if around:
+            around[1](root)
+    after = tree_hash(root)
+    problems = []
+    if rc != want_rc:
+        problems.append(f"exit {rc}, want {want_rc}")
+    problems += [f"missing {t!r}" for t in want_texts if t not in out]
+    problems += [f"unexpected {t!r}" for t in reject_texts if t in out]
+    if before != after:
+        problems.append("fixture changed")
+    if must_not_run and os.path.exists(ran):
+        problems.append("a generator ran")
+    case(name, not problems, "; ".join(problems) + f"\n{out}")
+
+
+UNSUPPORTED = "unsupported 'args'"
+PLAIN_NAME = "'--output-name' must be a plain file name equal to the single listed output"
+DO_NOT_FIT = "'args' do not fit the listed outputs"
+
+
+def set_args(n, args, outputs=None):
+    def mutate(root):
+        def fn(m):
+            m["artifacts"][n]["args"] = args
+            if outputs is not None:
+                m["artifacts"][n]["outputs"] = outputs
+        edit_manifest(root, fn)
+    return mutate
+
+
+def test_generator_arguments(parent):
+    boundary("an extra --out in a manifest entry is refused before any generator runs",
+             parent, set_args(0, ["--output-name", "embediq_msg_catalog.h", "--out", "generated"]),
+             2, [UNSUPPORTED], stale=True, must_not_run=True)
+    for args in (["--out=generated"], ["--o", "generated"], ["--output-name=x.h"],
+                 ["--lang=python"], ["--output-name", "a.h", "--output-name", "b.h"],
+                 ["--lang", "python", "--lang", "c"], ["--unknown"], ["python", "--lang"]):
+        boundary(f"argument list {args} is refused before any generator runs", parent,
+                 set_args(0, args), 2, [UNSUPPORTED], stale=True, must_not_run=True)
+
+    def absolute_name(root):
+        set_args(0, ["--output-name",
+                      os.path.join(root, "generated", "embediq_msg_catalog.h")])(root)
+    boundary("an absolute --output-name is refused before any generator runs", parent,
+             absolute_name, 2, [PLAIN_NAME], stale=True, must_not_run=True)
+    for name in ("../x.h", "sub/x.h", "..", "-x.h", ""):
+        boundary(f"--output-name {name!r} is refused", parent,
+                 set_args(0, ["--output-name", name]), 2, [PLAIN_NAME],
+                 stale=True, must_not_run=True)
+    boundary("--output-name not equal to the listed output is refused", parent,
+             set_args(0, ["--output-name", "other.h"]), 2, [PLAIN_NAME],
+             must_not_run=True)
+    boundary("an explicit name on a three-output entry is refused", parent,
+             set_args(2, ["--output-name", "embediq_cfg_validate.h"]), 2, [DO_NOT_FIT],
+             must_not_run=True)
+    boundary("Python output on a three-output entry is refused", parent,
+             set_args(2, ["--lang", "python"]), 2, [DO_NOT_FIT], must_not_run=True)
+    boundary("Python output with a name other than <stem>_msgs.py is refused", parent,
+             set_args(3, ["--lang", "python"], ["other_msgs.py"]), 2, [DO_NOT_FIT],
+             must_not_run=True)
+
+    def default_name(root):
+        set_args(1, [], ["telemetry_msg_catalog.h"])(root)
+    boundary("the three accepted forms pass: default header name, explicit header name, "
+             "Python output, three-output configuration", parent, default_name, 0,
+             ["OK     generated/telemetry_msg_catalog.h", "OK     generated/embediq_msg_catalog.h",
+              f"OK     {PY_DIR}/core_msgs.py", "OK     generated/embediq_cfg_validate.c"])
+
+
+def _chmod(rel, mode):
+    return (lambda r: os.chmod(os.path.join(r, *rel.split("/")), mode),
+            lambda r: os.chmod(os.path.join(r, *rel.split("/")), 0o755))
+
+
+def _failing(fn, suffix, exc=PermissionError):
+    def wrapped(path, *a, **k):
+        if os.path.normpath(str(path)).endswith(os.path.normpath(suffix)):
+            raise exc(13, "injected", str(path))
+        return fn(path, *a, **k)
+    return wrapped
+
+
+def test_discovery_boundaries(parent):
+    if os.geteuid() == 0:
+        print("SKIP  unlistable schema directory is an error  (running as root)")
+        print("SKIP  unlistable output directory is an error  (running as root)")
+    else:
+        boundary("unlistable schema directory is an error; known comparisons still run", parent,
+                 lambda r: _write(r, "messages/extra.iq", "version 1\n"), 2,
+                 ["ERROR  messages: cannot list", "OK     generated/embediq_msg_catalog.h"],
+                 around=_chmod("messages", 0o111))
+        boundary("unlistable output directory is an error; listed outputs still compare", parent,
+                 lambda r: None, 2,
+                 ["ERROR  generated: cannot list", "OK     generated/embediq_msg_catalog.h"],
+                 around=_chmod("generated", 0o111))
+
+    boundary("dangling link matching the schema pattern is an error", parent,
+             lambda r: os.symlink("missing-target", os.path.join(r, "messages", "extra.iq")), 2,
+             ["ERROR  messages/extra.iq: dangling link"])
+    boundary("dangling link matching an output pattern is an error", parent,
+             lambda r: os.symlink("missing-target", os.path.join(r, "generated", "orphan.h")), 2,
+             ["ERROR  generated/orphan.h: dangling link"])
+
+    for rel in ("messages", "generated"):
+        boundary(f"injected listing failure for {rel}/ is an error", parent, lambda r: None, 2,
+                 [f"ERROR  {rel}: cannot list"],
+                 patches=lambda r, rel=rel: {"_listdir": _failing(os.listdir, os.path.join(r, rel))})
+    boundary("injected lstat failure on a matching entry is an error", parent, lambda r: None, 2,
+             ["ERROR  messages/telemetry.iq: cannot inspect"],
+             patches=lambda r: {"_lstat": _failing(os.lstat, "messages/telemetry.iq")})
+    boundary("injected stat failure on a matching entry is an error", parent, lambda r: None, 2,
+             ["ERROR  generated/embediq_cfg_validate.c: cannot inspect"],
+             patches=lambda r: {"_stat": _failing(os.stat, "generated/embediq_cfg_validate.c")})
+
+    boundary("directory matching the schema pattern is an error", parent,
+             lambda r: os.mkdir(os.path.join(r, "messages", "dir.iq")), 2,
+             ["ERROR  messages/dir.iq: not a regular file"])
+    if hasattr(os, "mkfifo"):
+        boundary("FIFO matching an output pattern is an error", parent,
+                 lambda r: os.mkfifo(os.path.join(r, "generated", "fifo.h")), 2,
+                 ["ERROR  generated/fifo.h: not a regular file"])
+    else:
+        print("SKIP  FIFO matching an output pattern is an error  (no mkfifo)")
+
+    boundary("link to a regular file inside the root, listed by no entry, is drift", parent,
+             lambda r: os.symlink("../config/config.iq", os.path.join(r, "generated", "linked.h")),
+             1, ["DRIFT  generated/linked.h: committed file has no manifest entry"])
+    outside = os.path.join(parent, "outside-target.h")
+    with open(outside, "w") as fh:
+        fh.write("outside\n")
+    boundary("link matching an output pattern that resolves outside the root is an error",
+             parent, lambda r: os.symlink(outside, os.path.join(r, "generated", "escape.h")), 2,
+             ["ERROR  generated/escape.h: resolves outside the root"])
+
+    def schema_link(r):
+        os.makedirs(os.path.join(r, "schemas"))
+        os.rename(os.path.join(r, "messages", "telemetry.iq"),
+                  os.path.join(r, "schemas", "telemetry.iq"))
+        os.symlink("../schemas/telemetry.iq", os.path.join(r, "messages", "telemetry.iq"))
+    boundary("listed schema that links to a file inside the root is accepted", parent,
+             schema_link, 0, ["OK     generated/telemetry_msg_catalog.h"])
+
+    boundary("listing failure next to real drift: error, and the drift is still reported",
+             parent, lambda r: append(r, "generated/telemetry_msg_catalog.h", "x\n"), 2,
+             ["ERROR  messages: cannot list", "DRIFT  generated/telemetry_msg_catalog.h"],
+             patches=lambda r: {"_listdir": _failing(os.listdir, os.path.join(r, "messages"))})
+
+    for label, pattern in (("wildcard in the directory part", "mess*/x.iq"),
+                           ("wildcard directory level", "messages/*/x.iq"),
+                           ("no directory part", "x.iq")):
+        def mutate(r, pattern=pattern):
+            edit_manifest(r, lambda m: m["sources_must_be_mapped"].append(
+                {"glob": pattern, "out_dir": "generated"}))
+        boundary(f"discovery pattern of the wrong shape is a manifest error: {label}", parent,
+                 mutate, 2, ["ERROR  manifest:"], must_not_run=True)
+
+
 def main():
     parent = tempfile.mkdtemp(prefix="embediq-generated-selftest-")
     try:
@@ -589,6 +832,8 @@ def main():
         test_real_tree()
         test_workflow_order(parent)
         test_local_runner_order(parent)
+        test_generator_arguments(parent)
+        test_discovery_boundaries(parent)
     finally:
         shutil.rmtree(parent, ignore_errors=True)
 
