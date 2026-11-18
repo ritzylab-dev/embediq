@@ -223,6 +223,32 @@ target_compile_options(test_hal_timer_lifecycle PRIVATE
 
 add_test(NAME unit_hal_timer_lifecycle COMMAND test_hal_timer_lifecycle)
 
+# The real timer FB, engine and bus around the same recording HAL timer source:
+# a boot retry, a repeated start, and HAL failures.
+add_executable(test_fb_timer_retry
+    test_fb_timer_retry.c
+    ${HAL_TIMER_POSIX_SRC}
+)
+
+target_include_directories(test_fb_timer_retry PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_fb_timer_retry PRIVATE
+    embediq_driver_fbs
+    embediq_fb_engine
+    pthread
+)
+
+target_compile_options(test_fb_timer_retry PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_timer_retry COMMAND test_fb_timer_retry)
+
 # ---------------------------------------------------------------------------
 # Blocking dispatch unit tests (P2-T0)
 # ---------------------------------------------------------------------------

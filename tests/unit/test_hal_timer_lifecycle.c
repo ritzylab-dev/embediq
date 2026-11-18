@@ -31,6 +31,12 @@
  *                                    until the worker is retired
  *   invalid init                     NULL callback, zero period: INVALID,
  *                                    observed
+ *   stop with a callback selected    the worker is held after reading the
+ *                                    running flag as set: stop returns OK
+ *                                    with no callback yet; once released,
+ *                                    exactly one callback runs after stop
+ *                                    returned (stop is asynchronous), then
+ *                                    the worker exits and deinit retires it
  *
  * Run:      ./build/tests/unit/test_hal_timer_lifecycle
  * Expected: "All N checks passed. (0 failed)"
@@ -70,6 +76,7 @@
 int timer_test_create(pthread_t *t, const pthread_attr_t *attr,
                       void *(*fn)(void *), void *arg);
 int timer_test_join(pthread_t t, void **ret);
+void hal_timer__set_select_hook(void (*fn)(void));   /* test hold point (HAL) */
 
 static int g_checks = 0;
 static int g_failed = 0;
@@ -120,6 +127,9 @@ static bool      g_hold_entry;               /* new workers wait at entry  */
 static bool      g_hold_in_cb;               /* first callback per worker waits */
 static unsigned  g_stop_after;               /* callback N calls stop()    */
 static unsigned  g_cb_target;                /* p_cb_reaches() threshold   */
+static bool      g_selected;                 /* worker held at selection   */
+static bool      g_release_selected;
+static bool      g_selection_done;           /* hold only the first one    */
 static void     *g_ctx_seen;
 static unsigned  g_hal_errors;               /* timer HAL error events     */
 static uint8_t   g_hal_last_err;             /* its state_or_flag          */
@@ -274,6 +284,20 @@ static bool p_has_cb(int w)         { return g_cb[w] >= 1u; }
 static bool p_in_cb(int w)          { return g_in_cb[w]; }
 static bool p_exited(int w)         { return g_exited[w]; }
 static bool p_cb_reaches(int w)     { return g_cb[w] >= g_cb_target; }
+static bool p_selected(int w)       { (void)w; return g_selected; }
+
+/* Selected-callback hold point: the first selection waits for release. */
+static void select_hold(void)
+{
+    pthread_mutex_lock(&g_mx);
+    if (!g_selection_done) {
+        g_selected = true;
+        pthread_cond_broadcast(&g_cv);
+        while (!g_release_selected) pthread_cond_wait(&g_cv, &g_mx);
+        g_selection_done = true;
+    }
+    pthread_mutex_unlock(&g_mx);
+}
 
 /* Release everything and join every worker the HAL did not join, so a
  * failing case cannot leave a thread behind for the next one. */
@@ -324,6 +348,9 @@ static void begin(void)
     g_hold_in_cb = false;
     g_stop_after = 0u;
     g_cb_target = 0u;
+    g_selected = false;
+    g_release_selected = false;
+    g_selection_done = false;
     g_ctx_seen = NULL;
     g_hal_errors = 0u;
     g_hal_last_err = 0u;
@@ -586,6 +613,33 @@ static void test_invalid_init(void)
     CHECK(hal_timer_start() == HAL_ERR_INVALID, "start without a valid init is INVALID");
 }
 
+static void test_stop_with_selected_callback(void)
+{
+    begin();
+    hal_timer__set_select_hook(select_hold);
+    CHECK(hal_timer_init(PERIOD_US, tick, &g_marker_a) == HAL_OK, "init");
+    CHECK(hal_timer_start() == HAL_OK, "start");
+    CHECK(wait_for(p_selected, 0), "the worker has selected a callback");
+    CHECK(hal_timer_stop() == HAL_OK, "stop returns OK");
+    pthread_mutex_lock(&g_mx);
+    unsigned at_stop = g_cb[0];
+    g_release_selected = true;
+    pthread_cond_broadcast(&g_cv);
+    pthread_mutex_unlock(&g_mx);
+    CHECK(at_stop == 0u, "no callback has run when stop returns");
+    CHECK(wait_for(p_exited, 0), "the released worker exits");
+    pthread_mutex_lock(&g_mx);
+    unsigned after = g_cb[0];
+    pthread_mutex_unlock(&g_mx);
+    CHECK(after == 1u, "exactly the selected callback ran after stop returned, no other");
+    hal_timer__set_select_hook(NULL);
+    hal_timer_deinit();
+    pthread_mutex_lock(&g_mx);
+    bool joined = g_joined[0];
+    pthread_mutex_unlock(&g_mx);
+    CHECK(joined, "deinit retires the worker: none is owned");
+}
+
 int main(void)
 {
     test_restart_retires_old_worker();
@@ -597,6 +651,7 @@ int main(void)
     test_create_failure_and_recovery();
     test_failed_retirement_keeps_configuration();
     test_invalid_init();
+    test_stop_with_selected_callback();
     begin();   /* leaves no worker behind */
 
     printf("\n");

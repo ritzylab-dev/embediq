@@ -58,6 +58,20 @@ static _Atomic int          s_running   = 0;  /* written by start/stop/deinit an
 static int                  s_inited    = 0;
 static int                  s_worker_owned = 0;   /* s_thread is a joinable worker */
 
+#ifdef EMBEDIQ_TEST_HOOKS
+/* Test hold point: called by the worker after it has read the running flag
+ * as set and before it calls the callback — the callback is then selected.
+ * Atomic: a test may set it while a worker runs. */
+typedef void (*hal_timer_select_hook_t)(void);
+static _Atomic(hal_timer_select_hook_t) s_select_hook = NULL;
+
+/** Install (fn) or remove (NULL) the selected-callback hold point (test use only). */
+void hal_timer__set_select_hook(hal_timer_select_hook_t fn)
+{
+    atomic_store(&s_select_hook, fn);
+}
+#endif
+
 /* ---------------------------------------------------------------------------
  * Timer thread — drift-corrected periodic callback
  * ------------------------------------------------------------------------- */
@@ -91,6 +105,10 @@ static void *timer_thread(void *arg)
         }
 
         if (atomic_load(&s_running) && s_cb) {
+#ifdef EMBEDIQ_TEST_HOOKS
+            hal_timer_select_hook_t hook = atomic_load(&s_select_hook);
+            if (hook) hook();
+#endif
             s_cb(s_ctx);
         }
     }

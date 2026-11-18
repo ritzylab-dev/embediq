@@ -64,6 +64,7 @@ hal_flash__last_parent_synced
 hal_flash__parent_syncs
 hal_flash__write_calls
 hal_gpio__fail_next_write
+hal_timer__set_select_hook
 hal_tls__debug
 hal_tls__live_sessions
 hal_tls__set_connect_finish_hook

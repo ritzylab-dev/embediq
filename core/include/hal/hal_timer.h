@@ -49,8 +49,11 @@ int hal_timer_init(uint32_t period_us, hal_timer_isr_t cb, void *ctx);
 int hal_timer_start(void);
 
 /**
- * hal_timer_stop  — pause the timer; configuration preserved for restart.
- * A callback already in progress may finish; no new one starts.
+ * hal_timer_stop — request a pause; configuration preserved for restart.
+ * The request is asynchronous: a callback the timer context has already
+ * selected may still begin, and one in progress may finish, after this call
+ * returns. The callback context is quiescent only once it has been retired —
+ * by the next hal_timer_start() or by hal_timer_deinit().
  * @return HAL_OK, or HAL_ERR_INVALID before init.
  */
 int hal_timer_stop(void);
@@ -59,5 +62,8 @@ int hal_timer_stop(void);
  * hal_timer_deinit — stop the timer, retire its callback context, then
  * release the configuration. A no-op before init and after a previous
  * deinit. A subsequent hal_timer_init() starts afresh.
+ * If the callback context cannot be retired, the configuration and the
+ * ownership of that context are left intact and a HAL error is emitted; a
+ * later hal_timer_deinit() or hal_timer_start() retries the retirement.
  */
 void hal_timer_deinit(void);
