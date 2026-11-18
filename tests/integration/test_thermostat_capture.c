@@ -14,6 +14,7 @@
 
 #include "embediq_fb.h"
 #include "embediq_obs.h"
+#include "embediq_test_store.h"
 #include "embediq_osal.h"
 
 #include <stdio.h>
@@ -47,7 +48,6 @@ extern void *fb_temp_controller_register(void);
  * ------------------------------------------------------------------------- */
 
 #define CAPTURE_PATH   "/tmp/test_capture_output.iqtrace"
-#define TEST_NVM_PATH  "/tmp/test_capture_nvm.bin"
 
 /* ---------------------------------------------------------------------------
  * Shared handles
@@ -71,7 +71,7 @@ int main(void)
     embediq_obs_stream_posix_register();
     fb_engine__reset();
     obs__set_level(2u);
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
+    (void)embediq_test_store_select();   /* private NVM store for this process */
 
     g_h_timer  = fb_timer_register();
     g_h_nvm    = fb_nvm_register();

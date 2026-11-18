@@ -14,7 +14,12 @@
 bus_inject
 ctrl__reading_count
 embediq_osal__fail_next_mutex_create
+embediq_osal__fail_next_queue_create
+embediq_osal__fail_next_sem_create
 embediq_osal__fail_next_task_create
+embediq_osal__mutex_counts
+embediq_osal__queue_counts
+embediq_osal__sem_counts
 embediq_platform_lib_reset
 fb_cloud_mqtt__publish_telemetry_json_test
 fb_cloud_mqtt__set_topic_test
@@ -59,6 +64,7 @@ hal_flash__last_parent_synced
 hal_flash__parent_syncs
 hal_flash__write_calls
 hal_gpio__fail_next_write
+hal_timer__set_select_hook
 hal_tls__debug
 hal_tls__live_sessions
 hal_tls__set_connect_finish_hook

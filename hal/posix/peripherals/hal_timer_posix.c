@@ -7,6 +7,25 @@
  * sleeps with CLOCK_MONOTONIC drift correction.  next_fire is tracked as an
  * absolute timespec so accumulated sleep overshoot is compensated each tick.
  *
+ * Worker ownership. At most one worker exists. s_worker_owned is 1 from a
+ * successful pthread_create until that thread has been joined; s_thread is
+ * never overwritten while it is. stop() only clears s_running: the worker
+ * sees it after its current sleep (and callback, if one is running) and
+ * returns, but stays owned. start() on a stopped timer first joins that
+ * worker — with s_running still 0, so it cannot fire again — and only then
+ * sets s_running and creates the replacement. deinit() clears s_running and
+ * joins the worker before it clears the callback, context and period. A
+ * failed join keeps the worker owned and the configuration it may still read.
+ * init() never changes the configuration while a worker is owned, so the
+ * worker reads s_cb, s_ctx and s_period_us only as published by the
+ * pthread_create that started it.
+ *
+ * Calling context: init, start, stop and deinit are called by the timer's
+ * owner thread, one at a time. start() and deinit() may wait for the worker
+ * to finish its current sleep and callback. The callback may call stop();
+ * it never calls init, start or deinit (start or deinit would join the
+ * calling thread).
+ *
  * Only includes: hal_timer.h (core/include/hal) and C stdlib headers
  * (<stdatomic.h> is C11 libc; this file includes no embediq_*.h — what a HAL
  * source may include is listed in ARCHITECTURE.md, Layer Boundary Rules)
@@ -34,9 +53,24 @@ static hal_timer_isr_t      s_cb        = NULL;
 static void                *s_ctx       = NULL;
 static uint32_t             s_period_us = 0u;
 static pthread_t            s_thread;
-static _Atomic int          s_running   = 0;  /* written by stop(), read by the timer thread */
+static _Atomic int          s_running   = 0;  /* written by start/stop/deinit and by a
+                                                 callback calling stop(); read by the worker */
 static int                  s_inited    = 0;
-static int                  s_thread_started = 0;  /* deinit joins only a started thread */
+static int                  s_worker_owned = 0;   /* s_thread is a joinable worker */
+
+#ifdef EMBEDIQ_TEST_HOOKS
+/* Test hold point: called by the worker after it has read the running flag
+ * as set and before it calls the callback — the callback is then selected.
+ * Atomic: a test may set it while a worker runs. */
+typedef void (*hal_timer_select_hook_t)(void);
+static _Atomic(hal_timer_select_hook_t) s_select_hook = NULL;
+
+/** Install (fn) or remove (NULL) the selected-callback hold point (test use only). */
+void hal_timer__set_select_hook(hal_timer_select_hook_t fn)
+{
+    atomic_store(&s_select_hook, fn);
+}
+#endif
 
 /* ---------------------------------------------------------------------------
  * Timer thread — drift-corrected periodic callback
@@ -71,6 +105,10 @@ static void *timer_thread(void *arg)
         }
 
         if (atomic_load(&s_running) && s_cb) {
+#ifdef EMBEDIQ_TEST_HOOKS
+            hal_timer_select_hook_t hook = atomic_load(&s_select_hook);
+            if (hook) hook();
+#endif
             s_cb(s_ctx);
         }
     }
@@ -81,11 +119,31 @@ static void *timer_thread(void *arg)
  * HAL timer contract implementation
  * ------------------------------------------------------------------------- */
 
+/* Join the owned worker. Called with s_running already 0, so the worker
+ * cannot fire again. On failure the worker stays owned (it may still read
+ * the configuration) and the error is observed. */
+static int retire_worker(void)
+{
+    if (!s_worker_owned) return HAL_OK;
+    if (pthread_join(s_thread, NULL) != 0) {
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_IO);
+        return HAL_ERR_IO;
+    }
+    s_worker_owned = 0;
+    return HAL_OK;
+}
+
 int hal_timer_init(uint32_t period_us, hal_timer_isr_t cb, void *ctx)
 {
-    if (!cb) {
+    if (!cb || period_us == 0u) {
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
+    }
+    if (s_worker_owned) {
+        /* A worker (running, or stopped and not yet retired) may read the
+         * configuration: deinit first. */
+        EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_BUSY);
+        return HAL_ERR_BUSY;
     }
 
     s_cb        = cb;
@@ -101,13 +159,20 @@ int hal_timer_start(void)
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_INVALID);
         return HAL_ERR_INVALID;
     }
+    if (atomic_load(&s_running)) {
+        return HAL_OK;   /* already running: no second worker */
+    }
+    /* Retire the stopped worker first, while s_running is still 0. */
+    int rc = retire_worker();
+    if (rc != HAL_OK) return rc;   /* observed by retire_worker */
+
     atomic_store(&s_running, 1);
     if (pthread_create(&s_thread, NULL, timer_thread, NULL) != 0) {
         atomic_store(&s_running, 0);
         EMBEDIQ_HAL_OBS_EMIT_ERROR(EMBEDIQ_HAL_SRC_TIMER, HAL_ERR_IO);
         return HAL_ERR_IO;
     }
-    s_thread_started = 1;
+    s_worker_owned = 1;
     return HAL_OK;
 }
 
@@ -127,8 +192,8 @@ void hal_timer_deinit(void)
         return;
     }
     atomic_store(&s_running, 0);
-    if (s_thread_started && pthread_join(s_thread, NULL) == 0) {
-        s_thread_started = 0;   /* joining an unstarted or already-joined thread is UB */
+    if (retire_worker() != HAL_OK) {
+        return;   /* the worker may still read the configuration: keep it */
     }
     s_cb        = NULL;
     s_ctx       = NULL;

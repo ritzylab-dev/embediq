@@ -38,12 +38,12 @@
 
 #include "embediq_fb.h"
 #include "embediq_obs.h"
+#include "embediq_test_store.h"
 #include "thermostat_msgs.h"
 
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>     /* setenv */
 #include <string.h>
 
 /* ---------------------------------------------------------------------------
@@ -71,8 +71,6 @@ extern EmbedIQ_FB_Handle_t fb_temp_controller_register(void);
 #define CTRL_EVT_STATE_NORMAL    1u
 #define CTRL_EVT_STATE_WARNING   2u
 #define CTRL_EVT_STATE_CRITICAL  3u
-
-#define TEST_NVM_PATH  "/tmp/test_thermostat_observable_nvm.bin"
 
 /* ---------------------------------------------------------------------------
  * Minimal test harness
@@ -218,7 +216,7 @@ int main(void)
 {
     fb_engine__reset();
     obs__set_level(2u);   /* level 2: lifecycle, FSM and application events */
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
+    (void)embediq_test_store_select();   /* private NVM store for this process */
 
     EmbedIQ_FB_Handle_t h_timer = fb_timer_register();
     (void)fb_nvm_register();

@@ -17,9 +17,19 @@
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_PLATFORM (1)
  *
+ * Observatory events emitted:
+ *   EMBEDIQ_OBS_EVT_FAULT, source = this FB's endpoint, state_or_flag =
+ *   EMBEDIQ_FAULT_TIMER_HAL_INIT or EMBEDIQ_FAULT_TIMER_HAL_START
+ *   (embediq_timer.h) — the HAL timer could not be configured or started;
+ *   the FB publishes no ticks until a later start succeeds.
+ *
+ * Initializer run again (a boot retry after a later FB failed): the HAL
+ * timer this FB configured is kept and reused — see timer_hal_start().
+ *
  * Test-only API (EMBEDIQ_TEST_HOOKS):
  *   fb_timer__start()         — init + start HAL timer without engine_boot
- *   fb_timer__stop_and_wait() — stop + deinit HAL timer
+ *   fb_timer__stop_and_wait() — deinit the HAL timer (returns after its
+ *                               worker and any callback in progress finished)
  *   fb_timer__reset_counts()  — zero all tick counters
  *   fb_timer__count_1ms()     — ticks fired since last reset
  *   fb_timer__count_10ms()
@@ -40,6 +50,7 @@
 #include "embediq_bus.h"
 #include "embediq_msg.h"
 #include "embediq_osal.h"
+#include "embediq_timer.h"
 #include "embediq_config.h"
 #include "embediq_obs.h"
 #include "hal/hal_timer.h"
@@ -131,6 +142,43 @@ static void timer_callback(void *ctx)
     }
 }
 
+/* True once THIS FB's own hal_timer_init() has succeeded, until its
+ * hal_timer_deinit(): the HAL timer's configuration (and any worker it
+ * started) belongs to this FB. Boot thread (and the test hooks) only. */
+static bool g_hal_configured = false;
+
+/* Start the 1 ms HAL timer.
+ * Configured by this FB already (the initializer runs again on a boot retry,
+ * or the test hook is called twice): the configuration and worker are this
+ * FB's own, so hal_timer_init() is not called and nothing the callback reads
+ * is rewritten; hal_timer_start() is idempotent while running and restarts a
+ * stopped worker.
+ * Not configured by this FB: initialise, then start. ANY non-OK result of
+ * hal_timer_init() — including HAL_ERR_BUSY, which then means the timer
+ * belongs to another owner — and any non-OK hal_timer_start() is a fault:
+ * the HAL has emitted its own error; the FB stops publishing ticks and emits
+ * a FAULT event naming the call that failed. */
+static void timer_hal_start(void)
+{
+    embediq_osal_atomic32_store(&g_running, 1u);
+    uint8_t state = 0u;
+    if (!g_hal_configured) {
+        if (hal_timer_init(1000u, timer_callback, NULL) != HAL_OK) {
+            state = (uint8_t)EMBEDIQ_FAULT_TIMER_HAL_INIT;
+        } else {
+            g_hal_configured = true;
+        }
+    }
+    if (state == 0u && hal_timer_start() != HAL_OK) {
+        state = (uint8_t)EMBEDIQ_FAULT_TIMER_HAL_START;
+    }
+    if (state != 0u) {
+        embediq_osal_atomic32_store(&g_running, 0u);
+        EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, embediq_engine_fb_ep(g_fb),
+                               0u, state, 0u);
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * FB init / exit (called by embediq_engine_boot)
  * ------------------------------------------------------------------------- */
@@ -138,6 +186,14 @@ static void timer_callback(void *ctx)
 static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb_data;
+    if (g_hal_configured) {
+        /* Run again on a boot retry: the registration set is unchanged, so
+         * g_fb, the subscriber scan and s_token would get the same values,
+         * and the running worker may be reading them — leave them as they
+         * are and only make sure the timer runs. */
+        timer_hal_start();
+        return;
+    }
     g_fb = fb;
 
     /* Scan all registered FBs to detect a MSG_TIMER_1MS subscriber. */
@@ -155,17 +211,15 @@ static void timer_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     }
 
     s_token = embediq_bus_token_for(g_fb);
-    embediq_osal_atomic32_store(&g_running, 1u);
-    hal_timer_init(1000u, timer_callback, NULL);
-    hal_timer_start();
+    timer_hal_start();
 }
 
 static void timer_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
     embediq_osal_atomic32_store(&g_running, 0u);
-    hal_timer_stop();
-    hal_timer_deinit();
+    hal_timer_deinit();   /* stops the timer and retires its worker */
+    g_hal_configured = false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -201,22 +255,22 @@ EmbedIQ_FB_Handle_t fb_timer_register(void)
 /** Start the HAL timer directly without going through embediq_engine_boot(). */
 void fb_timer__start(void)
 {
-    s_token = g_fb ? embediq_bus_token_for(g_fb) : NULL;
-    embediq_osal_atomic32_store(&g_running, 1u);
-    hal_timer_init(1000u, timer_callback, NULL);
-    hal_timer_start();
+    if (!g_hal_configured) {   /* configured already: the worker may read s_token */
+        s_token = g_fb ? embediq_bus_token_for(g_fb) : NULL;
+    }
+    timer_hal_start();
 }
 
 /**
- * Stop the HAL timer and wait for any in-flight callback to complete.
+ * Stop the HAL timer and wait for any in-flight callback to complete:
+ * hal_timer_deinit() joins the worker, which finishes its callback first.
  * Safe to call even if the timer is already stopped.
  */
 void fb_timer__stop_and_wait(void)
 {
     embediq_osal_atomic32_store(&g_running, 0u);
-    hal_timer_stop();
-    embediq_osal_delay_ms(20u);
     hal_timer_deinit();
+    g_hal_configured = false;
 }
 
 /** Reset all tick counters and the tick accumulator to zero. */

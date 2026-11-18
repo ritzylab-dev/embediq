@@ -9,7 +9,8 @@
  *
  * A mock embediq_provisioning_ops_t is registered to control identity_check /
  * fleet_config_check / factory_reset outcomes. The real embediq_cfg + fb_nvm
- * stack is used (EMBEDIQ_NVM_PATH points at /tmp) so NVM effects are verified
+ * stack is used (on a private store, embediq_test_store_select()) so NVM
+ * effects are verified
  * behaviourally (read the value back), never by mocking NVM.
  *
  * Run:      ./build/tests/unit/test_fb_provisioning
@@ -28,6 +29,7 @@
 #include "ops/embediq_provisioning.h"
 #include "fb_provisioning.h"
 #include "provisioning_msg_catalog.h"
+#include "embediq_test_store.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -35,7 +37,8 @@
 #include <string.h>
 #include <stdlib.h>   /* setenv */
 
-#define TEST_NVM_PATH  "/tmp/embediq_prov_test.bin"
+/* This process's private store, selected by main() before the first test. */
+static const char *g_nvm_path = NULL;
 
 /* ---------------------------------------------------------------------------
  * Package-internal test API (implemented in fbs/services/fb_provisioning.c
@@ -144,8 +147,7 @@ static int find_pub(uint16_t msg_id)
  * restore default mock outcomes. */
 static void setup(void)
 {
-    setenv("EMBEDIQ_NVM_PATH", TEST_NVM_PATH, 1);
-    (void)remove(TEST_NVM_PATH);
+    (void)remove(g_nvm_path);
     nvm__init_state();
 
     g_mock_identity_rc   = EMBEDIQ_OK;
@@ -340,6 +342,8 @@ static void test_identity_provision_retried_until_durable(void)
 
 int main(void)
 {
+    g_nvm_path = embediq_test_store_select();
+
     test_provisioning_identity_ok_writes_client_id();
     test_provisioning_identity_fail_publishes_status_nonzero();
     test_provisioning_fleet_ok_publishes_cfg_reload();

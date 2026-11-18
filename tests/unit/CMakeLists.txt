@@ -41,6 +41,27 @@ target_compile_options(test_fb_engine PRIVATE
 add_test(NAME unit_fb_engine COMMAND test_fb_engine)
 
 # ---------------------------------------------------------------------------
+# Boot readiness: every required resource before any initializer, a failed
+# allocation rolled back and retried without a reset
+# ---------------------------------------------------------------------------
+
+add_executable(test_boot_readiness test_boot_readiness.c)
+
+target_include_directories(test_boot_readiness PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_boot_readiness PRIVATE embediq_fb_engine)
+
+target_compile_options(test_boot_readiness PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_boot_readiness COMMAND test_boot_readiness)
+
+# ---------------------------------------------------------------------------
 # Message bus unit tests (P1-T3)
 # ---------------------------------------------------------------------------
 
@@ -170,6 +191,65 @@ target_compile_options(test_fb_timer PRIVATE
 add_test(NAME unit_fb_timer COMMAND test_fb_timer)
 
 # ---------------------------------------------------------------------------
+# POSIX timer worker ownership: the HAL source is compiled into the test with
+# pthread_create / pthread_join renamed to the test's recording wrappers
+# (these definitions apply to this directory's targets only; the HAL library
+# compiles the file unchanged).
+# ---------------------------------------------------------------------------
+
+set(HAL_TIMER_POSIX_SRC ${CMAKE_SOURCE_DIR}/hal/posix/peripherals/hal_timer_posix.c)
+
+add_executable(test_hal_timer_lifecycle
+    test_hal_timer_lifecycle.c
+    ${HAL_TIMER_POSIX_SRC}
+)
+
+set_source_files_properties(${HAL_TIMER_POSIX_SRC} PROPERTIES
+    COMPILE_DEFINITIONS "pthread_create=timer_test_create;pthread_join=timer_test_join"
+)
+
+target_include_directories(test_hal_timer_lifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_hal_timer_lifecycle PRIVATE pthread)
+
+target_compile_options(test_hal_timer_lifecycle PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_hal_timer_lifecycle COMMAND test_hal_timer_lifecycle)
+
+# The real timer FB, engine and bus around the same recording HAL timer source:
+# a boot retry, a repeated start, and HAL failures.
+add_executable(test_fb_timer_retry
+    test_fb_timer_retry.c
+    ${HAL_TIMER_POSIX_SRC}
+)
+
+target_include_directories(test_fb_timer_retry PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+)
+
+target_link_libraries(test_fb_timer_retry PRIVATE
+    embediq_driver_fbs
+    embediq_fb_engine
+    pthread
+)
+
+target_compile_options(test_fb_timer_retry PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_timer_retry COMMAND test_fb_timer_retry)
+
+# ---------------------------------------------------------------------------
 # Blocking dispatch unit tests (P2-T0)
 # ---------------------------------------------------------------------------
 
@@ -223,6 +303,7 @@ target_include_directories(test_fb_nvm PRIVATE
 
 target_link_libraries(test_fb_nvm PRIVATE
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_options(test_fb_nvm PRIVATE
@@ -358,6 +439,7 @@ target_include_directories(test_embediq_cfg PRIVATE
 target_link_libraries(test_embediq_cfg PRIVATE
     embediq_cfg
     embediq_driver_fbs
+    embediq_test_store
     m
 )
 
@@ -368,6 +450,43 @@ target_compile_options(test_embediq_cfg PRIVATE
 )
 
 add_test(NAME unit_embediq_cfg COMMAND test_embediq_cfg)
+
+# ---------------------------------------------------------------------------
+# Private NVM store for test processes, and the regression that proves the
+# configuration test never uses an inherited store
+# ---------------------------------------------------------------------------
+
+add_library(embediq_test_store STATIC embediq_test_store.c)
+
+target_include_directories(embediq_test_store PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_options(embediq_test_store PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_executable(test_cfg_store_isolation test_cfg_store_isolation.c)
+
+target_include_directories(test_cfg_store_isolation PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+)
+
+target_link_libraries(test_cfg_store_isolation PRIVATE
+    embediq_test_store
+    embediq_driver_fbs
+)
+
+target_compile_options(test_cfg_store_isolation PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_cfg_store_isolation
+         COMMAND test_cfg_store_isolation $<TARGET_FILE:test_embediq_cfg>)
 
 # ---------------------------------------------------------------------------
 # Telemetry Service FB unit tests (Phase 2 S2)
@@ -436,6 +555,7 @@ target_link_libraries(test_fb_provisioning PRIVATE
     embediq_service_fbs
     embediq_cfg
     embediq_driver_fbs
+    embediq_test_store
 )
 
 target_compile_options(test_fb_provisioning PRIVATE

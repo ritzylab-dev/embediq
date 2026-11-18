@@ -36,6 +36,15 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
+ * Timer FB fault codes — state_or_flag of the EMBEDIQ_OBS_EVT_FAULT event the
+ * timer FB emits. Distinct from the EmbedIQ_FB_State_t values (0–5) and from
+ * every engine fault code in embediq_fb.h (0x80–0x83).
+ * ------------------------------------------------------------------------- */
+
+#define EMBEDIQ_FAULT_TIMER_HAL_INIT   0x90u   /**< hal_timer_init() refused the timer FB's configuration */
+#define EMBEDIQ_FAULT_TIMER_HAL_START  0x91u   /**< hal_timer_start() failed                              */
+
+/* ---------------------------------------------------------------------------
  * Tick payload structure
  *
  * Carried in the payload[] bytes of EmbedIQ_Msg_t for all MSG_TIMER_* messages.

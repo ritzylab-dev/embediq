@@ -210,11 +210,71 @@ void embediq_osal_delay_ms(uint32_t ms)
 }
 
 /* ---------------------------------------------------------------------------
+ * Test-only failure injection and accounting for queues and semaphores, and
+ * accounting for mutexes (EMBEDIQ_TEST_HOOKS builds only), like embediq_osal__fail_next_mutex_create()
+ * below: the nth create call from now returns NULL, once (n = 0 disarms), as
+ * a real allocation failure does. Every successful create and every destroy
+ * of a non-NULL handle is counted, so a test can prove each created object is
+ * destroyed exactly once.
+ * ------------------------------------------------------------------------- */
+
+#ifdef EMBEDIQ_TEST_HOOKS
+static _Atomic uint32_t s_queue_fail_countdown = 0u;
+static _Atomic uint32_t s_queues_created       = 0u;
+static _Atomic uint32_t s_queues_destroyed     = 0u;
+static _Atomic uint32_t s_sem_fail_countdown   = 0u;
+static _Atomic uint32_t s_sems_created         = 0u;
+static _Atomic uint32_t s_sems_destroyed       = 0u;
+static _Atomic uint32_t s_mutexes_created      = 0u;
+static _Atomic uint32_t s_mutexes_destroyed    = 0u;
+
+/* Count down; true exactly when this call is the one armed to fail. */
+static bool injected_failure(_Atomic uint32_t *countdown)
+{
+    uint32_t n = atomic_load(countdown);
+    while (n != 0u && !atomic_compare_exchange_weak(countdown, &n, n - 1u)) {
+    }
+    return n == 1u;
+}
+
+void embediq_osal__fail_next_queue_create(uint32_t nth)
+{
+    atomic_store(&s_queue_fail_countdown, nth);
+}
+
+void embediq_osal__queue_counts(uint32_t *created, uint32_t *destroyed)
+{
+    if (created)   *created   = atomic_load(&s_queues_created);
+    if (destroyed) *destroyed = atomic_load(&s_queues_destroyed);
+}
+
+void embediq_osal__fail_next_sem_create(uint32_t nth)
+{
+    atomic_store(&s_sem_fail_countdown, nth);
+}
+
+void embediq_osal__sem_counts(uint32_t *created, uint32_t *destroyed)
+{
+    if (created)   *created   = atomic_load(&s_sems_created);
+    if (destroyed) *destroyed = atomic_load(&s_sems_destroyed);
+}
+
+void embediq_osal__mutex_counts(uint32_t *created, uint32_t *destroyed)
+{
+    if (created)   *created   = atomic_load(&s_mutexes_created);
+    if (destroyed) *destroyed = atomic_load(&s_mutexes_destroyed);
+}
+#endif
+
+/* ---------------------------------------------------------------------------
  * Queue API — copy-by-value ring buffer, mutex + condvar
  * ------------------------------------------------------------------------- */
 
 EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size)
 {
+#ifdef EMBEDIQ_TEST_HOOKS
+    if (injected_failure(&s_queue_fail_countdown)) return NULL;   /* injected allocation failure */
+#endif
     EmbedIQ_Queue_t *q = malloc(sizeof(EmbedIQ_Queue_t));
     if (!q) return NULL;
 
@@ -229,6 +289,9 @@ EmbedIQ_Queue_t *embediq_osal_queue_create(uint16_t depth, uint16_t item_size)
     q->count     = 0;
     q->head      = 0;
     q->tail      = 0;
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_queues_created, 1u);
+#endif
     return q;
 }
 
@@ -333,6 +396,9 @@ uint16_t embediq_osal_queue_count(EmbedIQ_Queue_t *q)
 void embediq_osal_queue_destroy(EmbedIQ_Queue_t *q)
 {
     if (!q) return;
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_queues_destroyed, 1u);
+#endif
     pthread_mutex_destroy(&q->mutex);
     pthread_cond_destroy(&q->not_empty);
     pthread_cond_destroy(&q->not_full);
@@ -452,6 +518,9 @@ EmbedIQ_Mutex_t *embediq_osal_mutex_create(void)
     EmbedIQ_Mutex_t *m = malloc(sizeof(EmbedIQ_Mutex_t));
     if (!m) return NULL;
     pthread_mutex_init(&m->mutex, NULL);
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_mutexes_created, 1u);
+#endif
     return m;
 }
 
@@ -494,6 +563,9 @@ void embediq_osal_mutex_unlock(EmbedIQ_Mutex_t *m)
 void embediq_osal_mutex_destroy(EmbedIQ_Mutex_t *m)
 {
     if (!m) return;
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_mutexes_destroyed, 1u);
+#endif
     pthread_mutex_destroy(&m->mutex);
     free(m);
 }
@@ -578,12 +650,18 @@ bool embediq_osal_atomic32_cas(embediq_osal_atomic32_t *a, uint32_t expected,
 
 embediq_sem_t embediq_sem_create(uint32_t initial_count, uint32_t max_count)
 {
+#ifdef EMBEDIQ_TEST_HOOKS
+    if (injected_failure(&s_sem_fail_countdown)) return NULL;   /* injected allocation failure */
+#endif
     struct EmbedIQ_Sem_s *s = malloc(sizeof(struct EmbedIQ_Sem_s));
     if (!s) return NULL;
     pthread_mutex_init(&s->mutex, NULL);
     pthread_cond_init (&s->cond,  NULL);
     s->count     = initial_count;
     s->max_count = (max_count == 0u) ? UINT32_MAX : max_count;
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_sems_created, 1u);
+#endif
     return s;
 }
 
@@ -627,6 +705,9 @@ embediq_err_t embediq_sem_post(embediq_sem_t sem)
 void embediq_sem_destroy(embediq_sem_t sem)
 {
     if (!sem) return;
+#ifdef EMBEDIQ_TEST_HOOKS
+    atomic_fetch_add(&s_sems_destroyed, 1u);
+#endif
     pthread_mutex_destroy(&sem->mutex);
     pthread_cond_destroy (&sem->cond);
     free(sem);
