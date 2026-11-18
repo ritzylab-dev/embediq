@@ -11,10 +11,25 @@ byte for byte with the fresh ones and are never written. Each generator runs
 with the root as its working directory and the source path exactly as the
 manifest writes it, as a developer regenerating by hand does.
 
+The verifier alone chooses where a generator writes: its command line is
+`<generator> <source> --out <scratch sub-directory> <args>`, and an entry's
+`args` must be exactly one of three lists — `[]` (the generator's default
+output names), `["--output-name", NAME]` (one C header; NAME a plain file name
+equal to the single listed output) or `["--lang", "python"]` (one Python stub
+named `<source stem>_msgs.py`). Any other list — another `--out`, a
+`--opt=value` form, an abbreviation, a repeated option — is a manifest error,
+and no generator runs on a rejected manifest.
+
 The manifest also declares discovery rules: every schema matching a
-`sources_must_be_mapped` glob must be the source of an entry with that output
-directory (a new catalog cannot be skipped silently), and every file matching
-an `outputs_must_be_mapped` glob must be a listed output.
+`sources_must_be_mapped` pattern must be the source of an entry with that
+output directory (a new catalog cannot be skipped silently), and every file
+matching an `outputs_must_be_mapped` pattern must be a listed output. A
+pattern is `<directory>/<file pattern>`, with no wildcard in the directory.
+The directory is listed and every matching entry inspected with checked
+calls: a directory that cannot be listed, and an entry that cannot be
+inspected, is a dangling link, resolves outside the root or is not a regular
+file, is an error — never an empty result. A link to a regular file inside
+the root counts as that file.
 
 Usage:
   python3 tools/ci/check_generated_artifacts.py [--root DIR] [--manifest FILE]
@@ -29,10 +44,12 @@ summary line. Every entry and output is processed even after a failure.
 
 Exit codes: 0 = every listed output matches; 1 = drift — a committed output
 is stale or missing, or a committed generated file has no manifest entry;
-2 = the comparison could not be completed — an unusable manifest, a source
-with no manifest entry, a path that resolves outside the root, an unreadable
-generator, schema or committed file, a generator that fails, omits a listed
-output or writes an unlisted one. 2 takes precedence over 1; a partial run is
+2 = the comparison could not be completed — an unusable manifest (including
+unsupported generator arguments), a source with no manifest entry, a
+discovery directory that cannot be listed or a matching entry that cannot be
+inspected or is not a regular file, a path that resolves outside the root,
+an unreadable generator, schema or committed file, a generator that fails,
+omits a listed output or writes an unlisted one. 2 takes precedence over 1; a partial run is
 never a pass.
 
 @author  Ritesh Anand
@@ -43,17 +60,24 @@ SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import difflib
-import glob
+import fnmatch
 import json
 import os
 import posixpath
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 
 SCRIPT = "check_generated_artifacts.py"
 DIFF_LINES_MAX = 20   # enough to show where a file went stale without flooding the log
+WILDCARDS = "*?["
+
+# Filesystem calls used by discovery; tests replace them to inject failures.
+_listdir = os.listdir
+_lstat = os.lstat
+_stat = os.stat
 
 
 class ManifestError(Exception):
@@ -69,6 +93,42 @@ def _bad_path(p):
     if ".." in p.replace("\\", "/").split("/"):
         return f"'..' component in {p!r}"
     return None
+
+
+def _check_args(art, where):
+    """The entry's args must be one of the three supported lists; the
+    verifier alone chooses the output directory."""
+    args, outputs = art["args"], art["outputs"]
+    if args == []:
+        return
+    if len(args) == 2 and args[0] == "--output-name":
+        if len(outputs) != 1:
+            raise ManifestError(f"{where}: 'args' do not fit the listed outputs")
+        name = args[1]
+        plain = (name not in ("", ".", "..") and not name.startswith("-")
+                 and "/" not in name and "\\" not in name and os.sep not in name
+                 and (os.altsep is None or os.altsep not in name))
+        if not plain or name != outputs[0]:
+            raise ManifestError(f"{where}: '--output-name' must be a plain file name "
+                                f"equal to the single listed output")
+        return
+    if args == ["--lang", "python"]:
+        stem = posixpath.splitext(posixpath.basename(art["source"]))[0]
+        if outputs != [f"{stem}_msgs.py"]:
+            raise ManifestError(f"{where}: 'args' do not fit the listed outputs")
+        return
+    raise ManifestError(f"{where}: unsupported 'args'")
+
+
+def _check_pattern(pattern, where):
+    """A discovery pattern is <directory>/<file pattern>, no wildcard in the directory."""
+    why = _bad_path(pattern)
+    if why:
+        raise ManifestError(f"{where}: {why}")
+    directory, _, filepat = pattern.rpartition("/")
+    if not directory or not filepat or any(c in directory for c in WILDCARDS):
+        raise ManifestError(f"{where}: pattern {pattern!r} must be <directory>/<file pattern> "
+                            f"with no wildcard in the directory")
 
 
 def _require(obj, key, kind, where):
@@ -125,17 +185,18 @@ def load_manifest(path):
             if key in seen:
                 raise ManifestError(f"{where}: output {key[0]}/{name} is listed twice")
             seen.add(key)
+        _check_args(art, where)
 
     for n, rule in enumerate(_require(data, "sources_must_be_mapped", list, "manifest")):
         where = f"sources_must_be_mapped {n}"
-        for key in ("glob", "out_dir"):
-            why = _bad_path(_require(rule, key, str, where))
-            if why:
-                raise ManifestError(f"{where}: {key}: {why}")
-    for n, pattern in enumerate(_require(data, "outputs_must_be_mapped", list, "manifest")):
-        why = _bad_path(pattern)
+        _check_pattern(_require(rule, "glob", str, where), where)
+        why = _bad_path(_require(rule, "out_dir", str, where))
         if why:
-            raise ManifestError(f"outputs_must_be_mapped {n}: {why}")
+            raise ManifestError(f"{where}: out_dir: {why}")
+    for n, pattern in enumerate(_require(data, "outputs_must_be_mapped", list, "manifest")):
+        if not isinstance(pattern, str):
+            raise ManifestError(f"outputs_must_be_mapped {n}: not a string")
+        _check_pattern(pattern, f"outputs_must_be_mapped {n}")
     return data
 
 
@@ -165,11 +226,44 @@ def _inside(real_root, path):
     return real == real_root or real.startswith(real_root + os.sep)
 
 
-def _matches(root, pattern):
-    """Files matching a root-relative glob (non-recursive), as sorted posix paths."""
-    hits = glob.glob(os.path.join(glob.escape(root), *pattern.split("/")))
-    rels = [os.path.relpath(h, root).replace(os.sep, "/") for h in hits if os.path.isfile(h)]
-    return sorted(rels)
+def _discover(root, real_root, pattern, error):
+    """Regular files matching <directory>/<file pattern>, as sorted posix
+    paths. A directory that cannot be listed, and a matching entry that
+    cannot be inspected, is a dangling link, resolves outside the root or is
+    not a regular file, is reported through error() and never treated as
+    absent."""
+    directory, _, filepat = pattern.rpartition("/")
+    dpath = os.path.join(root, *directory.split("/"))
+    try:
+        names = _listdir(dpath)
+    except OSError as e:
+        error(directory, f"cannot list ({e})")
+        return []
+    found = []
+    for name in sorted(n for n in names if fnmatch.fnmatchcase(n, filepat)):
+        rel = f"{directory}/{name}"
+        path = os.path.join(dpath, name)
+        try:
+            lst = _lstat(path)
+        except OSError as e:
+            error(rel, f"cannot inspect ({e})")
+            continue
+        if stat.S_ISLNK(lst.st_mode) and not os.path.exists(path):
+            error(rel, "dangling link")
+            continue
+        if not _inside(real_root, path):
+            error(rel, "resolves outside the root")
+            continue
+        try:
+            st = _stat(path)
+        except OSError as e:
+            error(rel, f"cannot inspect ({e})")
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            error(rel, "not a regular file")
+            continue
+        found.append(rel)
+    return found
 
 
 def _readable(path):
@@ -215,14 +309,14 @@ def run(root, manifest_path):
     # 3. Discovery: every schema and every committed generated file is mapped.
     for rule in manifest["sources_must_be_mapped"]:
         out_dir = posixpath.normpath(rule["out_dir"])
-        for rel in _matches(root, rule["glob"]):
+        for rel in _discover(root, real_root, rule["glob"], error_once):
             if not any(posixpath.normpath(a["source"]) == rel
                        and posixpath.normpath(a["out_dir"]) == out_dir for a in artifacts):
                 rep.error(rel, "source has no manifest entry")
     listed = {(posixpath.normpath(a["out_dir"]), name)
               for a in artifacts for name in a["outputs"]}
     for pattern in manifest["outputs_must_be_mapped"]:
-        for rel in _matches(root, pattern):
+        for rel in _discover(root, real_root, pattern, error_once):
             if (posixpath.dirname(rel), posixpath.basename(rel)) not in listed:
                 rep.driftline(rel, "committed file has no manifest entry")
 
