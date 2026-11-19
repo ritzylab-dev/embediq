@@ -45,20 +45,21 @@ extern "C" {
 #define EMBEDIQ_FAULT_TIMER_HAL_START  0x91u   /**< hal_timer_start() failed                              */
 
 /* ---------------------------------------------------------------------------
- * Tick payload structure
+ * Tick record
  *
- * Carried in the payload[] bytes of EmbedIQ_Msg_t for all MSG_TIMER_* messages.
- * Deserialise with: memcpy(&tick, msg->payload, sizeof(embediq_timer_tick_t));
+ * Tick record type. The timer FB publishes MSG_TIMER_* with an empty payload;
+ * this type is kept for code that carries a tick count and a timestamp of its
+ * own.
  *
- * tick_count:    Monotonic tick counter since boot. Use for gap detection and
- *                rate measurement. Never wraps within a normal session.
- * timestamp_us:  embediq_time_us() at publish time. Use for display / logging
- *                only — see I-13: timestamp_us wraps at ~71 min on MCU.
+ * tick_count:    Monotonic tick counter. Use for gap detection and rate
+ *                measurement.
+ * timestamp_us:  timestamp in microseconds supplied by the producer;
+ *                informational — see I-13: never use it for ordering.
  * ------------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t tick_count;    /**< Monotonic tick counter since boot (no wrap in session). */
-    uint64_t timestamp_us;  /**< embediq_time_us() at publish time. Informational only. */
+    uint32_t tick_count;    /**< Monotonic tick counter (no wrap in session). */
+    uint64_t timestamp_us;  /**< timestamp in microseconds supplied by the producer; informational */
 } embediq_timer_tick_t;
 
 /* ---------------------------------------------------------------------------

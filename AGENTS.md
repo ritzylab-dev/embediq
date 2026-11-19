@@ -121,7 +121,7 @@ EMBEDIQ_BOOT_PHASE_BRIDGE         = 4  // External FBs, Studio connections
 ├─────────────────────────────────────────────────────────────────┤
 │  CORE — CONTRACTS  ← STABLE AFTER FREEZE · NEVER CHANGE        │
 │  embediq_fb.h · embediq_subfn.h · embediq_bus.h · embediq_msg.h │
-│  embediq_sm.h · embediq_obs.h · embediq_osal.h · embediq_time.h │
+│  embediq_sm.h · embediq_obs.h · embediq_osal.h                  │
 │  embediq_bridge.h · embediq_meta.h · embediq_endpoint.h         │
 │  embediq_msg_catalog.h · hal/embediq_hal_*.h (×6)               │
 ├─────────────────────────────────────────────────────────────────┤

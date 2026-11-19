@@ -5,46 +5,47 @@
 # Runs the core-header check sixteen times against a scratch copy of
 # core/include and generated/ and asserts each verdict:
 #
-#   1  unmodified copy                          → exit 0, 136 of 136, quote
+#   1  unmodified copy                          → exit 0, 132 of 132, quote
 #                                                 includes PASS, RESULT: PASS
-#   2  <stdint.h> removed from embediq_msg.h    → exit 1, 128 of 136, failing
+#   2  <stdint.h> removed from embediq_msg.h    → exit 1, 124 of 132, failing
 #                                                 headers exactly embediq_msg.h
 #                                                 and embediq_test.h
-#   3  <pthread.h> added to embediq_time.h      → exit 1, compiles 136 of 136,
-#                                                 system-include rule names
-#                                                 exactly embediq_time.h
+#   3  <pthread.h> added to                     → exit 1, compiles 132 of 132,
+#      embediq_endpoint.h                         system-include rule names
+#                                                 exactly embediq_endpoint.h
 #   4  --root at an empty directory             → exit 2, no headers found
 #   5  CC=/nonexistent/cc                       → exit 2, compiler not found
-#   6  "pthread.h" appended to embediq_time.h   → exit 1, compiles 136 of 136,
-#                                                 quote-include rule names
-#                                                 exactly embediq_time.h
-#   7  a function with an unused variable       → exit 1, 132 of 136, failing
-#      appended to embediq_time.h                 header exactly embediq_time.h
-#                                                 (warnings are errors)
+#   6  "pthread.h" appended to                  → exit 1, compiles 132 of 132,
+#      embediq_endpoint.h                         quote-include rule names
+#                                                 exactly embediq_endpoint.h
+#   7  a function with an unused variable       → exit 1, 128 of 132, failing
+#      appended to embediq_endpoint.h             header exactly
+#                                                 embediq_endpoint.h (warnings
+#                                                 are errors)
 #   8  find (then sort) prints a partial list   → exit 2, header discovery
 #      and exits 42                               failed, no compile, no PASS
 #   9  sed -n exits 42 for the system-include   → exit 2, include scan failed
 #      scan only, then for the quote-include      (either include scan alone
 #      scan only                                  fails → exit 2)
-#  10  embediq_time.h unreadable                → exit 2, include scan failed
+#  10  embediq_endpoint.h unreadable            → exit 2, include scan failed
 #                                                 naming it (SKIP as root)
-#  11  a header with only a comment added       → exit 0, 140 of 140, three
+#  11  a header with only a comment added       → exit 0, 136 of 136, three
 #                                                 PASS lines (an empty scan is
 #                                                 a valid result)
-#  12  "../../external.h" appended to           → exit 1, 136 of 136, quote
-#      embediq_time.h                             include resolves outside,
-#                                                 naming embediq_time.h
-#  13  a symbolic link to ../../external.h      → exit 1, 136 of 136, quote
-#      included by embediq_time.h                 include resolves outside,
-#                                                 naming embediq_time.h
-#  14  a header in hal/ including               → exit 0, 140 of 140, three
+#  12  "../../external.h" appended to           → exit 1, 132 of 132, quote
+#      embediq_endpoint.h                         include resolves outside,
+#                                                 naming embediq_endpoint.h
+#  13  a symbolic link to ../../external.h      → exit 1, 132 of 132, quote
+#      included by embediq_endpoint.h             include resolves outside,
+#                                                 naming embediq_endpoint.h
+#  14  a header in hal/ including               → exit 0, 136 of 136, three
 #      "../embediq_config.h"                      PASS lines
-#  15  embediq_shadow.h in core/include and a   → exit 1, 144 of 144, the
+#  15  embediq_shadow.h in core/include and a   → exit 1, 140 of 140, the
 #      link of that name in hal/ to an outside    including header's own
 #      file, included from a header in hal/       directory is searched first:
 #                                                 resolves outside, naming
 #                                                 hal/embediq_shadow_probe.h
-#  16  --root given as a symbolic link to the   → exit 0, 136 of 136, three
+#  16  --root given as a symbolic link to the   → exit 0, 132 of 132, three
 #      scratch copy                               PASS lines (both sides of the
 #                                                 comparison are canonical)
 #
@@ -104,7 +105,7 @@ restore() { cp "$ROOT/core/include/$1" "$COPY/core/include/$1"; }
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 0 ] || ok=0
-grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 132 of 132 standalone compiles" "$LOG" || ok=0
 grep -qF "PASS  (quote includes)" "$LOG" || ok=0
 grep -qx "RESULT: PASS" "$LOG" || ok=0
 result "1 unmodified copy" "$ok"
@@ -114,22 +115,22 @@ grep -v '^#include <stdint.h>' "$ROOT/core/include/embediq_msg.h" > "$COPY/core/
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "FAIL  (compile) 128 of 136" "$LOG" || ok=0
+grep -qF "FAIL  (compile) 124 of 132" "$LOG" || ok=0
 [ "$(named compile)" = "embediq_msg.h embediq_test.h " ] || ok=0
 result "2 stdint.h removed from embediq_msg.h" "$ok"
 restore embediq_msg.h
 
-# --- case 3: <pthread.h> added to embediq_time.h.
-{ echo '#include <pthread.h>'; cat "$ROOT/core/include/embediq_time.h"; } > "$COPY/core/include/embediq_time.h"
+# --- case 3: <pthread.h> added to embediq_endpoint.h.
+{ echo '#include <pthread.h>'; cat "$ROOT/core/include/embediq_endpoint.h"; } > "$COPY/core/include/embediq_endpoint.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "136 of 136 standalone compiles" "$LOG" || ok=0
+grep -qF "132 of 132 standalone compiles" "$LOG" || ok=0
 grep -qF "FAIL  (system includes)" "$LOG" || ok=0
-[ "$(named include)" = "embediq_time.h " ] || ok=0
+[ "$(named include)" = "embediq_endpoint.h " ] || ok=0
 grep -E "^  include  " "$LOG" | grep -qF "pthread.h" || ok=0
-result "3 pthread.h added to embediq_time.h" "$ok"
-restore embediq_time.h
+result "3 pthread.h added to embediq_endpoint.h" "$ok"
+restore embediq_endpoint.h
 
 # --- case 4: no headers under --root.
 bash "$CHECK" --root "$SCRATCH/empty" > "$LOG" 2>&1; rc=$?
@@ -154,33 +155,33 @@ shim() {
     echo "$dir"
 }
 
-# --- case 6: a quote include of a system header appended to embediq_time.h.
-{ cat "$ROOT/core/include/embediq_time.h"; echo '#include "pthread.h"'; } > "$COPY/core/include/embediq_time.h"
+# --- case 6: a quote include of a system header appended to embediq_endpoint.h.
+{ cat "$ROOT/core/include/embediq_endpoint.h"; echo '#include "pthread.h"'; } > "$COPY/core/include/embediq_endpoint.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 132 of 132 standalone compiles" "$LOG" || ok=0
 grep -qF "PASS  (system includes)" "$LOG" || ok=0
 grep -qF "FAIL  (quote includes) 1 quote include(s)" "$LOG" || ok=0
-[ "$(named include)" = "embediq_time.h " ] || ok=0
+[ "$(named include)" = "embediq_endpoint.h " ] || ok=0
 grep -E "^  include  " "$LOG" | grep -qF '"pthread.h"' || ok=0
-result "6 \"pthread.h\" appended to embediq_time.h" "$ok"
-restore embediq_time.h
+result "6 \"pthread.h\" appended to embediq_endpoint.h" "$ok"
+restore embediq_endpoint.h
 
-# --- case 7: a warning in embediq_time.h fails the compile.
-{ cat "$ROOT/core/include/embediq_time.h"
-  echo 'static inline int standalone_probe(int a) { int unused; return a; }'; } > "$COPY/core/include/embediq_time.h"
+# --- case 7: a warning in embediq_endpoint.h fails the compile.
+{ cat "$ROOT/core/include/embediq_endpoint.h"
+  echo 'static inline int standalone_probe(int a) { int unused; return a; }'; } > "$COPY/core/include/embediq_endpoint.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "FAIL  (compile) 132 of 136" "$LOG" || ok=0
-[ "$(named compile)" = "embediq_time.h " ] || ok=0
-result "7 unused variable in embediq_time.h" "$ok"
-restore embediq_time.h
+grep -qF "FAIL  (compile) 128 of 132" "$LOG" || ok=0
+[ "$(named compile)" = "embediq_endpoint.h " ] || ok=0
+result "7 unused variable in embediq_endpoint.h" "$ok"
+restore embediq_endpoint.h
 
 # --- case 8: header discovery prints a partial list and fails.
 ok=1
-for dir in "$(shim find 'echo ./embediq_time.h; echo "find: failing" >&2; exit 42')" \
+for dir in "$(shim find 'echo ./embediq_endpoint.h; echo "find: failing" >&2; exit 42')" \
            "$(shim sort 'cat > /dev/null; exit 42')"; do
     PATH="$dir:$PATH" bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
     [ "$rc" -eq 2 ] || ok=0
@@ -206,17 +207,17 @@ result "9 sed fails during the system-include scan, then the quote-include scan"
 
 # --- case 10: a header that cannot be read.
 if [ "$(id -u)" -eq 0 ]; then
-    echo "SKIP  10 unreadable embediq_time.h  (running as root)"
+    echo "SKIP  10 unreadable embediq_endpoint.h  (running as root)"
 else
-    chmod 000 "$COPY/core/include/embediq_time.h"
+    chmod 000 "$COPY/core/include/embediq_endpoint.h"
     bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
-    chmod 644 "$COPY/core/include/embediq_time.h"
+    chmod 644 "$COPY/core/include/embediq_endpoint.h"
     ok=1
     [ "$rc" -eq 2 ] || ok=0
-    grep -qF "RESULT: ERROR (include scan failed: embediq_time.h:" "$LOG" || ok=0
+    grep -qF "RESULT: ERROR (include scan failed: embediq_endpoint.h:" "$LOG" || ok=0
     grep -q "RESULT: PASS" "$LOG" && ok=0
-    result "10 unreadable embediq_time.h" "$ok"
-    restore embediq_time.h
+    result "10 unreadable embediq_endpoint.h" "$ok"
+    restore embediq_endpoint.h
 fi
 
 # --- case 11: a header with no includes — an empty scan is a valid result.
@@ -224,7 +225,7 @@ echo '/* no includes */' > "$COPY/core/include/embediq_probe_empty.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 0 ] || ok=0
-grep -qF "PASS  (compile) 140 of 140 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
 grep -qF "PASS  (system includes)" "$LOG" || ok=0
 grep -qF "PASS  (quote includes)" "$LOG" || ok=0
 grep -qx "RESULT: PASS" "$LOG" || ok=0
@@ -235,37 +236,37 @@ rm -f "$COPY/core/include/embediq_probe_empty.h"
 outside() { grep -E "^  include  $1  " "$LOG" | grep -qF "resolves outside"; }
 
 # --- case 12: a relative quote include that leaves core/include.
-{ cat "$ROOT/core/include/embediq_time.h"; echo '#include "../../external.h"'; } > "$COPY/core/include/embediq_time.h"
+{ cat "$ROOT/core/include/embediq_endpoint.h"; echo '#include "../../external.h"'; } > "$COPY/core/include/embediq_endpoint.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 132 of 132 standalone compiles" "$LOG" || ok=0
 grep -qF "FAIL  (quote includes) 1 quote include(s)" "$LOG" || ok=0
-[ "$(named include)" = "embediq_time.h " ] || ok=0
-outside embediq_time.h || ok=0
-result "12 \"../../external.h\" appended to embediq_time.h" "$ok"
-restore embediq_time.h
+[ "$(named include)" = "embediq_endpoint.h " ] || ok=0
+outside embediq_endpoint.h || ok=0
+result "12 \"../../external.h\" appended to embediq_endpoint.h" "$ok"
+restore embediq_endpoint.h
 
 # --- case 13: a symbolic link in core/include whose target is outside.
 ln -s ../../external.h "$COPY/core/include/embediq_link_probe.h"
-{ cat "$ROOT/core/include/embediq_time.h"; echo '#include "embediq_link_probe.h"'; } > "$COPY/core/include/embediq_time.h"
+{ cat "$ROOT/core/include/embediq_endpoint.h"; echo '#include "embediq_link_probe.h"'; } > "$COPY/core/include/embediq_endpoint.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 132 of 132 standalone compiles" "$LOG" || ok=0
 grep -qF "FAIL  (quote includes) 1 quote include(s)" "$LOG" || ok=0
-[ "$(named include)" = "embediq_time.h " ] || ok=0
-outside embediq_time.h || ok=0
-result "13 symbolic link to an outside file included by embediq_time.h" "$ok"
+[ "$(named include)" = "embediq_endpoint.h " ] || ok=0
+outside embediq_endpoint.h || ok=0
+result "13 symbolic link to an outside file included by embediq_endpoint.h" "$ok"
 rm -f "$COPY/core/include/embediq_link_probe.h"
-restore embediq_time.h
+restore embediq_endpoint.h
 
 # --- case 14: a relative quote include that stays inside core/include.
 echo '#include "../embediq_config.h"' > "$COPY/core/include/hal/embediq_rel_probe.h"
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 0 ] || ok=0
-grep -qF "PASS  (compile) 140 of 140 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
 grep -qF "PASS  (system includes)" "$LOG" || ok=0
 grep -qF "PASS  (quote includes)" "$LOG" || ok=0
 grep -qx "RESULT: PASS" "$LOG" || ok=0
@@ -279,7 +280,7 @@ echo '#include "embediq_shadow.h"' > "$COPY/core/include/hal/embediq_shadow_prob
 bash "$CHECK" --root "$COPY" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 1 ] || ok=0
-grep -qF "PASS  (compile) 144 of 144 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 140 of 140 standalone compiles" "$LOG" || ok=0
 grep -qF "FAIL  (quote includes) 1 quote include(s)" "$LOG" || ok=0
 outside hal/embediq_shadow_probe.h || ok=0
 result "15 the header's own directory is searched first" "$ok"
@@ -291,7 +292,7 @@ ln -s "$COPY" "$SCRATCH-link"
 bash "$CHECK" --root "$SCRATCH-link" > "$LOG" 2>&1; rc=$?
 ok=1
 [ "$rc" -eq 0 ] || ok=0
-grep -qF "PASS  (compile) 136 of 136 standalone compiles" "$LOG" || ok=0
+grep -qF "PASS  (compile) 132 of 132 standalone compiles" "$LOG" || ok=0
 grep -qF "PASS  (system includes)" "$LOG" || ok=0
 grep -qF "PASS  (quote includes)" "$LOG" || ok=0
 grep -qx "RESULT: PASS" "$LOG" || ok=0
