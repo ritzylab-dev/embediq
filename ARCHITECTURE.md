@@ -2378,10 +2378,9 @@ framework access. The application zone never knows hardware exists.
 
 ```c
 // embediq_wdg.h — public API
-embediq_status_t embediq_wdg_register(EmbedIQ_FB_t* fb, uint32_t timeout_ms);
-embediq_status_t embediq_wdg_checkin(EmbedIQ_FB_t* fb);
-embediq_status_t embediq_wdg_unregister(EmbedIQ_FB_t* fb);
-EmbedIQ_WDG_ResetReason_t embediq_wdg_last_reset_reason(void);
+embediq_err_t embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms);
+embediq_err_t embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb);
+embediq_err_t embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb);
 
 // Messages published by fb_watchdog:
 // MSG_WDG_RESET_REASON — published on startup: reason + last_fb_to_miss

@@ -229,9 +229,17 @@ int main(void)
     embediq_timer_tick_t tick = { .tick_count = 0u, .timestamp_us = 0u };
     (void)tick;
 
-    /* --- embediq_wdg.h: watchdog types --- */
-    embediq_fb_id_t wdg_id = 0u;
-    (void)wdg_id;
+    /* --- embediq_wdg.h: the canonical signatures. Each pointer is
+     * initialised FROM the declared function, so the compiler checks the
+     * declared parameter and return types against these. --- */
+    embediq_err_t (*wdg_register_fn)(EmbedIQ_FB_Handle_t, uint32_t) = embediq_wdg_register;
+    embediq_err_t (*wdg_checkin_fn)(EmbedIQ_FB_Handle_t)            = embediq_wdg_checkin;
+    embediq_err_t (*wdg_unregister_fn)(EmbedIQ_FB_Handle_t)         = embediq_wdg_unregister;
+    (void)wdg_register_fn;
+    (void)wdg_checkin_fn;
+    (void)wdg_unregister_fn;
+    (void)EMBEDIQ_WDG_TIMEOUT_MS_MIN;
+    (void)EMBEDIQ_WDG_TIMEOUT_MS_MAX;
 
     /* --- embediq_time.h: time API types --- */
     embediq_err_t (*set_epoch_fn)(uint64_t) = NULL;

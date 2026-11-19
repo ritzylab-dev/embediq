@@ -88,5 +88,10 @@ obs__set_level
 sensor__last_temp
 wdg__fault_count
 wdg__init_state
+wdg__monitor_starts
+wdg__reset_service
+wdg__set_capacity
+wdg__set_clock
+wdg__set_scan_hook
 wdg__stop_monitor
 wdg__trigger_check

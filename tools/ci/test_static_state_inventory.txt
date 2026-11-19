@@ -16,3 +16,7 @@ g_in_critical
 g_isr_dropped_total
 g_seq_outside_crit
 g_total
+s_wdg_capacity
+s_wdg_clock
+s_wdg_monitor_starts
+s_wdg_scan_hook

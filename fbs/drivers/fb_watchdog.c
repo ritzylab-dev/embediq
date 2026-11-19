@@ -8,33 +8,61 @@
  *
  *   If ALL checked in:
  *     -> hal_wdg_kick() to reset the hardware watchdog
- *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_OVERFLOW, ...) if ring buffer full
  *   If ANY missed:
  *     -> embediq_obs_emit(EMBEDIQ_OBS_EVT_FAULT, ...)
  *     -> embediq_fb_report_fault(<missed FB>, WDG_REASON_MISSED_CHECKIN)
  *        — the missed check-in is the monitored FB's fault, not the watchdog's
  *     -> publish MSG_WDG_MISSED_CHECKIN with the missed FB's endpoint index
  *
- * On startup the FB publishes MSG_WDG_RESET_REASON.  On a host build the
- * reset reason is always RESET_NORMAL (0).
+ * The public contract (calling context, units, results, observations) is in
+ * core/include/embediq_wdg.h; this file includes it, so every definition is
+ * checked against it.
  *
- * Slot capacity: EMBEDIQ_MAX_ENDPOINTS entries (static, R-02).
- * All slot access is protected by a single mutex. The monitor scan decides
- * under the mutex and acts (emit, fault report, publish) after releasing it.
+ * Service readiness:
+ *   g_ready is the only thing a public call reads before it holds the table
+ *   lock. wdg_init() prepares the lock, the HAL watchdog and one monitor on
+ *   the boot thread, and only then stores g_ready = 1 (a sequentially
+ *   consistent OSAL atomic): a call that reads 1 also sees the lock and the
+ *   watchdog FB handle. Until then every call returns EMBEDIQ_ERR and touches
+ *   nothing. No public call creates anything.
+ *   g_mutex, g_wdg_fb and g_task are written only by the boot thread (or a
+ *   test hook) while g_ready is 0 or while no monitor is owned.
+ *
+ * Initializer run again (a boot retry after a later FB failed): a monitor is
+ * already owned, so nothing is created and nothing the monitor or a caller
+ * reads is rewritten. After a failed preparation the next run starts again,
+ * reusing a table lock an earlier attempt created.
+ *
+ * Observatory events emitted by the service (embediq_wdg.h codes):
+ *   EMBEDIQ_OBS_EVT_FAULT, state EMBEDIQ_FAULT_WDG_UNAVAILABLE, source = this
+ *   FB, msg_id = EMBEDIQ_WDG_RESOURCE_* — preparation failed; the FB then
+ *   reports its own fault (WDG_REASON_SERVICE_UNAVAILABLE).
+ *   EMBEDIQ_OBS_EVT_FAULT, state EMBEDIQ_FAULT_WDG_* — a rejected call, one
+ *   per call, emitted after the table lock is released.
+ *
+ * Slot capacity: EMBEDIQ_MAX_ENDPOINTS entries (static, R-02) — one per FB
+ * handle the engine can hand out. All slot access is protected by a single
+ * mutex. The monitor scan decides under the mutex and acts (emit, fault
+ * report, publish) after releasing it.
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_INFRASTRUCTURE (2)
  *
  * Public API:
  *   fb_watchdog_register()         — register FB with framework
- *   embediq_wdg_register(fb, ms)   — start tracking an FB
+ *   embediq_wdg_register(fb, ms)   — start (or update) tracking an FB
  *   embediq_wdg_checkin(fb)        — record a live heartbeat
  *   embediq_wdg_unregister(fb)     — stop tracking an FB
  *
  * Test-only API (EMBEDIQ_TEST_HOOKS):
- *   wdg__init_state()    — reset slots and counters (does not start task)
- *   wdg__trigger_check() — run one monitor scan synchronously
- *   wdg__fault_count()   — total missed-checkin faults since last init
- *   wdg__stop_monitor()  — stop the monitor task and wait for it to exit
+ *   wdg__init_state()      — test service state: ready, no monitor
+ *   wdg__reset_service()   — the state of a fresh process
+ *   wdg__trigger_check()   — run one monitor scan synchronously
+ *   wdg__fault_count()     — total missed-checkin faults since last reset
+ *   wdg__stop_monitor()    — not ready; stop and join the monitor task
+ *   wdg__set_clock()       — replace the millisecond clock
+ *   wdg__set_scan_hook()   — run a function between selection and report
+ *   wdg__set_capacity()    — accept at most n entries
+ *   wdg__monitor_starts()  — monitor tasks created since the last reset
  *
  * Zero POSIX headers.  R-02: no malloc in this file.
  *
@@ -44,6 +72,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "embediq_wdg.h"
 #include "embediq_platform_msgs.h"
 #include "embediq_fb.h"
 #include "embediq_bus.h"
@@ -64,13 +93,21 @@
 #define WDG_MAX_SLOTS  EMBEDIQ_MAX_ENDPOINTS
 
 /* Reason codes for embediq_fb_report_fault(). */
-#define WDG_REASON_MISSED_CHECKIN  1u
-#define WDG_REASON_RESET_DETECTED  2u
+#define WDG_REASON_MISSED_CHECKIN       1u
+#define WDG_REASON_RESET_DETECTED       2u
+#define WDG_REASON_SERVICE_UNAVAILABLE  3u   /* the watchdog FB could not prepare its service */
+
+/* HAL watchdog timeout: generous next to the 100 ms scan, so a scan delayed
+ * by a blocked HIGH publish does not let the hardware watchdog fire. */
+#define WDG_HAL_TIMEOUT_MS  5000u
+
+/* Endpoint value meaning "no FB" in an Observatory event. */
+#define WDG_EP_NONE  0xFFu
 
 typedef struct {
     EmbedIQ_FB_Handle_t handle;
     uint32_t            timeout_ms;
-    uint32_t            last_checkin_us;
+    uint32_t            last_checkin_ms;
     bool                active;
 } wdg_slot_t;
 
@@ -90,11 +127,68 @@ static EmbedIQ_Mutex_t    *g_mutex       = NULL;
 static EmbedIQ_Task_t     *g_task        = NULL;
 static EmbedIQ_FB_Handle_t g_wdg_fb      = NULL;
 static embediq_osal_atomic32_t g_running = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_ready   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 static uint32_t            g_kick_seq    = 0u;
 
 #ifdef EMBEDIQ_TEST_HOOKS
+/* Test instrumentation. Each is written by a test hook only while no
+ * monitor task runs, or (g_fault_count) under the table lock. */
 static uint32_t            g_fault_count = 0u;
+static uint32_t          (*s_wdg_clock)(void)   = embediq_osal_time_ms;
+static void              (*s_wdg_scan_hook)(void) = NULL;
+static uint8_t             s_wdg_capacity       = WDG_MAX_SLOTS;
+static uint32_t            s_wdg_monitor_starts = 0u;
 #endif
+
+/* ---------------------------------------------------------------------------
+ * Internal helpers
+ * ------------------------------------------------------------------------- */
+
+static uint32_t now_ms(void)
+{
+#ifdef EMBEDIQ_TEST_HOOKS
+    return s_wdg_clock();
+#else
+    return embediq_osal_time_ms();
+#endif
+}
+
+static uint8_t capacity(void)
+{
+#ifdef EMBEDIQ_TEST_HOOKS
+    return s_wdg_capacity;
+#else
+    return WDG_MAX_SLOTS;
+#endif
+}
+
+static bool service_ready(void)
+{
+    return embediq_osal_atomic32_load(&g_ready) != 0u;
+}
+
+/* Index of fb's active slot, or -1. Caller holds g_mutex. */
+static int find_slot(EmbedIQ_FB_Handle_t fb)
+{
+    for (uint8_t i = 0u; i < g_slot_count; i++) {
+        if (g_slots[i].handle == fb && g_slots[i].active) return (int)i;
+    }
+    return -1;
+}
+
+/* One FAULT event for a rejected call; then EMBEDIQ_ERR. Called with no lock
+ * held. The source comes from embediq_engine_fb_ep(), which returns 0xFF for
+ * NULL — the watchdog never dereferences a handle to build the event. */
+static embediq_err_t reject(EmbedIQ_FB_Handle_t fb, uint8_t code, uint16_t resource)
+{
+    uint8_t target = WDG_EP_NONE;
+    if (service_ready() && g_wdg_fb != NULL) {
+        target = embediq_engine_fb_ep(g_wdg_fb);
+    }
+    EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, embediq_engine_fb_ep(fb), target,
+                           code, resource);
+    return EMBEDIQ_ERR;
+}
 
 /* ---------------------------------------------------------------------------
  * Internal: one monitor scan cycle
@@ -112,26 +206,28 @@ static uint32_t            g_fault_count = 0u;
  * report runs the monitored FB's fault_fn under its execution lock: on its
  * dispatch thread when it has one (a HIGH message), otherwise inline here
  * after any in-flight init_fn/run_fn/fault_fn of that FB.
+ * A miss selected in phase 1 is reported in phase 2 even if the entry was
+ * unregistered, re-registered or checked in between the two.
  * ------------------------------------------------------------------------- */
 
 static void monitor_scan(void)
 {
     wdg_miss_t misses[WDG_MAX_SLOTS];
     uint8_t    n_miss = 0u;
-    uint32_t   now_us = embediq_osal_time_us();
 
-    /* Phase 1 — decide under the lock. */
+    /* Phase 1 — decide under the lock. No lock, or none taken: no scan. */
+    if (g_mutex == NULL) return;
     if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) return;
 
+    uint32_t now = now_ms();
     for (uint8_t i = 0u; i < g_slot_count; i++) {
         if (!g_slots[i].active) continue;
 
-        /* uint32_t unsigned sub wraps correctly for intervals < ~35 min
-         * (2^31 µs); max watchdog timeout is well under this. */
-        uint32_t elapsed_us = now_us - g_slots[i].last_checkin_us;
-        uint32_t timeout_us = g_slots[i].timeout_ms * 1000u;
+        /* Unsigned subtraction is wrap-correct while the true gap is below
+         * UINT32_MAX / 2 ms — the supported timeout range (embediq_wdg.h). */
+        uint32_t elapsed_ms = now - g_slots[i].last_checkin_ms;
 
-        if (elapsed_us > timeout_us) {
+        if (elapsed_ms > g_slots[i].timeout_ms) {
             misses[n_miss].handle     = g_slots[i].handle;
             misses[n_miss].timeout_ms = g_slots[i].timeout_ms;
             n_miss++;
@@ -142,6 +238,10 @@ static void monitor_scan(void)
     }
 
     embediq_osal_mutex_unlock(g_mutex);
+
+#ifdef EMBEDIQ_TEST_HOOKS
+    if (s_wdg_scan_hook != NULL) s_wdg_scan_hook();
+#endif
 
     /* Phase 2 — act after unlock. */
     for (uint8_t i = 0u; i < n_miss; i++) {
@@ -214,18 +314,59 @@ static void monitor_task(void *arg)
  * FB init / exit (called by embediq_engine_boot)
  * ------------------------------------------------------------------------- */
 
+/* Preparation failed: observe it at the watchdog's own granularity (the
+ * OSAL/HAL layer's own event, if any, is not suppressed), then report the
+ * watchdog FB's own fault. g_ready stays 0. */
+static void wdg_init_failed(EmbedIQ_FB_Handle_t fb, uint16_t resource)
+{
+    EMBEDIQ_OBS_EMIT_FAULT(EMBEDIQ_OBS_EVT_FAULT, embediq_engine_fb_ep(fb), WDG_EP_NONE,
+                           EMBEDIQ_FAULT_WDG_UNAVAILABLE, resource);
+    embediq_fb_report_fault(fb, WDG_REASON_SERVICE_UNAVAILABLE);
+}
+
 static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb_data;
+
+    /* Run again on a boot retry with a monitor already owned: it may be
+     * reading g_wdg_fb and the table — create nothing, rewrite nothing, and
+     * do not publish the reset reason a second time. */
+    if (g_task != NULL) return;
+
     g_wdg_fb = fb;
 
-    /* Create mutex if not already created (allows test-bypass path too). */
-    if (!g_mutex) {
+    /* The table lock; one left by an earlier failed attempt is reused. */
+    if (g_mutex == NULL) {
         g_mutex = embediq_osal_mutex_create();
+        if (g_mutex == NULL) {
+            wdg_init_failed(fb, EMBEDIQ_WDG_RESOURCE_MUTEX);
+            return;
+        }
     }
 
-    /* Initialise the HAL watchdog with a generous timeout. */
-    hal_wdg_init(5000u);
+    /* The HAL watchdog. The POSIX simulation cannot fail. */
+    if (hal_wdg_init(WDG_HAL_TIMEOUT_MS) != HAL_OK) {
+        wdg_init_failed(fb, EMBEDIQ_WDG_RESOURCE_HAL);
+        return;
+    }
+
+    /* One monitor. */
+    embediq_osal_atomic32_store(&g_running, 1u);
+    g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL,
+                                     EMBEDIQ_WDG_TASK_PRIORITY,
+                                     EMBEDIQ_WDG_TASK_STACK_SIZE);
+    if (g_task == NULL) {
+        embediq_osal_atomic32_store(&g_running, 0u);
+        hal_wdg_deinit();
+        wdg_init_failed(fb, EMBEDIQ_WDG_RESOURCE_MONITOR);
+        return;
+    }
+#ifdef EMBEDIQ_TEST_HOOKS
+    s_wdg_monitor_starts++;
+#endif
+
+    /* Ready: every field a call reads is in place. */
+    embediq_osal_atomic32_store(&g_ready, 1u);
 
     /* Publish reset reason (NORMAL = 0 on host). */
     EmbedIQ_Msg_t m;
@@ -235,17 +376,12 @@ static void wdg_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     m.payload[0]  = 0u;   /* RESET_NORMAL */
     m.payload_len = 1u;
     embediq_publish(g_wdg_fb, &m);
-
-    /* Start background monitor. */
-    embediq_osal_atomic32_store(&g_running, 1u);
-    g_task = embediq_osal_task_create("fb_wdg_mon", monitor_task, NULL,
-                                     EMBEDIQ_WDG_TASK_PRIORITY,
-                                     EMBEDIQ_WDG_TASK_STACK_SIZE);
 }
 
 static void wdg_exit(EmbedIQ_FB_Handle_t fb, void *fb_data)
 {
     (void)fb; (void)fb_data;
+    embediq_osal_atomic32_store(&g_ready, 0u);
     embediq_osal_atomic32_store(&g_running, 0u);
     hal_wdg_deinit();
 }
@@ -273,107 +409,149 @@ EmbedIQ_FB_Handle_t fb_watchdog_register(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Public watchdog API
+ * Public watchdog API (embediq_wdg.h)
+ *
+ * Common shape: argument checks; readiness; take the table lock (the table is
+ * untouched if that fails); change the table; release the lock; then, for a
+ * failure only, emit one event and return EMBEDIQ_ERR.
  * ------------------------------------------------------------------------- */
 
-/**
- * Register an FB for health monitoring.
- * The FB's last-checkin timestamp is initialised to now, granting a full
- * timeout_ms window before the first check fires.
- */
-void embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms)
+embediq_err_t embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms)
 {
-    if (!fb || timeout_ms == 0u) return;
-
-    if (!g_mutex) {
-        g_mutex = embediq_osal_mutex_create();
+    if (fb == NULL
+        || timeout_ms < EMBEDIQ_WDG_TIMEOUT_MS_MIN
+        || timeout_ms > EMBEDIQ_WDG_TIMEOUT_MS_MAX) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_INVALID_ARG, 0u);
+    }
+    if (!service_ready()) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_NOT_READY, 0u);
+    }
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_UNAVAILABLE, EMBEDIQ_WDG_RESOURCE_LOCK);
     }
 
-    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
-
-    /* Check if already registered. */
-    for (uint8_t i = 0u; i < g_slot_count; i++) {
-        if (g_slots[i].handle == fb && g_slots[i].active) {
-            g_slots[i].timeout_ms      = timeout_ms;
-            g_slots[i].last_checkin_us = embediq_osal_time_us();
-            embediq_osal_mutex_unlock(g_mutex);
-            return;
-        }
-    }
-
-    /* Find a free slot. */
-    if (g_slot_count < WDG_MAX_SLOTS) {
+    uint8_t code = 0u;
+    int     idx  = find_slot(fb);
+    if (idx >= 0) {
+        /* Update: replace the timeout and restart the window. */
+        g_slots[idx].timeout_ms      = timeout_ms;
+        g_slots[idx].last_checkin_ms = now_ms();
+    } else if (g_slot_count >= capacity()) {
+        code = EMBEDIQ_FAULT_WDG_TABLE_FULL;
+    } else {
         g_slots[g_slot_count].handle          = fb;
         g_slots[g_slot_count].timeout_ms      = timeout_ms;
-        g_slots[g_slot_count].last_checkin_us = embediq_osal_time_us();
+        g_slots[g_slot_count].last_checkin_ms = now_ms();
         g_slots[g_slot_count].active          = true;
         g_slot_count++;
     }
 
     embediq_osal_mutex_unlock(g_mutex);
+    return code == 0u ? EMBEDIQ_OK : reject(fb, code, 0u);
 }
 
-/** Record a heartbeat for the given FB. */
-void embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb)
+embediq_err_t embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb)
 {
-    if (!fb || !g_mutex) return;
+    if (fb == NULL) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_INVALID_ARG, 0u);
+    }
+    if (!service_ready()) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_NOT_READY, 0u);
+    }
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_UNAVAILABLE, EMBEDIQ_WDG_RESOURCE_LOCK);
+    }
 
-    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
-
-    for (uint8_t i = 0u; i < g_slot_count; i++) {
-        if (g_slots[i].handle == fb && g_slots[i].active) {
-            g_slots[i].last_checkin_us = embediq_osal_time_us();
-            break;
-        }
+    int idx = find_slot(fb);
+    if (idx >= 0) {
+        g_slots[idx].last_checkin_ms = now_ms();
     }
 
     embediq_osal_mutex_unlock(g_mutex);
+    return idx >= 0 ? EMBEDIQ_OK : reject(fb, EMBEDIQ_FAULT_WDG_NOT_REGISTERED, 0u);
 }
 
-/** Remove an FB from watchdog tracking. */
-void embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb)
+embediq_err_t embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb)
 {
-    if (!fb || !g_mutex) return;
+    if (fb == NULL) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_INVALID_ARG, 0u);
+    }
+    if (!service_ready()) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_NOT_READY, 0u);
+    }
+    if (embediq_osal_mutex_lock(g_mutex, UINT32_MAX) != EMBEDIQ_OK) {
+        return reject(fb, EMBEDIQ_FAULT_WDG_UNAVAILABLE, EMBEDIQ_WDG_RESOURCE_LOCK);
+    }
 
-    embediq_osal_mutex_lock(g_mutex, UINT32_MAX);
-
-    for (uint8_t i = 0u; i < g_slot_count; i++) {
-        if (g_slots[i].handle == fb && g_slots[i].active) {
-            /* Shift remaining slots down to keep array contiguous. */
-            for (uint8_t j = i; j < g_slot_count - 1u; j++) {
-                g_slots[j] = g_slots[j + 1u];
-            }
-            memset(&g_slots[g_slot_count - 1u], 0, sizeof(wdg_slot_t));
-            g_slot_count--;
-            break;
+    int idx = find_slot(fb);
+    if (idx >= 0) {
+        /* Shift remaining slots down to keep the array contiguous. */
+        for (uint8_t j = (uint8_t)idx; j < g_slot_count - 1u; j++) {
+            g_slots[j] = g_slots[j + 1u];
         }
+        memset(&g_slots[g_slot_count - 1u], 0, sizeof(wdg_slot_t));
+        g_slot_count--;
     }
 
     embediq_osal_mutex_unlock(g_mutex);
+    return idx >= 0 ? EMBEDIQ_OK : reject(fb, EMBEDIQ_FAULT_WDG_NOT_REGISTERED, 0u);
 }
 
 /* ---------------------------------------------------------------------------
  * Test-only API — EMBEDIQ_TEST_HOOKS only
+ *
+ * Calling context: the test thread. Each hook that changes the service is
+ * called while no other thread calls the watchdog, and while no monitor
+ * task runs unless it stops that task itself.
  * ------------------------------------------------------------------------- */
 
 #ifdef EMBEDIQ_TEST_HOOKS
 
+/** Stop the monitor task started by wdg_init() and wait for it to exit.
+ *  The service is not ready from the first step. Call from the thread that
+ *  booted the engine. */
+void wdg__stop_monitor(void)
+{
+    embediq_osal_atomic32_store(&g_ready, 0u);
+    embediq_osal_atomic32_store(&g_running, 0u);
+    if (g_task != NULL) {
+        embediq_osal_task_join(g_task);
+        g_task = NULL;
+    }
+}
+
 /**
- * Reset all watchdog state.
- * Does NOT start the monitor task — tests call wdg__trigger_check() directly.
- * Creates the mutex if it has not been created yet.
+ * The state of a fresh process: no monitor (stopped and joined), not ready,
+ * no table lock, empty table, counters cleared, default clock, no scan hook,
+ * full capacity, no watchdog FB handle.
+ */
+void wdg__reset_service(void)
+{
+    wdg__stop_monitor();
+    embediq_osal_mutex_destroy(g_mutex);   /* NULL-safe */
+    g_mutex              = NULL;
+    g_wdg_fb             = NULL;
+    g_slot_count         = 0u;
+    g_kick_seq           = 0u;
+    g_fault_count        = 0u;
+    s_wdg_clock          = embediq_osal_time_ms;
+    s_wdg_scan_hook      = NULL;
+    s_wdg_capacity       = WDG_MAX_SLOTS;
+    s_wdg_monitor_starts = 0u;
+    memset(g_slots, 0, sizeof(g_slots));
+}
+
+/**
+ * Test service state: calls are accepted and scans are driven by
+ * wdg__trigger_check(); production readiness is set only by wdg_init().
+ * wdg__reset_service(), then create the table lock, then ready. No monitor.
  */
 void wdg__init_state(void)
 {
-    embediq_osal_atomic32_store(&g_running, 0u);
-    g_slot_count  = 0u;
-    g_kick_seq    = 0u;
-    g_fault_count = 0u;
-    g_wdg_fb      = NULL;
-    memset(g_slots, 0, sizeof(g_slots));
-
-    if (!g_mutex) {
-        g_mutex = embediq_osal_mutex_create();
+    wdg__reset_service();
+    g_mutex = embediq_osal_mutex_create();
+    if (g_mutex != NULL) {
+        embediq_osal_atomic32_store(&g_ready, 1u);
     }
 }
 
@@ -383,21 +561,37 @@ void wdg__trigger_check(void)
     monitor_scan();
 }
 
-/** Total missed-checkin faults detected since last wdg__init_state(). */
+/** Total missed-checkin faults detected since the last reset. */
 uint32_t wdg__fault_count(void)
 {
     return g_fault_count;
 }
 
-/** Stop the monitor task started by wdg_init() and wait for it to exit.
- *  Call from the thread that booted the engine. */
-void wdg__stop_monitor(void)
+/** Replace the millisecond clock the table and the scan read; NULL restores
+ *  embediq_osal_time_ms. */
+void wdg__set_clock(uint32_t (*clock_ms)(void))
 {
-    embediq_osal_atomic32_store(&g_running, 0u);
-    if (g_task != NULL) {
-        embediq_osal_task_join(g_task);
-        g_task = NULL;
-    }
+    s_wdg_clock = clock_ms != NULL ? clock_ms : embediq_osal_time_ms;
+}
+
+/** Called by monitor_scan() after it released the table lock and before it
+ *  reports what it selected; NULL clears. */
+void wdg__set_scan_hook(void (*after_snapshot)(void))
+{
+    s_wdg_scan_hook = after_snapshot;
+}
+
+/** The table accepts at most n entries (n <= WDG_MAX_SLOTS); 0 restores
+ *  WDG_MAX_SLOTS. */
+void wdg__set_capacity(uint8_t n)
+{
+    s_wdg_capacity = (n == 0u || n > WDG_MAX_SLOTS) ? (uint8_t)WDG_MAX_SLOTS : n;
+}
+
+/** Monitor tasks wdg_init() has created since the last reset. */
+uint32_t wdg__monitor_starts(void)
+{
+    return s_wdg_monitor_starts;
 }
 
 #endif /* EMBEDIQ_TEST_HOOKS */

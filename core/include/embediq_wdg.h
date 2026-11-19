@@ -10,7 +10,36 @@
  * reports misses. The system fault policy (reboot vs. quarantine vs. log) is
  * an application decision made in response to MSG_WDG_MISSED_CHECKIN.
  *
- * I-01: Compiles standalone with zero OSAL or BSP dependencies.
+ * Calls (register, checkin, unregister):
+ *   - Calling context: any thread (an FB thread or a platform thread); not
+ *     an ISR. Each call may wait for the watchdog's table lock.
+ *   - fb is a handle returned by embediq_fb_register(). NULL is rejected; any
+ *     other pointer is not validated and must not be passed.
+ *   - Every call returns EMBEDIQ_OK or EMBEDIQ_ERR. A call made before the
+ *     watchdog service is ready (fb_watchdog initialised, its lock and its
+ *     monitor running) returns EMBEDIQ_ERR and changes nothing.
+ *   - A rejected call emits one EMBEDIQ_OBS_EVT_FAULT event: source = fb's
+ *     endpoint (0xFF for NULL), target = the watchdog FB's endpoint (0xFF
+ *     while the service is not ready), state_or_flag = one of the
+ *     EMBEDIQ_FAULT_WDG_* codes below, msg_id = 0 or, for
+ *     EMBEDIQ_FAULT_WDG_UNAVAILABLE, the EMBEDIQ_WDG_RESOURCE_* that failed.
+ *
+ * Deadlines:
+ *   - timeout_ms is in milliseconds, EMBEDIQ_WDG_TIMEOUT_MS_MIN …
+ *     EMBEDIQ_WDG_TIMEOUT_MS_MAX (1 … UINT32_MAX/2).
+ *   - An entry expires when more than timeout_ms has elapsed since its last
+ *     register or check-in.
+ *   - Deadlines are measured with the 32-bit millisecond clock by unsigned
+ *     subtraction, which is exact while less than UINT32_MAX/2 ms pass
+ *     between two looks at an entry; a check-in gap longer than a full wrap
+ *     of that clock (about 49.7 days) cannot be told from a short one.
+ *   - The monitor scans about every 100 ms. That is a polling interval, not
+ *     a bound on the reaction time: reporting a miss publishes a HIGH message
+ *     and may wait for queue space.
+ *
+ * Includes embediq_fb.h (EmbedIQ_FB_Handle_t) and embediq_osal.h
+ * (embediq_err_t, EMBEDIQ_OK / EMBEDIQ_ERR) — both core contract headers, so
+ * this header compiles standalone; no OSAL implementation or BSP header.
  * R-03: C11. Fixed-width types from <stdint.h> only.
  *
  * @author  Ritesh Anand
@@ -22,7 +51,8 @@
 #ifndef EMBEDIQ_WDG_H
 #define EMBEDIQ_WDG_H
 
-#include "embediq_osal.h"  /* embediq_err_t */
+#include "embediq_fb.h"    /* EmbedIQ_FB_Handle_t */
+#include "embediq_osal.h"  /* embediq_err_t, EMBEDIQ_OK, EMBEDIQ_ERR */
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -30,48 +60,91 @@ extern "C" {
 #endif
 
 /* ---------------------------------------------------------------------------
- * Types
+ * Supported timeout range, in milliseconds
+ *
+ * MIN: a zero timeout would expire on every scan; 1 ms is the smallest
+ *      deadline the millisecond clock can express.
+ * MAX: elapsed time is (uint32_t)(now_ms - last_ms); it is exact only while
+ *      the true gap is below half the clock's range, so the longest supported
+ *      timeout is UINT32_MAX / 2 = 2,147,483,647 ms (about 24.8 days).
  * ------------------------------------------------------------------------- */
 
-/**
- * FB identifier for watchdog registration.
- * Maps to the FB's registered endpoint index (0–EMBEDIQ_MAX_ENDPOINTS-1).
- */
-typedef uint8_t embediq_fb_id_t;
+#define EMBEDIQ_WDG_TIMEOUT_MS_MIN  1u
+#define EMBEDIQ_WDG_TIMEOUT_MS_MAX  (UINT32_MAX / 2u)
+
+/* ---------------------------------------------------------------------------
+ * Watchdog fault codes — state_or_flag of an EMBEDIQ_OBS_EVT_FAULT event
+ * emitted by the watchdog service. Distinct from EmbedIQ_FB_State_t (0–5),
+ * the engine codes in embediq_fb.h (0x80–0x83) and the timer codes in
+ * embediq_timer.h (0x90–0x91); 0x94 leaves 0x92–0x93 free next to the timer.
+ * ------------------------------------------------------------------------- */
+
+#define EMBEDIQ_FAULT_WDG_NOT_READY       0x94u  /**< a call arrived before the service was ready */
+#define EMBEDIQ_FAULT_WDG_INVALID_ARG     0x95u  /**< NULL handle or timeout outside the supported range */
+#define EMBEDIQ_FAULT_WDG_TABLE_FULL      0x96u  /**< no free entry */
+#define EMBEDIQ_FAULT_WDG_NOT_REGISTERED  0x97u  /**< check-in or unregister of an FB that is not registered */
+#define EMBEDIQ_FAULT_WDG_UNAVAILABLE     0x98u  /**< a required resource could not be prepared or taken; msg_id names it */
+
+/* msg_id of an EMBEDIQ_FAULT_WDG_UNAVAILABLE event: the resource that failed.
+ * Numbered from 1 so that msg_id 0 always means "no resource". */
+#define EMBEDIQ_WDG_RESOURCE_MUTEX    1u  /**< the table lock could not be created */
+#define EMBEDIQ_WDG_RESOURCE_HAL      2u  /**< hal_wdg_init() failed */
+#define EMBEDIQ_WDG_RESOURCE_MONITOR  3u  /**< the monitor task could not be created */
+#define EMBEDIQ_WDG_RESOURCE_LOCK     4u  /**< the table lock could not be taken */
 
 /* ---------------------------------------------------------------------------
  * Watchdog API
  * ------------------------------------------------------------------------- */
 
 /**
- * Register an FB for liveness monitoring.
+ * Register an FB for liveness monitoring, or update its registration.
  *
- * @param fb_id      The registering FB's endpoint index.
- * @param timeout_ms Maximum allowed interval between checkins (milliseconds).
- *                   Must be > 0. Minimum effective granularity: 100 ms.
- * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if already registered or invalid args.
+ * Calling context: any thread (an FB thread or a platform thread); not an
+ * ISR. May wait for the watchdog's table lock.
+ *
+ * @param fb          Handle returned by embediq_fb_register(); not NULL.
+ * @param timeout_ms  Milliseconds, EMBEDIQ_WDG_TIMEOUT_MS_MIN …
+ *                    EMBEDIQ_WDG_TIMEOUT_MS_MAX.
+ * @return EMBEDIQ_OK for a new entry, and for an FB already registered (its
+ *         timeout is replaced and its window restarts). EMBEDIQ_OK means the
+ *         entry is being monitored.
+ *         EMBEDIQ_ERR — nothing changed, an existing entry keeps its timeout
+ *         and deadline — for a NULL handle, a timeout outside the range, a
+ *         full table, or a watchdog service that is not ready or cannot take
+ *         its lock.
  */
-embediq_err_t embediq_wdg_register(embediq_fb_id_t fb_id, uint32_t timeout_ms);
+embediq_err_t embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms);
 
 /**
- * Reset the checkin timer for a registered FB.
- * Call at least once every timeout_ms milliseconds or a missed-checkin event
- * will be published.
+ * Record a heartbeat: restart the FB's window.
  *
- * @param fb_id  The calling FB's endpoint index (must be registered).
- * @return EMBEDIQ_OK on success, EMBEDIQ_ERR if fb_id is not registered.
+ * Calling context: any thread (an FB thread or a platform thread); not an
+ * ISR. May wait for the watchdog's table lock.
+ *
+ * @param fb  Handle returned by embediq_fb_register(); not NULL.
+ * @return EMBEDIQ_OK when the window was restarted. EMBEDIQ_ERR when the FB
+ *         is not registered (its heartbeat protects nothing), the handle is
+ *         NULL, or the service is not ready or cannot take its lock.
  */
-embediq_err_t embediq_wdg_checkin(embediq_fb_id_t fb_id);
+embediq_err_t embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb);
 
 /**
- * Deregister an FB from watchdog monitoring.
- * Safe to call from the FB's exit_fn during clean shutdown.
- * If fb_id is not registered, returns EMBEDIQ_OK (idempotent).
+ * Remove an FB from future scans.
  *
- * @param fb_id  The FB's endpoint index.
- * @return EMBEDIQ_OK on success, EMBEDIQ_ERR on internal error.
+ * Unregistering twice is an error, not a no-op. A miss the monitor had
+ * already selected when the entry was removed (or re-registered, or checked
+ * in) may still be reported afterwards; unregister does not wait for the
+ * monitor, so it is safe from the FB's own fault_fn.
+ *
+ * Calling context: any thread (an FB thread or a platform thread); not an
+ * ISR. May wait for the watchdog's table lock.
+ *
+ * @param fb  Handle returned by embediq_fb_register(); not NULL.
+ * @return EMBEDIQ_OK when the entry was removed. EMBEDIQ_ERR when the FB is
+ *         not registered, the handle is NULL, or the service is not ready or
+ *         cannot take its lock.
  */
-embediq_err_t embediq_wdg_deregister(embediq_fb_id_t fb_id);
+embediq_err_t embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb);
 
 #ifdef __cplusplus
 }

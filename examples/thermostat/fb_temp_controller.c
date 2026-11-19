@@ -19,6 +19,10 @@
  *   CTRL_EVT_STATE_CRITICAL (3) — entered CRITICAL
  * The controller calls embediq_wdg_checkin() on every temperature reading,
  * proving liveness to the watchdog (registered with 5 000 ms timeout).
+ * Both results are checked: if the registration in ctrl_init or a check-in
+ * in ctrl_run is refused, the controller is not protected and reports its own
+ * fault, CTRL_FAULT_NOT_MONITORED, through embediq_fb_report_fault(). No other
+ * policy (reboot, retry) is applied here.
  *
  * Boot phase: EMBEDIQ_BOOT_PHASE_APPLICATION (3)
  *
@@ -42,6 +46,7 @@
 #include "embediq_sm.h"
 #include "embediq_obs.h"
 #include "embediq_config.h"
+#include "embediq_wdg.h"
 #include "thermostat_msgs.h"
 
 #include <stdint.h>
@@ -50,10 +55,6 @@
 #ifdef EMBEDIQ_TEST_HOOKS
 #include <stdatomic.h>   /* host-only test counter */
 #endif
-
-/* Watchdog service API — platform service, not an OSAL call (R-sub-03). */
-extern void embediq_wdg_register(void *fb, uint32_t timeout_ms);
-extern void embediq_wdg_checkin(void *fb);
 
 /* ---------------------------------------------------------------------------
  * FSM state constants
@@ -65,6 +66,9 @@ extern void embediq_wdg_checkin(void *fb);
 
 /* Watchdog timeout: 5 s is well above the 1 s tick rate, preventing false faults. */
 #define CTRL_WDG_TIMEOUT_MS  5000u
+
+/* Fault reason: the controller could not establish or keep watchdog monitoring. */
+#define CTRL_FAULT_NOT_MONITORED  1u
 
 /* EMBEDIQ_OBS_EVT_APP codes — see the file header. */
 #define CTRL_EVT_STATE_NORMAL    1u
@@ -194,8 +198,10 @@ static void ctrl_run(EmbedIQ_FB_Handle_t fb, const void *msg,
     if (msg == NULL) return;   /* direct delivery without a payload */
     embediq_sm_process(sm, msg, MSG_TEMP_READING, NULL);
 
-    /* Prove liveness to the watchdog. */
-    embediq_wdg_checkin(fb);
+    /* Prove liveness to the watchdog; a refused check-in protects nothing. */
+    if (embediq_wdg_checkin(fb) != EMBEDIQ_OK) {
+        embediq_fb_report_fault(fb, CTRL_FAULT_NOT_MONITORED);
+    }
 
 #ifdef EMBEDIQ_TEST_HOOKS
     g_reading_count++;
@@ -212,8 +218,11 @@ static void ctrl_init(EmbedIQ_FB_Handle_t fb, void *fb_data)
     g_ctrl_fb = fb;
     s_ep = embediq_engine_fb_ep(fb);
 
-    /* Register with watchdog: 5 000 ms timeout; first checkin is in ctrl_run. */
-    embediq_wdg_register(fb, CTRL_WDG_TIMEOUT_MS);
+    /* Register with watchdog: 5 000 ms timeout; first checkin is in ctrl_run.
+     * Refused: the controller would run unprotected — report its own fault. */
+    if (embediq_wdg_register(fb, CTRL_WDG_TIMEOUT_MS) != EMBEDIQ_OK) {
+        embediq_fb_report_fault(fb, CTRL_FAULT_NOT_MONITORED);
+    }
 
     static const uint16_t k_subs[] = { MSG_TEMP_READING };
     static EmbedIQ_SubFn_Config_t k_cfg = {
