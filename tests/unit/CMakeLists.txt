@@ -166,6 +166,43 @@ target_compile_options(test_fb_watchdog PRIVATE
 
 add_test(NAME unit_fb_watchdog COMMAND test_fb_watchdog)
 
+# Watchdog table-lock order and resource failures: the driver source is
+# compiled into the test with the table-lock call and the HAL initialisation
+# renamed to the test's boundary wrappers (these definitions apply to this
+# directory's targets only; the driver library compiles the file unchanged).
+# The driver library is not linked, so the watchdog is defined once. The
+# trace level is the one the driver library compiles the file with.
+
+set(FB_WATCHDOG_SRC ${CMAKE_SOURCE_DIR}/fbs/drivers/fb_watchdog.c)
+
+add_executable(test_fb_watchdog_boundaries
+    test_fb_watchdog_boundaries.c
+    ${FB_WATCHDOG_SRC}
+)
+
+set_source_files_properties(${FB_WATCHDOG_SRC} PROPERTIES
+    COMPILE_DEFINITIONS "embediq_osal_mutex_lock=wdg_boundary_mutex_lock;hal_wdg_init=wdg_boundary_hal_init;EMBEDIQ_TRACE_LEVEL=2"
+)
+
+target_include_directories(test_fb_watchdog_boundaries PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/core/include/hal
+    ${CMAKE_SOURCE_DIR}/fbs/drivers
+)
+
+target_link_libraries(test_fb_watchdog_boundaries PRIVATE
+    embediq_fb_engine
+    pthread
+)
+
+target_compile_options(test_fb_watchdog_boundaries PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME unit_fb_watchdog_boundaries COMMAND test_fb_watchdog_boundaries)
+
 # ---------------------------------------------------------------------------
 # Timer FB unit tests (P1-T6)
 # ---------------------------------------------------------------------------

@@ -105,7 +105,7 @@ PRINCIPLE 4 — The wrong patterns are structurally visible
 │  CONTRACTS  (core/include/ — header-only · frozen post-v1)                  │
 │  embediq_fb.h  ·  embediq_subfn.h  ·  embediq_bus.h                         │
 │  embediq_msg.h  ·  embediq_sm.h  ·  embediq_obs.h                           │
-│  embediq_osal.h  ·  embediq_time.h  ·  embediq_bridge.h                     │
+│  embediq_osal.h  ·  embediq_bridge.h                                        │
 │  embediq_meta.h  ·  embediq_endpoint.h  ·  embediq_msg_catalog.h            │
 │  embediq_nvm.h  ·  embediq_timer.h  ·  embediq_wdg.h                        │
 │  embediq_stream.h  ·  hal/hal_stream.h  (streaming data plane)               │
@@ -997,11 +997,10 @@ not with the layer that implements it.
 | ------------- | --------------------- | ----------- |
 | `embediq_fb.h` | FB registration + lifecycle | All layers |
 | `embediq_bus.h` | Message publish/receive | All layers |
-| `embediq_endpoint.h` | Endpoint registration | Layer 1, Layer 3 |
+| `embediq_endpoint.h` | Endpoint identifier types | Layer 1, Layer 3 |
 | `embediq_osal.h` | OS primitives | Layer 1, Layer 2 |
 | `embediq_obs.h` | Observatory events | All layers |
 | `embediq_sm.h` | FSM table contract | Layer 2 (Driver FBs) |
-| `embediq_time.h` | Monotonic + wall clock | All layers |
 | `embediq_nvm.h` | NVM key-value store | Layer 2+, Application |
 | `embediq_timer.h` | Timer tick messages | Layer 2+, Application |
 | `embediq_wdg.h` | Watchdog checkin | Layer 2+, Application |
@@ -2378,10 +2377,9 @@ framework access. The application zone never knows hardware exists.
 
 ```c
 // embediq_wdg.h — public API
-embediq_status_t embediq_wdg_register(EmbedIQ_FB_t* fb, uint32_t timeout_ms);
-embediq_status_t embediq_wdg_checkin(EmbedIQ_FB_t* fb);
-embediq_status_t embediq_wdg_unregister(EmbedIQ_FB_t* fb);
-EmbedIQ_WDG_ResetReason_t embediq_wdg_last_reset_reason(void);
+embediq_err_t embediq_wdg_register(EmbedIQ_FB_Handle_t fb, uint32_t timeout_ms);
+embediq_err_t embediq_wdg_checkin(EmbedIQ_FB_Handle_t fb);
+embediq_err_t embediq_wdg_unregister(EmbedIQ_FB_Handle_t fb);
 
 // Messages published by fb_watchdog:
 // MSG_WDG_RESET_REASON — published on startup: reason + last_fb_to_miss

@@ -58,6 +58,35 @@ add_test(NAME integration_thermostat_full COMMAND test_thermostat_full)
 set_tests_properties(integration_thermostat_full PROPERTIES TIMEOUT 60)
 
 # ---------------------------------------------------------------------------
+# Thermostat without a watchdog service: the controller cannot establish
+# monitoring and reports its own fault.
+# ---------------------------------------------------------------------------
+
+add_executable(test_thermostat_unmonitored
+    test_thermostat_unmonitored.c
+    ${CMAKE_SOURCE_DIR}/examples/thermostat/fb_temp_sensor.c
+    ${CMAKE_SOURCE_DIR}/examples/thermostat/fb_temp_controller.c
+)
+
+target_include_directories(test_thermostat_unmonitored PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/examples/thermostat
+)
+
+target_link_libraries(test_thermostat_unmonitored PRIVATE
+    embediq_driver_fbs
+    embediq_test_store
+)
+
+target_compile_options(test_thermostat_unmonitored PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+)
+
+add_test(NAME integration_thermostat_unmonitored COMMAND test_thermostat_unmonitored)
+
+# ---------------------------------------------------------------------------
 # Thermostat .iqtrace capture integration test (Obs-5 E2E)
 # ---------------------------------------------------------------------------
 

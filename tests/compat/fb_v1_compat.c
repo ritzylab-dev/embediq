@@ -2,7 +2,7 @@
  * tests/compat/fb_v1_compat.c — v1 Core API compatibility shim (Invariant I-14)
  *
  * Exercises every type, macro, enum value, and function declaration in all
- * 18 Core contract headers. Compiled on every CI run to verify the v1 API surface
+ * 17 Core contract headers. Compiled on every CI run to verify the v1 API surface
  * has not broken. MUST NOT be included in any production binary.
  *
  * CI commands:
@@ -30,7 +30,6 @@
 #include "embediq_nvm.h"
 #include "embediq_timer.h"
 #include "embediq_wdg.h"
-#include "embediq_time.h"
 #include "embediq_endpoint.h"
 #include "embediq_meta.h"
 #include "ops/embediq_ota.h"
@@ -229,15 +228,19 @@ int main(void)
     embediq_timer_tick_t tick = { .tick_count = 0u, .timestamp_us = 0u };
     (void)tick;
 
-    /* --- embediq_wdg.h: watchdog types --- */
-    embediq_fb_id_t wdg_id = 0u;
-    (void)wdg_id;
+    /* --- embediq_wdg.h: the canonical signatures. Each pointer is
+     * initialised FROM the declared function, so the compiler checks the
+     * declared parameter and return types against these. --- */
+    embediq_err_t (*wdg_register_fn)(EmbedIQ_FB_Handle_t, uint32_t) = embediq_wdg_register;
+    embediq_err_t (*wdg_checkin_fn)(EmbedIQ_FB_Handle_t)            = embediq_wdg_checkin;
+    embediq_err_t (*wdg_unregister_fn)(EmbedIQ_FB_Handle_t)         = embediq_wdg_unregister;
+    (void)wdg_register_fn;
+    (void)wdg_checkin_fn;
+    (void)wdg_unregister_fn;
+    (void)EMBEDIQ_WDG_TIMEOUT_MS_MIN;
+    (void)EMBEDIQ_WDG_TIMEOUT_MS_MAX;
 
-    /* --- embediq_time.h: time API types --- */
-    embediq_err_t (*set_epoch_fn)(uint64_t) = NULL;
-    (void)set_epoch_fn;
-
-    /* --- embediq_endpoint.h: endpoint router types --- */
+    /* --- embediq_endpoint.h: endpoint identifier types --- */
     embediq_ep_id_t ep = EMBEDIQ_EP_INVALID;
     (void)ep;
 
