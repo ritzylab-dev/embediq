@@ -28,7 +28,9 @@
  *                deadlock; the missed check-in faults the monitored FB
  *   preparation  one monitor across a late boot retry; table-lock creation
  *                and monitor creation fail, then recover on a retried boot;
- *                a check-in racing preparation
+ *                a check-in racing preparation, judged by completed calls
+ *                only (lock-order and HAL/lock-failure cases are in
+ *                test_fb_watchdog_boundaries.c)
  *
  * Every wait is for a flag or a count; its time bound is only a hang guard,
  * and alarm() guards every case that runs the monitor task.
@@ -1012,66 +1014,125 @@ static void recovery(prep_fail_t kind)
 static void test_recovery_after_mutex_failure(void)   { recovery(FAIL_MUTEX); }
 static void test_recovery_after_monitor_failure(void) { recovery(FAIL_TASK); }
 
-/* A thread calls embediq_wdg_checkin() in a loop from before boot until after
- * boot returns and the FB is registered. A call that started before the
- * register began returns ERR; nothing crashes (ThreadSanitizer: no report). */
-static embediq_osal_atomic32_t g_race_calls     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
-static embediq_osal_atomic32_t g_race_stop      = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
-static embediq_osal_atomic32_t g_race_ok_seen   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
-static embediq_osal_atomic32_t g_race_reg_index = EMBEDIQ_OSAL_ATOMIC32_INIT(UINT32_MAX);
-static embediq_osal_atomic32_t g_race_early_ok  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+/* A worker thread calls embediq_wdg_checkin() in a loop from before boot
+ * until it is told to stop, and counts only COMPLETED calls, by status. The
+ * test claims three facts, each separated from the others by a call that has
+ * returned:
+ *   unready      every call that completed before boot began returned ERR,
+ *                and nothing was created (no monitor);
+ *   ready, not   after boot returned 0, a check-in by the test thread
+ *   registered   returns ERR with one NOT_REGISTERED event (the worker is
+ *                parked between calls for this step, so the one event is
+ *                that call's);
+ *   registered   after embediq_wdg_register() has returned OK, a check-in
+ *                by the test thread returns OK, and the worker completes
+ *                at least one more OK call.
+ * A worker call that overlaps boot or the registration is not classified:
+ * it may legally return either status, depending on the table state it
+ * observes once it holds the table lock. Starting first does not mean
+ * locking first; the lock-order cases are in test_fb_watchdog_boundaries.c.
+ * ThreadSanitizer: no report. */
+static embediq_osal_atomic32_t g_race_done_err = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_race_done_ok  = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_race_stop     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_race_park     = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
+static embediq_osal_atomic32_t g_race_parked   = EMBEDIQ_OSAL_ATOMIC32_INIT(0u);
 
 static void *race_checkin(void *arg)
 {
     while (embediq_osal_atomic32_load(&g_race_stop) == 0u) {
-        uint32_t idx = embediq_osal_atomic32_add(&g_race_calls, 1u) - 1u;
-        if (embediq_wdg_checkin(arg) == EMBEDIQ_OK) {
-            if (idx < embediq_osal_atomic32_load(&g_race_reg_index)) {
-                (void)embediq_osal_atomic32_add(&g_race_early_ok, 1u);
+        if (embediq_osal_atomic32_load(&g_race_park) != 0u) {
+            embediq_osal_atomic32_store(&g_race_parked, 1u);
+            while (embediq_osal_atomic32_load(&g_race_park) != 0u
+                   && embediq_osal_atomic32_load(&g_race_stop) == 0u) {
+                embediq_osal_delay_ms(1u);
             }
-            embediq_osal_atomic32_store(&g_race_ok_seen, 1u);
+            embediq_osal_atomic32_store(&g_race_parked, 0u);
+            continue;
+        }
+        if (embediq_wdg_checkin(arg) == EMBEDIQ_OK) {
+            (void)embediq_osal_atomic32_add(&g_race_done_ok, 1u);
+        } else {
+            (void)embediq_osal_atomic32_add(&g_race_done_err, 1u);
         }
     }
     return NULL;
 }
 
+static uint32_t race_done(void)
+{
+    return embediq_osal_atomic32_load(&g_race_done_err)
+         + embediq_osal_atomic32_load(&g_race_done_ok);
+}
+
+/* Spin (1 ms steps) until *a >= target or ms elapse (hang guard only). */
+static bool wait_at_least(embediq_osal_atomic32_t *a, uint32_t target, uint32_t ms)
+{
+    uint32_t t0 = embediq_osal_time_ms();
+    while (embediq_osal_atomic32_load(a) < target
+           && (embediq_osal_time_ms() - t0) < ms) {
+        embediq_osal_delay_ms(1u);
+    }
+    return embediq_osal_atomic32_load(a) >= target;
+}
+
 static void test_checkin_racing_preparation(void)
 {
     alarm(HANG_GUARD_S);
-    prep_t p = prep_begin(false);
-    embediq_osal_atomic32_store(&g_race_calls, 0u);
+    prep_t p = prep_begin(false);            /* starts from wdg__reset_service() */
+    uint8_t a_ep = embediq_engine_fb_ep(p.a);
+    embediq_osal_atomic32_store(&g_race_done_err, 0u);
+    embediq_osal_atomic32_store(&g_race_done_ok, 0u);
     embediq_osal_atomic32_store(&g_race_stop, 0u);
-    embediq_osal_atomic32_store(&g_race_ok_seen, 0u);
-    embediq_osal_atomic32_store(&g_race_reg_index, UINT32_MAX);
-    embediq_osal_atomic32_store(&g_race_early_ok, 0u);
+    embediq_osal_atomic32_store(&g_race_park, 0u);
+    embediq_osal_atomic32_store(&g_race_parked, 0u);
 
     pthread_t th;
     pthread_create(&th, NULL, race_checkin, p.a);
-    /* Handshake: the thread has made a call before boot begins. */
+
+    /* Unready: at least two calls completed before boot begins. */
     uint32_t t0 = embediq_osal_time_ms();
-    while (embediq_osal_atomic32_load(&g_race_calls) < 2u
-           && embediq_osal_time_ms() - t0 < FAULT_DEADLINE_MS) {
+    while (race_done() < 2u && embediq_osal_time_ms() - t0 < FAULT_DEADLINE_MS) {
         embediq_osal_delay_ms(1u);
     }
-    bool started = embediq_osal_atomic32_load(&g_race_calls) >= 2u;
+    uint32_t a_err = embediq_osal_atomic32_load(&g_race_done_err);
+    uint32_t a_ok  = embediq_osal_atomic32_load(&g_race_done_ok);
+    uint32_t a_mon = wdg__monitor_starts();
 
+    /* Ready, not registered: the worker is parked between calls. */
     bool booted = embediq_engine_boot() == 0;
-    embediq_osal_atomic32_store(&g_race_reg_index, embediq_osal_atomic32_load(&g_race_calls));
-    bool registered = embediq_wdg_register(p.a, EMBEDIQ_WDG_TIMEOUT_MS_MAX) == EMBEDIQ_OK;
-    bool ok_seen = wait_flag(&g_race_ok_seen, FAULT_DEADLINE_MS);
+    embediq_osal_atomic32_store(&g_race_park, 1u);
+    bool parked = wait_flag(&g_race_parked, FAULT_DEADLINE_MS);
+    uint32_t nr_before = fault_events(EMBEDIQ_FAULT_WDG_NOT_REGISTERED, a_ep, 0, ANY);
+    embediq_err_t b_rc = embediq_wdg_checkin(p.a);
+    uint32_t nr_after  = fault_events(EMBEDIQ_FAULT_WDG_NOT_REGISTERED, a_ep, 0, ANY);
+    embediq_osal_atomic32_store(&g_race_park, 0u);
+
+    /* Registered: every check below follows the register's return. */
+    embediq_err_t reg_rc = embediq_wdg_register(p.a, EMBEDIQ_WDG_TIMEOUT_MS_MAX);
+    uint32_t ok_after_reg = embediq_osal_atomic32_load(&g_race_done_ok);
+    embediq_err_t c_rc = embediq_wdg_checkin(p.a);
+    bool worker_ok = wait_at_least(&g_race_done_ok, ok_after_reg + 1u, FAULT_DEADLINE_MS);
+
     embediq_osal_atomic32_store(&g_race_stop, 1u);
     pthread_join(th, NULL);
     (void)embediq_wdg_unregister(p.a);
     wdg__reset_service();
     alarm(0u);
 
-    printf("      calls=%u before_register=%u\n",
-           (unsigned)embediq_osal_atomic32_load(&g_race_calls),
-           (unsigned)embediq_osal_atomic32_load(&g_race_reg_index));
-    ASSERT(started && booted && registered, "the thread called before boot; boot and register OK");
-    ASSERT(embediq_osal_atomic32_load(&g_race_early_ok) == 0u,
-           "every call that started before the register returned ERR");
-    ASSERT(ok_seen, "check-in returns OK once the FB is registered");
+    printf("      completed before boot: err=%u ok=%u; completed in all: err=%u ok=%u\n",
+           (unsigned)a_err, (unsigned)a_ok,
+           (unsigned)embediq_osal_atomic32_load(&g_race_done_err),
+           (unsigned)embediq_osal_atomic32_load(&g_race_done_ok));
+    ASSERT(a_err + a_ok >= 2u, "unready: the worker completed calls before boot began");
+    ASSERT(a_ok == 0u && a_mon == 0u,
+           "unready: every call completed before boot returned ERR and created nothing");
+    ASSERT(booted && parked, "boot returns 0; the worker is parked between calls");
+    ASSERT(b_rc == EMBEDIQ_ERR && nr_after - nr_before == 1u,
+           "ready, not registered: check-in returns ERR with one NOT_REGISTERED event");
+    ASSERT(reg_rc == EMBEDIQ_OK, "register returns OK");
+    ASSERT(c_rc == EMBEDIQ_OK, "after register returned: check-in returns OK");
+    ASSERT(worker_ok, "after register returned: the worker completes an OK check-in");
 }
 
 /* ---------------------------------------------------------------------------
