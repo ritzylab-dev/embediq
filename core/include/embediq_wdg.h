@@ -6,9 +6,12 @@
  * fb_watchdog checks all registered tokens on a 100 ms interval.
  * If any FB misses its checkin deadline, MSG_WDG_MISSED_CHECKIN is published.
  *
- * Philosophy: the watchdog is an observer, not a terminator. At Phase 1 it
- * reports misses. The system fault policy (reboot vs. quarantine vs. log) is
- * an application decision made in response to MSG_WDG_MISSED_CHECKIN.
+ * What the driver does: it reports each missed check-in (an Observatory
+ * event, the monitored FB's fault, MSG_WDG_MISSED_CHECKIN) and it feeds the
+ * HAL watchdog only after a scan in which every registered FB was healthy.
+ * What the application decides: how to react to MSG_WDG_MISSED_CHECKIN. On a
+ * target whose hardware watchdog is enabled, feeding that has stopped ends in
+ * a hardware reset; the POSIX host build simulates the HAL and performs none.
  *
  * Calls (register, checkin, unregister):
  *   - Calling context: any thread (an FB thread or a platform thread); not
@@ -29,10 +32,12 @@
  *     EMBEDIQ_WDG_TIMEOUT_MS_MAX (1 … UINT32_MAX/2).
  *   - An entry expires when more than timeout_ms has elapsed since its last
  *     register or check-in.
- *   - Deadlines are measured with the 32-bit millisecond clock by unsigned
- *     subtraction, which is exact while less than UINT32_MAX/2 ms pass
- *     between two looks at an entry; a check-in gap longer than a full wrap
- *     of that clock (about 49.7 days) cannot be told from a short one.
+ *   - Elapsed time is (uint32_t)(now_ms - last_ms) on the 32-bit millisecond
+ *     clock. That subtraction gives the true elapsed time for any gap shorter
+ *     than one full wrap of the clock (about 49.7 days); a gap of a full wrap
+ *     or more cannot be told from a short one. The supported maximum timeout
+ *     is deliberately half that range (EMBEDIQ_WDG_TIMEOUT_MS_MAX) so that
+ *     every supported deadline is reached well before the clock can wrap.
  *   - The monitor scans about every 100 ms. That is a polling interval, not
  *     a bound on the reaction time: reporting a miss publishes a HIGH message
  *     and may wait for queue space.
@@ -64,9 +69,10 @@ extern "C" {
  *
  * MIN: a zero timeout would expire on every scan; 1 ms is the smallest
  *      deadline the millisecond clock can express.
- * MAX: elapsed time is (uint32_t)(now_ms - last_ms); it is exact only while
- *      the true gap is below half the clock's range, so the longest supported
- *      timeout is UINT32_MAX / 2 = 2,147,483,647 ms (about 24.8 days).
+ * MAX: UINT32_MAX / 2 = 2,147,483,647 ms (about 24.8 days). This is the
+ *      supported policy, chosen so that a deadline always falls well inside
+ *      one wrap of the 32-bit millisecond clock; the elapsed-time subtraction
+ *      itself stays correct up to a full wrap.
  * ------------------------------------------------------------------------- */
 
 #define EMBEDIQ_WDG_TIMEOUT_MS_MIN  1u

@@ -97,8 +97,12 @@
 #define WDG_REASON_RESET_DETECTED       2u
 #define WDG_REASON_SERVICE_UNAVAILABLE  3u   /* the watchdog FB could not prepare its service */
 
-/* HAL watchdog timeout: generous next to the 100 ms scan, so a scan delayed
- * by a blocked HIGH publish does not let the hardware watchdog fire. */
+/* HAL watchdog timeout. The driver feeds the HAL watchdog only at the end of
+ * a scan in which every registered FB was healthy; a scan that reports a
+ * miss, or a scan delayed because the HIGH publish of a miss is waiting for
+ * queue space, does not feed it. On a target with a real hardware watchdog
+ * enabled that timer may therefore expire while feeding has stopped. The
+ * POSIX HAL simulates the timer and performs no reset. */
 #define WDG_HAL_TIMEOUT_MS  5000u
 
 /* Endpoint value meaning "no FB" in an Observatory event. */
@@ -177,8 +181,9 @@ static int find_slot(EmbedIQ_FB_Handle_t fb)
 }
 
 /* One FAULT event for a rejected call; then EMBEDIQ_ERR. Called with no lock
- * held. The source comes from embediq_engine_fb_ep(), which returns 0xFF for
- * NULL — the watchdog never dereferences a handle to build the event. */
+ * held. The source endpoint comes from embediq_engine_fb_ep(), which returns
+ * 0xFF for NULL and reads the endpoint of a valid framework handle; any other
+ * pointer is outside the contract (see embediq_wdg.h). */
 static embediq_err_t reject(EmbedIQ_FB_Handle_t fb, uint8_t code, uint16_t resource)
 {
     uint8_t target = WDG_EP_NONE;
